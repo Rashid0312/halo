@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'"
+    />
+    <title>Halo</title>
+    <link rel="stylesheet" href="pill.css" />
+    <script type="module" src="pill.js"></script>
+  </head>
+  <body>
+    <button id="pill" class="pill" data-state="idle" aria-label="Open Halo">
+      <span class="orb"><span></span></span>
+      <span class="name">Halo</span>
+      <span class="dot">·</span>
+      <span id="label" class="label">Listening…</span>
+    </button>
+  </body>
+</html>

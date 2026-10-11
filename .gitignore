@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# Local tool / editor config
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# Logs & runtime data
+*.log
+logs/
+npm-debug.log*
+
+# Build output
+dist/
+out/
+release/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local tooling
+.code-review-graph/
+.claude/
+
+# Voice sampler output
+voice-samples/
+
+# On-device models (npm run models)
+models/
+
+# Built Touch Bar helper (npm run touchbar, or automatic on launch)
+native/touchbar/halo-touchbar

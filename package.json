@@ -1,0 +1,82 @@
+{
+  "name": "halo",
+  "productName": "Halo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "eval": "electron scripts/eval.mjs",
+    "models": "node scripts/fetch-models.mjs",
+    "touchbar": "node scripts/build-touchbar.mjs",
+    "icon": "electron scripts/make-icon.mjs",
+    "dist": "npm run models && npm run touchbar && node scripts/dist.mjs"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.6",
+    "sherpa-onnx-node": "^1.13.8",
+    "ws": "^8.22.0"
+  },
+  "description": "Halo \u2014 a friendly AI sidekick for your Mac.",
+  "author": "Abdirashiid Sammantar",
+  "repository": "https://github.com/Rashid0312/halo",
+  "build": {
+    "appId": "app.halo",
+    "productName": "Halo",
+    "copyright": "Copyright \u00a9 2026 Abdirashiid Sammantar",
+    "files": [
+      "main/**",
+      "preload/**",
+      "renderer/**",
+      "package.json",
+      "!**/*.map"
+    ],
+    "asarUnpack": [
+      "main/mac/**",
+      "node_modules/sherpa-onnx-*/**"
+    ],
+    "extraResources": [
+      {
+        "from": "models",
+        "to": "models"
+      },
+      {
+        "from": "native/touchbar/halo-touchbar",
+        "to": "halo-touchbar"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "LSUIElement": true,
+        "NSMicrophoneUsageDescription": "Halo listens for \u201cHey Halo\u201d and to what you ask her.",
+        "NSAppleEventsUsageDescription": "Halo controls the apps you ask her to \u2014 Calendar, Reminders, Notes, Messages and more."
+      }
+    },
+    "dmg": {
+      "title": "Halo ${version}",
+      "artifactName": "Halo-${version}-${arch}.${ext}"
+    },
+    "afterPack": "build/after-pack.cjs",
+    "directories": {
+      "buildResources": "build"
+    }
+  }
+}

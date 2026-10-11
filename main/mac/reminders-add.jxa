@@ -1,0 +1,10 @@
+// Usage: reminders-add.jxa <title> [due local ISO] [list name]
+function run(argv) {
+  const [title, due, listName] = argv;
+  const R = Application("Reminders");
+  const list = (listName && R.lists().find((l) => l.name().toLowerCase() === listName.toLowerCase())) || R.defaultList();
+  const props = { name: title };
+  if (due) props.dueDate = new Date(due);
+  list.reminders.push(R.Reminder(props));
+  return JSON.stringify({ ok: true, list: list.name() });
+}

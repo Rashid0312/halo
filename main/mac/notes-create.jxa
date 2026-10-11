@@ -1,0 +1,10 @@
+// Usage: notes-create.jxa <title> <body text>
+function run(argv) {
+  const [title, body] = argv;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const html = `<h1>${esc(title)}</h1>` + (body || "").split("\n").map((l) => `<div>${esc(l) || "<br>"}</div>`).join("");
+  const N = Application("Notes");
+  const folder = N.defaultAccount().folders()[0];
+  folder.notes.push(N.Note({ body: html }));
+  return JSON.stringify({ ok: true, folder: folder.name() });
+}
