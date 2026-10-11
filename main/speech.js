@@ -10,9 +10,9 @@ const STREAMS = {
   microphone: { role: "user", source: "mic", streamId: "user" },
 };
 
-// ~1.6 s of 512-sample chunks at 16 kHz: covers the words spoken while a
-// follow-up is voice-checked locally before anything goes to Deepgram.
-const PREROLL_CHUNKS = 50;
+// ~2.2 s of 512-sample chunks at 16 kHz: covers the words spoken while a
+// follow-up is voice-checked locally (1.5 s + VAD lag) before Deepgram hears it.
+const PREROLL_CHUNKS = 70;
 
 export class SpeechService {
   /**

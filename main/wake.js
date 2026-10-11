@@ -25,7 +25,12 @@ const NO_SPEECH_MS = 4000;
 const MAX_REQUEST_MS = 15000;
 const END_SILENCE_SEC = 0.9;
 const MIN_FOLLOWUP_SEC = 0.8; // shorter follow-up speech is ignored (coughs, "mm")
-const FOLLOWUP_CHECK_SEC = 1.0; // follow-up speech voice-checked locally before Deepgram hears it
+const FOLLOWUP_CHECK_SEC = 1.5; // follow-up speech voice-checked locally before Deepgram hears it
+const FOLLOWUP_GUARD_MS = 400; // ignore the echo of Halo's last words right after she stops
+// Quick follow-up check: below this it's clearly someone else (ignored); between
+// this and the trigger threshold it's unsure, so the whole sentence decides
+// (request check in completeRequest — you score ~0.6–0.8 there, others < 0.15).
+const FOLLOWUP_UNSURE = 0.12;
 
 export class WakeService {
   /**
@@ -266,7 +271,9 @@ export class WakeService {
   beginRequest(prefix, via) {
     this.mode = "request";
     this.vad.reset();
-    this.request = { chunks: [prefix], via, startedAt: Date.now(), spoke: via === "followup" };
+    // Follow-ups start after a 1.5 s voice check, so the sentence may already be
+    // over: count silence from now, not from a speech segment that ended earlier.
+    this.request = { chunks: [prefix], via, startedAt: Date.now(), spoke: via === "followup", lastSpeechAt: Date.now() };
     this.request.noSpeech = setTimeout(() => {
       if (this.request && !this.request.spoke) this.abortRequest("no speech");
     }, NO_SPEECH_MS);
@@ -279,9 +286,13 @@ export class WakeService {
     if (!r) return;
     r.chunks.push(x);
     for (let i = 0; i + 512 <= x.length; i += 512) this.vad.acceptWaveform(x.subarray(i, i + 512));
-    if (this.vad.isDetected()) r.spoke = true;
-    // A finished speech segment = the user paused for END_SILENCE_SEC.
-    if (r.spoke && !this.vad.isEmpty()) {
+    if (this.vad.isDetected()) {
+      r.spoke = true;
+      r.lastSpeechAt = Date.now();
+    }
+    // A finished speech segment, or END_SILENCE_SEC without speech = the user paused.
+    const quiet = Date.now() - r.lastSpeechAt > END_SILENCE_SEC * 1000;
+    if (r.spoke && (!this.vad.isEmpty() || quiet)) {
       while (!this.vad.isEmpty()) this.vad.pop();
       this.completeRequest();
     }
@@ -347,6 +358,7 @@ export class WakeService {
     if (!ms) return;
     this.mode = "followup";
     this.followUpSpeech = null;
+    this.followUpFrom = Date.now() + FOLLOWUP_GUARD_MS;
     this.vad.reset();
     this.followUpTimer = setTimeout(() => {
       if (this.mode === "followup") this.mode = "waiting";
@@ -355,12 +367,13 @@ export class WakeService {
   }
 
   feedFollowUp(x) {
+    if (Date.now() < this.followUpFrom) return; // Halo's echo
     for (let i = 0; i + 512 <= x.length; i += 512) this.vad.acceptWaveform(x.subarray(i, i + 512));
     const speaking = this.vad.isDetected();
     while (!this.vad.isEmpty()) this.vad.pop();
     if (!this.followUpSpeech) {
       if (!speaking) return;
-      // Speech started: collect ~1 s and check the voice before opening Deepgram.
+      // Speech started: collect ~1.5 s and check the voice before opening Deepgram.
       this.followUpSpeech = { samples: Math.round(0.3 * SAMPLE_RATE) }; // VAD lags ~0.3 s
       clearTimeout(this.followUpTimer);
     }
@@ -375,12 +388,16 @@ export class WakeService {
     const heard = this.recent(this.followUpSpeech.samples / SAMPLE_RATE);
     this.followUpSpeech = null;
     const v = this.voiceprint.verify(heard, "trigger");
-    if (!v.ok) {
+    if (v.score < FOLLOWUP_UNSURE) {
       log.info(`[wake] follow-up voice score ${v.score.toFixed(2)} → not you, ignored`);
       this.mode = "waiting";
       return;
     }
-    log.info(`[wake] follow-up voice score ${v.score.toFixed(2)} → you`);
+    log.info(
+      v.ok
+        ? `[wake] follow-up voice score ${v.score.toFixed(2)} → you`
+        : `[wake] follow-up voice score ${v.score.toFixed(2)} → unsure, the whole sentence decides`,
+    );
     // Deepgram gets the buffered speech (speech.js pre-roll) so no words are lost.
     this.beginRequest(heard, "followup");
   }
