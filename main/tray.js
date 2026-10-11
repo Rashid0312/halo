@@ -1,8 +1,9 @@
 // Halo in the macOS menu bar.
 //   left-click  → drop the panel down under the icon (click again to hide)
 //   right-click → menu: open, "Hey Halo", speak replies, re-train voice, quit
-// The icon is a template image (macOS tints it for light/dark menu bars): an
-// open ring when idle, a filled orb while Halo is listening or talking.
+// The icon is a template image (macOS tints it for light/dark menu bars) of
+// Halo's pixel black hole: a thin ring when idle, thicker with sparks while
+// she's listening or talking.
 import { Menu, Tray, nativeImage } from "electron";
 import zlib from "node:zlib";
 import { store } from "./store.js";
@@ -113,12 +114,20 @@ function icon(filled) {
   return img;
 }
 
-/** Coverage (0..1) at point (x, y) in an 18×18 box: a ring, plus a center orb when active. */
+/**
+ * Coverage (0 or 1) at (x, y) in an 18×18 pt box — Halo's pixel black hole in
+ * one color (template image), on a 1 pt pixel grid so it stays crisp.
+ * Idle: a pixel ring with two specks inside. Active: a thicker ring and four
+ * little diagonal sparks.
+ */
 function orb(x, y, filled) {
-  const d = Math.hypot(x - 9, y - 9);
-  const ring = 1 - Math.min(1, Math.abs(d - 6.5) / 0.9); // ring radius 6.5, ~1.8 pt stroke
-  const core = filled ? 1 - Math.min(1, Math.max(0, d - 3.4) / 0.6) : 0;
-  return Math.max(0, ring, core);
+  const cx = Math.floor(x);
+  const cy = Math.floor(y);
+  const d = Math.hypot(cx + 0.5 - 9, cy + 0.5 - 9);
+  const ring = filled ? d >= 5.4 && d < 7.6 : d >= 6.4 && d < 7.6;
+  const speck = (cx === 7 && cy === 7) || (cx === 10 && cy === 10);
+  const spark = filled && [[1, 1], [16, 1], [1, 16], [16, 16]].some(([sx, sy]) => cx === sx && cy === sy);
+  return ring || speck || spark ? 1 : 0;
 }
 
 /** Minimal RGBA PNG encoder. Black pixels with alpha = coverage (template image). */

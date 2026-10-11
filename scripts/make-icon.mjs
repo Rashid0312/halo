@@ -1,4 +1,4 @@
-// Draws Halo's app icon (orange orb in a ring on a dark rounded square) and
+// Draws Halo's app icon (her pixel black hole on a dark rounded square) and
 // writes build/icon.icns.
 //
 //   npx electron scripts/make-icon.mjs
@@ -8,9 +8,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { orbCells } from "../renderer/shared/pixel-orb.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(ROOT, "build");
+
+// One frame of Halo's pixel black hole (renderer/shared/pixel-orb.js), mid-beat
+// with a spark burst, on the dark rounded square.
+let seed = 11;
+const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const CELLS = orbCells({ phase: 2, state: "speaking", level: 0.9, grid: 32, rand });
 
 const DRAW = `(() => {
   const S = 1024, c = document.createElement("canvas");
@@ -21,36 +28,25 @@ const DRAW = `(() => {
   g.beginPath();
   g.roundRect(m, m, w, w, r);
   const bg = g.createLinearGradient(0, m, 0, S - m);
-  bg.addColorStop(0, "#2b2e35");
-  bg.addColorStop(1, "#0d0f12");
+  bg.addColorStop(0, "#17111f");
+  bg.addColorStop(1, "#0b0812");
   g.fillStyle = bg;
   g.fill();
   g.save();
   g.clip();
-  // soft orange glow behind the orb
-  const glow = g.createRadialGradient(512, 512, 40, 512, 512, 420);
-  glow.addColorStop(0, "rgba(255,72,0,0.45)");
-  glow.addColorStop(1, "rgba(255,72,0,0)");
+  // soft purple glow behind the orb
+  const glow = g.createRadialGradient(512, 512, 60, 512, 512, 430);
+  glow.addColorStop(0, "rgba(166,75,240,0.28)");
+  glow.addColorStop(1, "rgba(166,75,240,0)");
   g.fillStyle = glow;
   g.fillRect(0, 0, S, S);
-  // the halo ring
-  g.lineWidth = 26;
-  g.strokeStyle = "rgba(255,255,255,0.88)";
-  g.shadowColor = "rgba(255,138,85,0.8)";
-  g.shadowBlur = 30;
-  g.beginPath();
-  g.arc(512, 512, 290, 0, Math.PI * 2);
-  g.stroke();
-  g.shadowBlur = 0;
-  // the orb
-  const orb = g.createRadialGradient(450, 440, 20, 512, 512, 190);
-  orb.addColorStop(0, "#ffb08a");
-  orb.addColorStop(0.55, "#ff4800");
-  orb.addColorStop(1, "#c43500");
-  g.fillStyle = orb;
-  g.beginPath();
-  g.arc(512, 512, 190, 0, Math.PI * 2);
-  g.fill();
+  // crisp pixels: 32-cell grid, 22 px per cell
+  const cells = ${JSON.stringify(CELLS)};
+  const px = 22, off = (S - 32 * px) / 2;
+  for (const [x, y, color] of cells) {
+    g.fillStyle = color;
+    g.fillRect(off + x * px, off + y * px, px, px);
+  }
   g.restore();
   // hairline edge
   g.beginPath();

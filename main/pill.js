@@ -46,6 +46,8 @@ export class PillService {
   }
 
   active() {
+    // The Touch Bar strip shows Halo instead when it can.
+    if (this.touchbar?.stripAvailable) return false;
     return this.voice.state !== "idle" || this.wake.mode === "followup";
   }
 

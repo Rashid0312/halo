@@ -10,8 +10,15 @@
 import { app } from "electron";
 import { spawn } from "node:child_process";
 import { TtsStream, TTS_SAMPLE_RATE } from "./tts/stream.js";
+import { createVad, modelsReady, pcm16ToFloat } from "./ondevice.js";
 import { store } from "./store.js";
 import { log } from "./log.js";
+
+// Button / Touch Bar listening ends by itself: after you've spoken, this much
+// silence sends the request; saying nothing for NO_SPEECH_MS cancels it.
+const END_SILENCE_SEC = 0.9;
+const NO_SPEECH_MS = 6000;
+const MAX_LISTEN_MS = 30000;
 
 const CUE = { start: "/System/Library/Sounds/Tink.aiff", stop: "/System/Library/Sounds/Pop.aiff" };
 export class VoiceService {
@@ -136,9 +143,10 @@ export class VoiceService {
     this.startListening();
   }
 
-  /** Push-to-talk released: stop capture, finalize, then answer. */
+  /** Listening ended (end of speech, or tapped again): stop capture, finalize, then answer. */
   async finishListening() {
     if (!this.brain.listening) return;
+    this.stopEndpointing();
     const released = Date.now();
     cue(CUE.stop);
     await this.speech.setOpen(false);
@@ -169,6 +177,7 @@ export class VoiceService {
   /** Wake request that turned out not to be the user (or nothing was said): drop it silently. */
   async cancelListening() {
     if (!this.brain.listening) return;
+    this.stopEndpointing();
     this.listeningVia = null;
     await this.speech.setOpen(false);
     this.brain.stopListening();
@@ -192,6 +201,45 @@ export class VoiceService {
     cue(CUE.start);
     // Connect TTS while the user is still talking.
     if (this.prefs().enabled) this.tts.warm();
+    // "Hey Halo" / follow-ups are ended by wake.js; button + Touch Bar end here.
+    if (via === "button") this.startEndpointing();
+  }
+
+  /** Watch the mic with the on-device VAD and end listening when the user stops talking. */
+  startEndpointing() {
+    if (!this.audio || !modelsReady()) return; // no models: tap again to send
+    this.stopEndpointing();
+    this.endVad ??= createVad({ minSilence: END_SILENCE_SEC, maxSpeech: MAX_LISTEN_MS / 1000 });
+    this.endVad.reset();
+    const startedAt = Date.now();
+    let spoke = false;
+    let done = false;
+    const end = (why) => {
+      if (done) return;
+      done = true;
+      this.stopEndpointing();
+      log.info(`[voice] ${why}`);
+      if (why === "end of speech" || why === "listening cap") this.toggle();
+      else this.cancelListening();
+    };
+    this.unsubEndpoint = this.audio.onChunk((chunk) => {
+      if (chunk.source !== "microphone") return;
+      const x = pcm16ToFloat(chunk.data);
+      for (let i = 0; i + 512 <= x.length; i += 512) this.endVad.acceptWaveform(x.subarray(i, i + 512));
+      if (this.endVad.isDetected()) spoke = true;
+      if (spoke && !this.endVad.isEmpty()) {
+        while (!this.endVad.isEmpty()) this.endVad.pop();
+        return end("end of speech");
+      }
+      const ms = Date.now() - startedAt;
+      if (!spoke && ms > NO_SPEECH_MS) return end("nothing said — cancelled");
+      if (ms > MAX_LISTEN_MS) return end("listening cap");
+    });
+  }
+
+  stopEndpointing() {
+    this.unsubEndpoint?.();
+    this.unsubEndpoint = null;
   }
 
   /** Typed message from the panel: same brain, same tools, same permissions. */

@@ -1,4 +1,5 @@
 // The "mic bubble" pill: shows what Halo is doing; click opens the panel.
+import { animateOrb } from "../shared/pixel-orb.js";
 const pill = document.getElementById("pill");
 const label = document.getElementById("label");
 
@@ -28,6 +29,7 @@ function render() {
 }
 
 pill.addEventListener("click", () => window.halo.invoke("halo:openPanel"));
+animateOrb(pill.querySelector(".orb canvas"), () => ({ state: pill.dataset.state }));
 
 window.halo.on("halo:state", (s) => {
   voiceState = s;

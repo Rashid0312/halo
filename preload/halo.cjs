@@ -25,6 +25,7 @@ const INVOKE = new Set([
   "halo:getOpenAtLogin",
   "halo:setOpenAtLogin",
   "halo:showLogs",
+  "halo:level",
   "halo:updateInfo",
   "halo:openUpdate",
 ]);

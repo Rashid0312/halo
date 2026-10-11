@@ -1,5 +1,7 @@
 // Halo panel: drops down from the menu bar icon like Control Center —
 // quick-control tiles, the conversation, and a text box.
+import { animateOrb } from "../shared/pixel-orb.js";
+
 const $ = (id) => document.getElementById(id);
 const card = $("card");
 const log = $("log");
@@ -351,7 +353,12 @@ function stopAudio(gen) {
   card.style.setProperty("--level", "0");
 }
 
-// Voice loudness → CSS var, so the orb (and later the avatar's mouth) moves with her voice.
+// Voice loudness → the orb (and the Touch Bar orb) pulse with her voice.
+let voiceLevel = 0;
+animateOrb($("orb").querySelector("canvas"), () => ({
+  state: state === "idle" && card.dataset.followup === "true" ? "followup" : state,
+  level: voiceLevel,
+}));
 const levelData = new Uint8Array(512);
 function meter() {
   if (player.level) {
@@ -359,7 +366,16 @@ function meter() {
     let sum = 0;
     for (const v of levelData) sum += (v - 128) ** 2;
     const rms = Math.sqrt(sum / levelData.length) / 128;
-    card.style.setProperty("--level", player.playing ? Math.min(1, rms * 4).toFixed(3) : "0");
+    const level = player.playing ? Math.min(1, rms * 4) : 0;
+    voiceLevel = level;
+    card.style.setProperty("--level", level.toFixed(3));
+    // ~20×/s to the Touch Bar face's mouth (and one 0 when she stops).
+    const now = performance.now();
+    if ((level > 0 || player.lastLevel > 0) && now - (player.levelSentAt ?? 0) > 50) {
+      player.levelSentAt = now;
+      player.lastLevel = level;
+      window.halo.invoke("halo:level", level).catch(() => {});
+    }
   }
   requestAnimationFrame(meter);
 }

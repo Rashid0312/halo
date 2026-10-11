@@ -120,56 +120,18 @@ svg .fill {
   color: #ffb08a;
 }
 
-/* ── orb: idle / listening / thinking / speaking ── */
+/* ── orb: Halo's pixel black hole (renderer/shared/pixel-orb.js) ── */
 .orb {
-  position: relative;
   width: 26px;
   height: 26px;
   flex: none;
-  border-radius: 50%;
   display: grid;
   place-items: center;
 }
-.orb span {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ff8a55, var(--brand) 60%, var(--brand-down));
-  box-shadow: 0 0 10px color-mix(in srgb, var(--brand) 50%, transparent);
-  transition: transform 0.2s ease;
-}
-.orb::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 2px solid var(--brand);
-  opacity: 0;
-}
-[data-state="listening"] .orb span {
-  transform: scale(1.15);
-}
-[data-state="listening"] .orb::after {
-  animation: ping 1.2s ease-out infinite;
-}
-[data-state="thinking"] .orb span,
-[data-state="waiting"] .orb span,
-.card[data-followup="true"] .orb span {
-  animation: breathe 1.2s ease-in-out infinite;
-}
-[data-state="speaking"] .orb span {
-  transform: scale(calc(0.9 + var(--level, 0) * 0.6));
-  transition: transform 0.05s linear;
-}
-@keyframes ping {
-  from {
-    opacity: 0.8;
-    transform: scale(0.6);
-  }
-  to {
-    opacity: 0;
-    transform: scale(1.3);
-  }
+.orb canvas {
+  width: 26px;
+  height: 26px;
+  image-rendering: pixelated;
 }
 @keyframes breathe {
   50% {

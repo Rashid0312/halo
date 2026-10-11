@@ -71,16 +71,20 @@ app.whenReady().then(async () => {
   brain.register();
   const screenService = new ScreenService(realtime, session, brain);
   const voice = new VoiceService(gateway, realtime, brain, session, speech, permissions);
+  voice.audio = audio; // end-of-speech detection for button / Touch Bar listening
   voice.register();
   const wake = new WakeService(gateway, audio, speech, voice);
   const tray = new TrayService(session, voice, wake, gateway);
   tray.register();
   tray.loginItem = { get: openAtLogin, set: setOpenAtLogin };
   tray.showLogs = () => logFile() && shell.showItemInFolder(logFile());
-  new PillService(registry, session, voice, wake, gateway).register();
   new UpdateService(gateway).register();
-  const touchbar = new TouchBarService(voice);
+  const touchbar = new TouchBarService(voice, realtime, wake, gateway);
   touchbar.register().catch((err) => log.warn(`[touchbar] ${err.message}`));
+  // The pill stays hidden while the Touch Bar strip shows Halo.
+  const pill = new PillService(registry, session, voice, wake, gateway);
+  pill.touchbar = touchbar;
+  pill.register();
   permissions.showPanel = () => session.showPanel();
   wake
     .register()
