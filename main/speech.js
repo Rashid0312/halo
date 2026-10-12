@@ -3,7 +3,7 @@
 // so the mic is ready as soon as Mercy starts listening.
 import { DeepgramStream } from "./stt/deepgram.js";
 import { log } from "./log.js";
-import { getKey } from "./keys.js";
+import { getKey, onKeysSaved } from "./keys.js";
 
 // Sources are already separated, so role comes from the stream, not diarization.
 const STREAMS = {
@@ -212,6 +212,15 @@ export class SpeechService {
       },
       "speech:getVadEnabled": () => false,
       "speech:setVadEnabled": () => null,
+    });
+    // A new Deepgram key: reconnect now (also when the session started before
+    // there was any key and is stuck on "no key").
+    onKeysSaved((changed) => {
+      if (!changed.includes("deepgram") || !this.session.sessionId || !this.state) return;
+      log.info("[speech] Deepgram key changed → reconnecting");
+      this.stop()
+        .then(() => this.start())
+        .catch((err) => log.error(`[speech] reconnect failed: ${err?.message ?? err}`));
     });
     this.session.onChange((snap) => {
       if (snap.status === "active") {

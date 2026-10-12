@@ -36,6 +36,12 @@ async function persist() {
 }
 
 /** @param {"deepgram" | "deepseek"} name */
+const listeners = new Set();
+/** cb(names) runs after keys are saved, with the names that changed. */
+export function onKeysSaved(cb) {
+  listeners.add(cb);
+}
+
 export function getKey(name) {
   return saved[name] || process.env[ENV[name]] || "";
 }
@@ -76,9 +82,11 @@ export function registerKeys(gateway) {
         else next[name] = key;
       }
       if (Object.keys(errors).length) return { ok: false, errors, ...keysState() };
+      const changed = ["deepgram", "deepseek"].filter((n) => next[n] !== saved[n]);
       saved = next;
       await persist();
       log.info(`[keys] saved (${Object.keys(saved).join(", ")})`); // names only, never values
+      for (const cb of listeners) cb(changed);
       return { ok: true, errors: {}, ...keysState() };
     },
     "mercy:openKeyConsole": (name) => CONSOLES[name] && shell.openExternal(CONSOLES[name]),
