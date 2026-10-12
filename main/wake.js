@@ -1,18 +1,18 @@
-// "Hey Halo" + only-my-voice, all on the Mac.
+// "Hey Mercy" + only-my-voice, all on the Mac.
 //
 //   mic (16 kHz, always on while enabled) ─► ring buffer (3 s)
-//     ├─ keyword spotter hears "HEY HALO"
+//     ├─ keyword spotter hears "HEY MERCY"
 //     │    └─ voice check on the trigger (~1.5 s) ── not you ─► ignored (log only)
 //     │         └─ you ─► voice.startListening({ via: "wake" })
 //     │              VAD: request ends after 0.9 s of silence (no speech in 4 s → cancel, cap 15 s)
 //     │              └─ voice check on trigger + request ── not you ─► discarded
 //     │                   └─ you ─► voice.finishListening() → brain; learn the voice
-//     └─ follow-up: for 6 s after Halo stops talking, speech that matches your
-//        voice is a new request (no "Hey Halo" needed). The first second is
+//     └─ follow-up: for 6 s after Mercy stops talking, speech that matches your
+//        voice is a new request (no "Hey Mercy" needed). The first second is
 //        voice-checked on the Mac before Deepgram hears anything.
 //
 // Nothing is sent to Deepgram until both checks pass the trigger stage, and no
-// audio is written to disk. Paused while Halo speaks (no echo cancellation on
+// audio is written to disk. Paused while Mercy speaks (no echo cancellation on
 // the mic-only stream) and while the 🎤 button is in use.
 import { createKeywordSpotter, createVad, downsample, modelsReady, pcm16ToFloat, rms, SAMPLE_RATE } from "./ondevice.js";
 import { enrollPrompt, Voiceprint } from "./voiceprint.js";
@@ -26,7 +26,7 @@ const MAX_REQUEST_MS = 15000;
 const END_SILENCE_SEC = 0.9;
 const MIN_FOLLOWUP_SEC = 0.8; // shorter follow-up speech is ignored (coughs, "mm")
 const FOLLOWUP_CHECK_SEC = 1.5; // follow-up speech voice-checked locally before Deepgram hears it
-const FOLLOWUP_GUARD_MS = 400; // ignore the echo of Halo's last words right after she stops
+const FOLLOWUP_GUARD_MS = 400; // ignore the echo of Mercy's last words right after she stops
 // Quick follow-up check: below this it's clearly someone else (ignored); between
 // this and the trigger threshold it's unsure, so the whole sentence decides
 // (request check in completeRequest — you score ~0.6–0.8 there, others < 0.15).
@@ -80,22 +80,22 @@ export class WakeService {
 
   async register() {
     this.gateway.handleAll({
-      "halo:wakeState": () => this.snapshot(),
-      "halo:setWake": async (on) => {
+      "mercy:wakeState": () => this.snapshot(),
+      "mercy:setWake": async (on) => {
         store.set("wake", { ...this.prefs(), enabled: Boolean(on) });
         await this.sync();
         return this.snapshot();
       },
-      "halo:enrollStart": () => this.startEnroll(),
-      "halo:enrollCancel": () => this.cancelEnroll(),
-      "halo:voiceDelete": async () => {
+      "mercy:enrollStart": () => this.startEnroll(),
+      "mercy:enrollCancel": () => this.cancelEnroll(),
+      "mercy:voiceDelete": async () => {
         await this.voiceprint.delete();
         await this.sync();
         return this.snapshot();
       },
     });
     if (!this.available) {
-      log.warn('[wake] models missing — run "npm run models" to enable "Hey Halo"');
+      log.warn('[wake] models missing — run "npm run models" to enable "Hey Mercy"');
       return;
     }
     await this.voiceprint.load();
@@ -115,7 +115,7 @@ export class WakeService {
   }
 
   broadcast() {
-    this.gateway.broadcast("halo:wake", this.snapshot(), { to: ["panel", "pill"] });
+    this.gateway.broadcast("mercy:wake", this.snapshot(), { to: ["panel", "pill"] });
   }
 
   /** Start or stop always-on listening to match settings + enrollment. */
@@ -140,7 +140,7 @@ export class WakeService {
     }
     this.running = true;
     if (this.mode === "off") this.mode = "waiting";
-    log.info('[wake] listening for "Hey Halo" (on-device)');
+    log.info('[wake] listening for "Hey Mercy" (on-device)');
   }
 
   /** The mic dropped (sleep, unplugged headset) or the Mac woke up: get listening again. */
@@ -185,10 +185,10 @@ export class WakeService {
 
   handleChunk(chunk) {
     this.chunkCount = (this.chunkCount ?? 0) + 1;
-    // Test hook (with HALO_FAKE_MIC): HALO_FAKE_WAKE_AT="25.9,41.2" simulates the
+    // Test hook (with MERCY_FAKE_MIC): MERCY_FAKE_WAKE_AT="25.9,41.2" simulates the
     // keyword spotter firing at those mic times, to test voice checks on their own.
-    if (process.env.HALO_FAKE_WAKE_AT && this.mode === "waiting") {
-      this.fakeWakes ??= process.env.HALO_FAKE_WAKE_AT.split(",").map(Number);
+    if (process.env.MERCY_FAKE_WAKE_AT && this.mode === "waiting") {
+      this.fakeWakes ??= process.env.MERCY_FAKE_WAKE_AT.split(",").map(Number);
       if (this.fakeWakes.length && this.chunkCount * 0.032 >= this.fakeWakes[0]) {
         this.fakeWakes.shift();
         this.onKeyword();
@@ -200,8 +200,8 @@ export class WakeService {
     this.sendLevel(x);
     switch (this.mode) {
       case "waiting":
-        // Paused while Halo talks (her voice would echo into the mic) or is already
-        // listening. Stays on while a permission card waits: "Hey Halo, yes".
+        // Paused while Mercy talks (her voice would echo into the mic) or is already
+        // listening. Stays on while a permission card waits: "Hey Mercy, yes".
         if (this.voice.state === "speaking" || this.voice.state === "listening") return;
         this.spot(x);
         break;
@@ -238,7 +238,7 @@ export class WakeService {
     const now = Date.now();
     if (now - this.levelAt < 60) return;
     this.levelAt = now;
-    this.gateway.broadcast("halo:enroll", { level: Math.min(1, rms(x) * 6) }, { to: ["panel"] });
+    this.gateway.broadcast("mercy:enroll", { level: Math.min(1, rms(x) * 6) }, { to: ["panel"] });
   }
 
   // ── stage 1: keyword + trigger voice check ───────────────────────────
@@ -260,10 +260,10 @@ export class WakeService {
     const v = this.voiceprint.verify(trigger, "trigger");
     const ms = (performance.now() - t0).toFixed(0);
     if (!v.ok) {
-      log.info(`[wake] heard "hey halo" — voice score ${v.score.toFixed(2)} → not you, ignored (${ms}ms)`);
+      log.info(`[wake] heard "hey mercy" — voice score ${v.score.toFixed(2)} → not you, ignored (${ms}ms)`);
       return;
     }
-    log.info(`[wake] heard "hey halo" — voice score ${v.score.toFixed(2)} → you (${ms}ms)`);
+    log.info(`[wake] heard "hey mercy" — voice score ${v.score.toFixed(2)} → you (${ms}ms)`);
     this.beginRequest(trigger, "wake");
   }
 
@@ -367,7 +367,7 @@ export class WakeService {
   }
 
   feedFollowUp(x) {
-    if (Date.now() < this.followUpFrom) return; // Halo's echo
+    if (Date.now() < this.followUpFrom) return; // Mercy's echo
     for (let i = 0; i + 512 <= x.length; i += 512) this.vad.acceptWaveform(x.subarray(i, i + 512));
     const speaking = this.vad.isDetected();
     while (!this.vad.isEmpty()) this.vad.pop();
@@ -439,12 +439,12 @@ export class WakeService {
   async enrollClip(seg) {
     if (this.mode !== "enroll") return;
     const res = await this.voiceprint.addEnrollClip(seg);
-    this.gateway.broadcast("halo:enroll", res, { to: ["panel"] });
+    this.gateway.broadcast("mercy:enroll", res, { to: ["panel"] });
     if (res.done) {
       this.voice.blocked = false;
       this.mode = "waiting";
       store.set("wake", { ...this.prefs(), enabled: true });
-      log.info('[wake] enrollment complete — "Hey Halo" is on');
+      log.info('[wake] enrollment complete — "Hey Mercy" is on');
       await this.sync();
     }
   }

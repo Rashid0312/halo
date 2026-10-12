@@ -1,7 +1,7 @@
-// Halo's pixel orb: a little black hole — dark core with twinkling specks, a
+// Mercy's pixel orb: a little black hole — dark core with twinkling specks, a
 // purple + cyan pixel rim that beats, pink sparks shooting out and dust drifting
 // in. Used by the app icon script, the pill and the panel (the Touch Bar has a
-// Swift port of the same rules in native/touchbar/HaloTouchBar.swift).
+// Swift port of the same rules in native/touchbar/MercyTouchBar.swift).
 //
 // orbCells() returns the lit cells of one frame on a square pixel grid; draw
 // them with drawOrb() or any other way.

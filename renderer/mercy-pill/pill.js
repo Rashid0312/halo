@@ -1,4 +1,4 @@
-// The "mic bubble" pill: shows what Halo is doing; click opens the panel.
+// The "mic bubble" pill: shows what Mercy is doing; click opens the panel.
 import { animateOrb } from "../shared/pixel-orb.js";
 const pill = document.getElementById("pill");
 const label = document.getElementById("label");
@@ -24,22 +24,22 @@ function render() {
   requestAnimationFrame(() => {
     // Capsule + the body padding around it (8 px sides, 6 top, 10 bottom for the shadow).
     const r = pill.getBoundingClientRect();
-    window.halo.invoke("halo:pillResize", { width: Math.ceil(r.width) + 16, height: 48 }).catch(() => {});
+    window.mercy.invoke("mercy:pillResize", { width: Math.ceil(r.width) + 16, height: 48 }).catch(() => {});
   });
 }
 
-pill.addEventListener("click", () => window.halo.invoke("halo:openPanel"));
+pill.addEventListener("click", () => window.mercy.invoke("mercy:openPanel"));
 animateOrb(pill.querySelector(".orb canvas"), () => ({ state: pill.dataset.state }));
 
-window.halo.on("halo:state", (s) => {
+window.mercy.on("mercy:state", (s) => {
   voiceState = s;
   render();
 });
-window.halo.on("halo:wake", (w) => {
+window.mercy.on("mercy:wake", (w) => {
   followUp = w.mode === "followup";
   render();
 });
 // Main asks the pill to animate out before it hides the window.
-window.halo.on("halo:pillOut", () => pill.classList.add("out"));
+window.mercy.on("mercy:pillOut", () => pill.classList.add("out"));
 
 render();

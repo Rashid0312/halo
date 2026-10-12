@@ -1,5 +1,5 @@
 // Voice sampler: renders the same line in every matching Deepgram Aura-2 voice
-// so you can pick Halo's voice by ear.
+// so you can pick Mercy's voice by ear.
 //
 //   node --env-file=.env scripts/voice-sampler.mjs                 # all English feminine voices
 //   node --env-file=.env scripts/voice-sampler.mjs --play          # ...and play them in order
@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_TEXT =
-  "Hey, I'm Halo. You've got two meetings tomorrow, the first one's at nine. Want me to add a reminder the night before?";
+  "Hey, I'm Mercy. You've got two meetings tomorrow, the first one's at nine. Want me to add a reminder the night before?";
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {

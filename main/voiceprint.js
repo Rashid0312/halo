@@ -1,12 +1,12 @@
 // "Only my voice": an on-device speaker profile, modeled on Apple's
 // Personalized "Hey Siri".
 //
-// - Explicit enrollment: "Hey Halo" ×5 (for the trigger) + 3 short sentences
+// - Explicit enrollment: "Hey Mercy" ×5 (for the trigger) + 3 short sentences
 //   (so whole requests match too) → 8 speaker vectors.
 // - Implicit enrollment: requests that clearly match add their vector over
 //   time (max 35), so the profile learns other rooms, mics and moods.
 // - Score = mean of the top-3 cosine similarities to the profile.
-// - Two checks: the "Hey Halo" trigger (~1 s) and the whole request (longer,
+// - Two checks: the "Hey Mercy" trigger (~1 s) and the whole request (longer,
 //   more reliable). Thresholds were picked on real speakers (Mini LibriSpeech,
 //   unseen speakers: 0% false reject, 1.5% false accept) and made a bit stricter.
 //
@@ -19,7 +19,7 @@ import { createSpeakerExtractor, rms, SAMPLE_RATE, trimSilence } from "./ondevic
 import { log } from "./log.js";
 
 export const THRESHOLDS = {
-  trigger: 0.35, // "Hey Halo" alone (silence-trimmed)
+  trigger: 0.35, // "Hey Mercy" alone (silence-trimmed)
   request: 0.35, // the whole spoken request
   learn: 0.55, // request this confident → add to the profile
 };
@@ -33,7 +33,7 @@ const ENROLL_CLIPS = ENROLL_PHRASES + SENTENCES.length;
 
 /** What to say for clip number `i` (0-based). */
 export function enrollPrompt(i) {
-  return i < ENROLL_PHRASES ? "Hey Halo" : SENTENCES[i - ENROLL_PHRASES];
+  return i < ENROLL_PHRASES ? "Hey Mercy" : SENTENCES[i - ENROLL_PHRASES];
 }
 const MAX_IMPLICIT = 35;
 
@@ -131,7 +131,7 @@ export class Voiceprint {
   }
 
   /**
-   * One enrollment recording ("Hey Halo" or a sentence). Rejects clips that are
+   * One enrollment recording ("Hey Mercy" or a sentence). Rejects clips that are
    * too short, too quiet, or don't sound like the earlier ones (someone else,
    * or mostly noise).
    */
@@ -141,14 +141,14 @@ export class Voiceprint {
     const phrase = count0 < ENROLL_PHRASES;
     const retry = (reason) => ({ ok: false, reason, count: count0, needed: ENROLL_CLIPS, prompt: enrollPrompt(count0) });
     const sec = samples.length / SAMPLE_RATE;
-    if (sec < (phrase ? 0.4 : 1)) return retry(phrase ? "Too short — say “Hey Halo” clearly." : "Too short — read the whole sentence.");
-    if (sec > (phrase ? 4 : 10)) return retry(phrase ? "Too long — just “Hey Halo”." : "Too long — just that one sentence.");
+    if (sec < (phrase ? 0.4 : 1)) return retry(phrase ? "Too short — say “Hey Mercy” clearly." : "Too short — read the whole sentence.");
+    if (sec > (phrase ? 4 : 10)) return retry(phrase ? "Too long — just “Hey Mercy”." : "Too long — just that one sentence.");
     if (rms(samples) < 0.01) return retry("Too quiet — move a little closer.");
     const vec = this.embed(samples);
     if (count0 >= 2) {
       const sims = this.enrolling.map((p) => dot(p, vec));
       const mean = sims.reduce((a, b) => a + b, 0) / sims.length;
-      // Sentences differ from "Hey Halo" in content, so allow a lower match.
+      // Sentences differ from "Hey Mercy" in content, so allow a lower match.
       if (mean < (phrase ? 0.3 : 0.2)) return retry("That didn't sound like the others — try again.");
     }
     this.enrolling.push(vec);

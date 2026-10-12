@@ -162,7 +162,7 @@ export class Brain {
   solveMessages(images) {
     const lang = this.session.context?.codingLanguage || "Python";
     const system = [
-      "You are Halo, a desktop assistant. The image is the user's screen.",
+      "You are Mercy, a desktop assistant. The image is the user's screen.",
       "Figure out what the user is working on and help with it. Read text, code and error messages carefully from the image.",
       `- Code or an error: explain the problem in a sentence or two, then the fix as code (default ${lang}, or whatever language is on screen) in a fenced block.`,
       "- A document, email or form: summarize it or suggest what to write, whichever is more useful.",
@@ -187,9 +187,9 @@ export class Brain {
     const ctx = this.session.context ?? {};
     const now = new Date();
     const system = [
-      "You are Halo, a friendly desktop assistant the user talks to by voice while they work on their Mac.",
+      "You are Mercy, a friendly desktop assistant the user talks to by voice while they work on their Mac.",
       `Right now it is ${now.toLocaleString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${Intl.DateTimeFormat().resolvedOptions().timeZone}). Today is ${now.toLocaleDateString("en-CA")}.`,
-      "You can act on the user's Mac with your tools. Use the specific tools first (apps, websites, Calendar, Reminders, Notes, Shortcuts). For ANYTHING else, use run_shell (terminal commands) or run_applescript (control any app or the UI). Halo's permission settings decide whether the user approves a command first, so don't refuse and don't ask in chat whether you should: just call the tool with a clear `why`. If a tool says it's turned off, tell the user they can turn it on in ··· → Permissions.",
+      "You can act on the user's Mac with your tools. Use the specific tools first (apps, websites, Calendar, Reminders, Notes, Shortcuts). For ANYTHING else, use run_shell (terminal commands) or run_applescript (control any app or the UI). Mercy's permission settings decide whether the user approves a command first, so don't refuse and don't ask in chat whether you should: just call the tool with a clear `why`. If a tool says it's turned off, tell the user they can turn it on in ··· → Permissions.",
       "To text or iMessage someone, ALWAYS use messages_send (it looks the contact up and shows the user the exact text before sending). Never send messages any other way. Write the message exactly as the user wants it, without adding your own sign-off.",
       "Never say you can't access the user's computer, files or apps. Find a way with the tools. If the user denies a command, accept it and offer an alternative.",
       "Work step by step: look first (e.g. list files) before changing things. After acting, confirm in one short sentence what you did or what went wrong. Never use sudo.",
@@ -205,7 +205,7 @@ export class Brain {
 
     const transcript = this.history
       .slice(0, -1)
-      .map((l) => `${l.role === "assistant" ? "HALO" : "USER"}: ${l.text}`)
+      .map((l) => `${l.role === "assistant" ? "MERCY" : "USER"}: ${l.text}`)
       .join("\n");
 
     return [

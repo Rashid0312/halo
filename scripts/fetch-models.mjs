@@ -1,4 +1,4 @@
-// Downloads the on-device models for "Hey Halo" + voice recognition into
+// Downloads the on-device models for "Hey Mercy" + voice recognition into
 // ./models (gitignored) and verifies them.
 //
 //   npm run models
@@ -34,8 +34,8 @@ const FILES = {
   [`${KWS}/tokens.txt`]: { sha256: "fd2ded4050a55d2b1578870ba8697d02371980217806b7558bd0a5cc60f3ba53" },
 };
 
-// "HEY HALO" in the keyword model's BPE tokens (from its bpe.model).
-const KEYWORDS = "▁HE Y ▁HA LO @HEY_HALO\n";
+// "HEY MERCY" in the keyword model's BPE tokens (from its bpe.model).
+const KEYWORDS = "▁HE Y ▁ME R C Y @HEY_MERCY\n";
 
 const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const ok = (rel) => fs.existsSync(path.join(DIR, rel)) && sha256(path.join(DIR, rel)) === FILES[rel].sha256;

@@ -1,5 +1,5 @@
-// Conversation session + Halo's panel window.
-// A session is open while Halo is in use (Deepgram sockets connected); the
+// Conversation session + Mercy's panel window.
+// A session is open while Mercy is in use (Deepgram sockets connected); the
 // sessionId is local. The panel drops down at the top-right of the screen,
 // where the pill sits (main/pill.js).
 import { screen } from "electron";
@@ -66,7 +66,7 @@ export class SessionService {
   showPanel({ focus = false } = {}) {
     const win = this.panel() ?? this.createPanel();
     if (!win.isVisible()) this.placeTopRight(win);
-    // Opened by a click → closes when you click elsewhere. Opened by Halo
+    // Opened by a click → closes when you click elsewhere. Opened by Mercy
     // itself (permission card, code answer…) → no focus, stays until idle.
     this.closeOnBlur = focus;
     if (focus) {
@@ -92,7 +92,7 @@ export class SessionService {
     this.panelListeners.add(cb);
   }
 
-  /** Created hidden at launch; shown from the menu bar, the pill, or by Halo. */
+  /** Created hidden at launch; shown from the menu bar, the pill, or by Mercy. */
   createPanel() {
     const work = screen.getPrimaryDisplay().workArea;
     const win = this.windows.open("panel", {
@@ -117,7 +117,7 @@ export class SessionService {
       hiddenInMissionControl: true,
       // NSPanel: floats over every Space and full-screen app.
       type: "panel",
-      // Halo's voice plays in the panel without a click first.
+      // Mercy's voice plays in the panel without a click first.
       webPreferences: { autoplayPolicy: "no-user-gesture-required" },
     });
     const pin = () => {
@@ -159,13 +159,13 @@ export class SessionService {
 
   register() {
     this.gateway.handleAll({
-      "halo:resize": (req) => this.resizePanel(req),
-      "halo:hide": () => {
+      "mercy:resize": (req) => this.resizePanel(req),
+      "mercy:hide": () => {
         this.end();
         this.panel()?.hide();
       },
       // Idle: tuck the panel back into the menu bar, keeping the conversation.
-      "halo:autoHide": () => this.panel()?.hide(),
+      "mercy:autoHide": () => this.panel()?.hide(),
     });
   }
 }

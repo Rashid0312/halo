@@ -1,16 +1,16 @@
-// Window registry + factories for Halo's windows.
+// Window registry + factories for Mercy's windows.
 import { BrowserWindow } from "electron";
 import path from "node:path";
 import { ROOT } from "./paths.js";
 import { log } from "./log.js";
 
 const ENTRIES = {
-  // Halo's panel (drops down from the menu bar / pill).
-  panel: { html: "halo-panel", preload: "halo.cjs" },
-  // The "mic bubble" shown while Halo is active.
-  pill: { html: "halo-pill", preload: "pill.cjs" },
+  // Mercy's panel (drops down from the menu bar / pill).
+  panel: { html: "mercy-panel", preload: "mercy.cjs" },
+  // The "mic bubble" shown while Mercy is active.
+  pill: { html: "mercy-pill", preload: "pill.cjs" },
   // Hidden window that records the microphone (main/audio.js).
-  mic: { html: "halo-mic", preload: "mic.cjs" },
+  mic: { html: "mercy-mic", preload: "mic.cjs" },
 };
 
 export class WindowRegistry {
@@ -37,7 +37,7 @@ export class WindowRegistry {
     return BrowserWindow.getAllWindows();
   }
 
-  /** Create one of Halo's windows. */
+  /** Create one of Mercy's windows. */
   open(kind, options = {}) {
     const entry = ENTRIES[kind];
     if (!entry) throw new Error(`unknown window kind ${kind}`);
@@ -57,7 +57,7 @@ export class WindowRegistry {
     win.once("ready-to-show", () => {
       if (options.show !== false) win.show();
     });
-    if (process.env.HALO_DEVTOOLS === "1") {
+    if (process.env.MERCY_DEVTOOLS === "1") {
       win.webContents.openDevTools({ mode: "detach" });
     }
     // A crashed page (out of memory, GPU reset…) reloads instead of leaving a blank window.

@@ -1,11 +1,11 @@
-// The "mic bubble": while Halo is active (listening, thinking, speaking,
+// The "mic bubble": while Mercy is active (listening, thinking, speaking,
 // waiting for an OK, or in the follow-up window) a small pill hangs under the
 // right end of the menu bar — like macOS's "🎙 Terminal" bubble. Clicking it
 // opens the full panel, which grows from the same spot. Idle → no pill.
 import { screen } from "electron";
 import { log } from "./log.js";
 
-const LINGER_MS = 1500; // keep the pill a moment after Halo goes idle
+const LINGER_MS = 1500; // keep the pill a moment after Mercy goes idle
 const OUT_MS = 250; // fade-out animation in pill.css
 const RIGHT_MARGIN = 10; // capsule's right edge from the screen edge (matches the panel)
 const PAD = { x: 8, top: 6 }; // body padding around the capsule in pill.css
@@ -30,11 +30,11 @@ export class PillService {
 
   register() {
     this.gateway.handleAll({
-      "halo:openPanel": () => {
+      "mercy:openPanel": () => {
         this.session.showPanel({ focus: true });
-        this.gateway.broadcast("halo:openComposer", null, { to: ["panel"] });
+        this.gateway.broadcast("mercy:openComposer", null, { to: ["panel"] });
       },
-      "halo:pillResize": ({ width, height } = {}) => {
+      "mercy:pillResize": ({ width, height } = {}) => {
         if (!Number.isFinite(width) || !Number.isFinite(height)) return;
         this.size = { width, height };
         this.place();
@@ -46,7 +46,7 @@ export class PillService {
   }
 
   active() {
-    // The Touch Bar strip shows Halo instead when it can.
+    // The Touch Bar strip shows Mercy instead when it can.
     if (this.touchbar?.stripAvailable) return false;
     return this.voice.state !== "idle" || this.wake.mode === "followup";
   }
@@ -112,7 +112,7 @@ export class PillService {
     const win = this.windows.first("pill");
     if (!win?.isVisible()) return;
     if (!animate) return win.hide();
-    this.gateway.broadcast("halo:pillOut", null, { to: ["pill"] });
+    this.gateway.broadcast("mercy:pillOut", null, { to: ["pill"] });
     this.hideTimer = setTimeout(() => {
       if (!this.active() || this.session.panel()?.isVisible()) win.hide();
     }, OUT_MS);

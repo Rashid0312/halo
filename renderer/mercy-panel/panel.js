@@ -1,4 +1,4 @@
-// Halo panel: drops down from the menu bar icon like Control Center —
+// Mercy panel: drops down from the menu bar icon like Control Center —
 // quick-control tiles, the conversation, and a text box.
 import { animateOrb } from "../shared/pixel-orb.js";
 
@@ -11,7 +11,7 @@ const talkText = $("talkText");
 const COLLAPSE_AFTER_MS = 25000;
 const LABELS = { idle: "Ready", listening: "Listening…", thinking: "Thinking…", speaking: "Speaking…", waiting: "Needs your OK" };
 const TALK = {
-  idle: "Enter to send · say “Hey Halo”",
+  idle: "Enter to send · say “Hey Mercy”",
   listening: "Listening… tap 🎤 to send",
   thinking: "Working on it…",
   speaking: "Type or tap 🎤 to interrupt",
@@ -43,7 +43,7 @@ function scheduleCollapse() {
   collapseTimer = setTimeout(() => {
     if (state === "idle" && !card.matches(":hover") && $("menu").hidden && !enrollEl?.dataset.active && !permsEl && !log.querySelector(".perm:not(.allowed):not(.denied)")) {
       // Tuck back into the menu bar; the conversation stays.
-      window.halo.invoke("halo:autoHide").catch(() => {});
+      window.mercy.invoke("mercy:autoHide").catch(() => {});
     }
   }, COLLAPSE_AFTER_MS);
 }
@@ -52,7 +52,7 @@ card.addEventListener("mouseleave", () => state === "idle" && scheduleCollapse()
 // Keep the native window exactly the size of the card.
 new ResizeObserver(() => {
   const r = card.getBoundingClientRect();
-  window.halo.invoke("halo:resize", { width: Math.ceil(r.width), height: Math.ceil(r.height) }).catch(() => {});
+  window.mercy.invoke("mercy:resize", { width: Math.ceil(r.width), height: Math.ceil(r.height) }).catch(() => {});
 }).observe(card);
 
 // ── messages ───────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ function onFrame(raw) {
       if (d.role === "user" && state === "listening" && d.text) userLive(d.segment_id, d.text);
       break;
     case "turn.started": {
-      const el = addMsg("halo", "Halo");
+      const el = addMsg("mercy", "Mercy");
       turns.set(d.turn_id, { el, raw: "", raf: 0 });
       break;
     }
@@ -216,7 +216,7 @@ function sendText() {
   if (!text) return;
   input.value = "";
   fitInput();
-  window.halo.invoke("halo:askText", text).catch((err) => addNote(err.message, "error"));
+  window.mercy.invoke("mercy:askText", text).catch((err) => addNote(err.message, "error"));
 }
 function fitInput() {
   input.style.height = "auto";
@@ -233,24 +233,24 @@ input.addEventListener("keydown", (e) => {
     sendText();
   } else if (e.key === "Escape") {
     if (input.value) input.blur();
-    else window.halo.invoke("halo:autoHide");
+    else window.mercy.invoke("mercy:autoHide");
   }
 });
 input.addEventListener("focus", expand);
 
 // ── controls ───────────────────────────────────────────────────────────
-const talk = () => window.halo.invoke("halo:toggleTalk").catch((err) => addNote(err.message, "error"));
+const talk = () => window.mercy.invoke("mercy:toggleTalk").catch((err) => addNote(err.message, "error"));
 $("orb").addEventListener("click", talk);
 $("talk").addEventListener("click", talk);
-$("screen").addEventListener("click", () => window.halo.invoke("halo:solveScreen").catch((err) => addNote(err.message, "error")));
-$("quit").addEventListener("click", () => window.halo.invoke("halo:quit"));
+$("screen").addEventListener("click", () => window.mercy.invoke("mercy:solveScreen").catch((err) => addNote(err.message, "error")));
+$("quit").addEventListener("click", () => window.mercy.invoke("mercy:quit"));
 $("settings").addEventListener("click", () => {
   $("menu").hidden = !$("menu").hidden;
   expand();
 });
 // Esc tucks the panel back into the menu bar (like Control Center).
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.activeElement !== input) window.halo.invoke("halo:autoHide");
+  if (e.key === "Escape" && document.activeElement !== input) window.mercy.invoke("mercy:autoHide");
 });
 
 // ── permission requests ────────────────────────────────────────────────
@@ -267,7 +267,7 @@ function showPermission(req) {
       ${req.alwaysKey ? '<button class="btn" data-d="always"></button>' : ""}
       <button class="btn ghost" data-d="deny">Deny</button>
     </div>`;
-  el.querySelector(".perm-title").textContent = req.kind === "message" ? req.title : `Halo wants to: ${req.title}`;
+  el.querySelector(".perm-title").textContent = req.kind === "message" ? req.title : `Mercy wants to: ${req.title}`;
   el.querySelector(".perm-why").textContent = req.why || "";
   el.querySelector(".perm-detail").textContent = req.detail;
   el.querySelector(".primary").textContent = req.allowLabel || "Allow once";
@@ -275,7 +275,7 @@ function showPermission(req) {
   if (always) always.textContent = req.alwaysLabel || "Always allow";
   el.addEventListener("click", (e) => {
     const d = e.target.closest("button")?.dataset.d;
-    if (d) window.halo.invoke("halo:permissionReply", { id: req.id, decision: d });
+    if (d) window.mercy.invoke("mercy:permissionReply", { id: req.id, decision: d });
   });
   log.append(el);
   expand();
@@ -292,7 +292,7 @@ function closePermission({ id, decision, reason }) {
   }</div>`;
 }
 
-// ── audio: Halo's voice streams in as PCM16 chunks and plays gaplessly ──
+// ── audio: Mercy's voice streams in as PCM16 chunks and plays gaplessly ──
 const player = { ctx: null, out: null, level: null, next: 0, gen: 0, sources: new Set(), playing: false };
 
 function audioCtx(rate) {
@@ -311,7 +311,7 @@ function audioCtx(rate) {
 function setPlaying(on) {
   if (player.playing === on) return;
   player.playing = on;
-  window.halo.invoke("halo:playback", { playing: on, gen: player.gen }).catch(() => {});
+  window.mercy.invoke("mercy:playback", { playing: on, gen: player.gen }).catch(() => {});
 }
 
 function playChunk({ gen, rate, pcm }) {
@@ -374,13 +374,13 @@ function meter() {
     if ((level > 0 || player.lastLevel > 0) && now - (player.levelSentAt ?? 0) > 50) {
       player.levelSentAt = now;
       player.lastLevel = level;
-      window.halo.invoke("halo:level", level).catch(() => {});
+      window.mercy.invoke("mercy:level", level).catch(() => {});
     }
   }
   requestAnimationFrame(meter);
 }
 
-// ── "Hey Halo" + voice enrollment ──────────────────────────────────────
+// ── "Hey Mercy" + voice enrollment ──────────────────────────────────────
 let wake = { available: false, enrolled: false, enabled: false, mode: "off" };
 let enrollEl = null;
 
@@ -398,14 +398,14 @@ function renderWake(s) {
   else talkText.textContent = TALK[state] ?? TALK.idle;
 }
 
-/** First run (or re-train): invite the user to teach Halo their voice. */
+/** First run (or re-train): invite the user to teach Mercy their voice. */
 function showEnrollInvite() {
   if (enrollEl || !wake.available) return;
   enrollEl = document.createElement("div");
   enrollEl.className = "enroll";
   enrollEl.innerHTML = `
-    <div class="enroll-title">Teach Halo your voice</div>
-    <div class="enroll-text">Say “Hey Halo” five times and read three short sentences, so Halo only answers to you. Your voice profile stays on this Mac, encrypted in your Keychain.</div>
+    <div class="enroll-title">Teach Mercy your voice</div>
+    <div class="enroll-text">Say “Hey Mercy” five times and read three short sentences, so Mercy only answers to you. Your voice profile stays on this Mac, encrypted in your Keychain.</div>
     <div class="perm-actions">
       <button class="btn primary" data-a="start">Set up</button>
       <button class="btn ghost" data-a="later">Not now</button>
@@ -424,7 +424,7 @@ async function startEnroll() {
   if (enrollEl?.dataset.active) return; // already recording
   if (!enrollEl) showEnrollInvite();
   enrollEl.innerHTML = `
-    <div class="enroll-title">Say “Hey Halo”</div>
+    <div class="enroll-title">Say “Hey Mercy”</div>
     <div class="enroll-dots">${'<span></span>'.repeat(8)}</div>
     <div class="enroll-meter"><i></i></div>
     <div class="enroll-text">Speak normally, then pause.</div>
@@ -432,13 +432,13 @@ async function startEnroll() {
   enrollEl.dataset.active = "1";
   enrollEl.onclick = (e) => {
     if (e.target.closest("button")?.dataset.a === "cancel") {
-      window.halo.invoke("halo:enrollCancel");
+      window.mercy.invoke("mercy:enrollCancel");
       closeEnroll();
     }
   };
   expand();
   try {
-    await window.halo.invoke("halo:enrollStart");
+    await window.mercy.invoke("mercy:enrollStart");
   } catch (err) {
     enrollEl.querySelector(".enroll-text").textContent = err.message;
   }
@@ -456,16 +456,16 @@ function onEnroll(ev) {
   const text = enrollEl.querySelector(".enroll-text");
   if (ev.done) {
     enrollEl.innerHTML = `
-      <div class="enroll-title">Done — Halo knows your voice</div>
-      <div class="enroll-text">Say “Hey Halo” anytime. She'll get better at recognizing you the more you talk.</div>`;
+      <div class="enroll-title">Done — Mercy knows your voice</div>
+      <div class="enroll-text">Say “Hey Mercy” anytime. She'll get better at recognizing you the more you talk.</div>`;
     setTimeout(closeEnroll, 6000);
   } else if (!ev.ok) {
     text.textContent = ev.reason ?? "Try again.";
     text.classList.add("warn");
   } else {
     text.classList.remove("warn");
-    const phrase = ev.prompt === "Hey Halo";
-    enrollEl.querySelector(".enroll-title").textContent = phrase ? "Say “Hey Halo”" : `Read: “${ev.prompt}”`;
+    const phrase = ev.prompt === "Hey Mercy";
+    enrollEl.querySelector(".enroll-title").textContent = phrase ? "Say “Hey Mercy”" : `Read: “${ev.prompt}”`;
     text.textContent = phrase ? `Got it — again (${ev.count + 1} of ${ev.needed}).` : `Nice. Now read it naturally (${ev.count + 1} of ${ev.needed}).`;
   }
 }
@@ -483,13 +483,13 @@ function renderSpeak(on) {
   $("speakSub").textContent = on ? "On" : "Off";
 }
 $("tileWake").addEventListener("click", async () => {
-  if (!wake.available) return addNote('Voice models are missing — run "npm run models" in the halo folder.', "error");
+  if (!wake.available) return addNote('Voice models are missing — run "npm run models" in the mercy folder.', "error");
   if (!wake.enrolled) return startEnroll();
-  renderWake(await window.halo.invoke("halo:setWake", !wake.enabled));
+  renderWake(await window.mercy.invoke("mercy:setWake", !wake.enabled));
 });
 $("tileSpeak").addEventListener("click", () => {
   renderSpeak(!speakOn);
-  window.halo.invoke("halo:setVoiceEnabled", speakOn);
+  window.mercy.invoke("mercy:setVoiceEnabled", speakOn);
 });
 $("tileVoice").addEventListener("click", () => {
   if (wake.available) startEnroll();
@@ -500,11 +500,11 @@ $("retrain").addEventListener("click", () => {
 });
 $("forget").addEventListener("click", async () => {
   $("menu").hidden = true;
-  renderWake(await window.halo.invoke("halo:voiceDelete"));
+  renderWake(await window.mercy.invoke("mercy:voiceDelete"));
   addNote("Your voice profile was deleted from this Mac.");
 });
 
-// ── "Connect Halo": the user's own Deepgram + DeepSeek keys ────────────
+// ── "Connect Mercy": the user's own Deepgram + DeepSeek keys ────────────
 let connectEl = null;
 
 function showConnect({ change = false } = {}) {
@@ -512,8 +512,8 @@ function showConnect({ change = false } = {}) {
   connectEl = document.createElement("div");
   connectEl.className = "enroll connect";
   connectEl.innerHTML = `
-    <div class="enroll-title">${change ? "API keys" : "Connect Halo"}</div>
-    <div class="enroll-text">Halo uses your own keys: <b>Deepgram</b> for her voice and <b>DeepSeek</b> for her brain. Both give free credit to start. They're stored encrypted on this Mac.</div>
+    <div class="enroll-title">${change ? "API keys" : "Connect Mercy"}</div>
+    <div class="enroll-text">Mercy uses your own keys: <b>Deepgram</b> for her voice and <b>DeepSeek</b> for her brain. Both give free credit to start. They're stored encrypted on this Mac.</div>
     ${["deepgram", "deepseek"]
       .map(
         (name) => `
@@ -531,7 +531,7 @@ function showConnect({ change = false } = {}) {
     </div>`;
   connectEl.addEventListener("click", async (e) => {
     const consoleFor = e.target.closest("[data-console]")?.dataset.console;
-    if (consoleFor) return window.halo.invoke("halo:openKeyConsole", consoleFor);
+    if (consoleFor) return window.mercy.invoke("mercy:openKeyConsole", consoleFor);
     const a = e.target.closest("button")?.dataset.a;
     if (a === "cancel") return closeConnect();
     if (a !== "save") return;
@@ -539,7 +539,7 @@ function showConnect({ change = false } = {}) {
     btn.disabled = true;
     btn.textContent = "Checking…";
     const value = (n) => connectEl.querySelector(`[data-key="${n}"]`).value;
-    const res = await window.halo.invoke("halo:setKeys", { deepgram: value("deepgram"), deepseek: value("deepseek") });
+    const res = await window.mercy.invoke("mercy:setKeys", { deepgram: value("deepgram"), deepseek: value("deepseek") });
     btn.disabled = false;
     btn.textContent = change ? "Save" : "Connect";
     for (const n of ["deepgram", "deepseek"]) {
@@ -548,7 +548,7 @@ function showConnect({ change = false } = {}) {
     }
     if (res.ok && res.ready) {
       closeConnect();
-      addNote(change ? "Keys updated." : "Connected — Halo can talk now.");
+      addNote(change ? "Keys updated." : "Connected — Mercy can talk now.");
       if (wake.available && !wake.enrolled) showEnrollInvite();
     }
   });
@@ -563,20 +563,20 @@ function closeConnect() {
 }
 
 $("loginToggle").addEventListener("change", async (e) => {
-  e.target.checked = await window.halo.invoke("halo:setOpenAtLogin", e.target.checked);
+  e.target.checked = await window.mercy.invoke("mercy:setOpenAtLogin", e.target.checked);
 });
 $("showLogs").addEventListener("click", () => {
   $("menu").hidden = true;
-  window.halo.invoke("halo:showLogs");
+  window.mercy.invoke("mercy:showLogs");
 });
-window.halo.invoke("halo:getOpenAtLogin").then((on) => ($("loginToggle").checked = on));
+window.mercy.invoke("mercy:getOpenAtLogin").then((on) => ($("loginToggle").checked = on));
 
 $("apiKeys").addEventListener("click", () => {
   $("menu").hidden = true;
   showConnect({ change: true });
 });
 
-// ── Permissions: how much Halo is trusted, per kind of action ───────────
+// ── Permissions: how much Mercy is trusted, per kind of action ───────────
 const TRUST_ROWS = [
   { kind: "shell", name: "Run commands", hint: "Terminal commands: files, folders, git, installs…", auto: "Deleting, killing or system changes still ask." },
   { kind: "applescript", name: "Control apps", hint: "Click menus, move windows, use Finder, Mail, Music…", auto: "Scripts that run risky commands still ask." },
@@ -597,7 +597,7 @@ function renderPerms(settings) {
       b.setAttribute("aria-pressed", String(b.dataset.level === level));
     }
     permsEl.querySelector(`[data-kind="${row.kind}"] .trust-note`).textContent =
-      level === "auto" ? row.auto : level === "off" ? "Halo won't do this." : "Halo asks you every time.";
+      level === "auto" ? row.auto : level === "off" ? "Mercy won't do this." : "Mercy asks you every time.";
   }
   const list = permsEl.querySelector(".always-list");
   list.replaceChildren(
@@ -622,7 +622,7 @@ async function showPerms() {
   permsEl.className = "enroll perms";
   permsEl.innerHTML = `
     <div class="enroll-title">Permissions</div>
-    <div class="enroll-text">How much should Halo do without asking? Opening apps, websites, Calendar, Reminders and Notes never asks.</div>
+    <div class="enroll-text">How much should Mercy do without asking? Opening apps, websites, Calendar, Reminders and Notes never asks.</div>
     ${TRUST_ROWS.map(
       (r) => `
       <div class="trust" data-kind="${r.kind}">
@@ -642,11 +642,11 @@ async function showPerms() {
     const b = e.target.closest("button");
     if (!b) return;
     if (b.dataset.a === "done") return closePerms();
-    if (b.dataset.forget) return renderPerms(await window.halo.invoke("halo:forgetAlways", b.dataset.forget));
+    if (b.dataset.forget) return renderPerms(await window.mercy.invoke("mercy:forgetAlways", b.dataset.forget));
     const kind = b.closest("[data-kind]")?.dataset.kind;
-    if (kind && b.dataset.level) renderPerms(await window.halo.invoke("halo:setTrust", { kind, level: b.dataset.level }));
+    if (kind && b.dataset.level) renderPerms(await window.mercy.invoke("mercy:setTrust", { kind, level: b.dataset.level }));
   });
-  renderPerms(await window.halo.invoke("halo:getTrust"));
+  renderPerms(await window.mercy.invoke("mercy:getTrust"));
   log.prepend(permsEl);
   expand();
 }
@@ -662,16 +662,16 @@ $("permsBtn").addEventListener("click", () => {
 });
 
 // ── wire up ────────────────────────────────────────────────────────────
-window.halo.on("speech:realtime-frame:received", onFrame);
-window.halo.on("halo:state", (s) => setState(s));
-window.halo.on("halo:asked", (text) => userFinal(text));
-window.halo.on("halo:permission", showPermission);
-window.halo.on("halo:audio", playChunk);
-window.halo.on("halo:audioStop", ({ gen }) => stopAudio(gen));
-window.halo.on("halo:wake", renderWake);
-window.halo.on("halo:speak", renderSpeak);
+window.mercy.on("speech:realtime-frame:received", onFrame);
+window.mercy.on("mercy:state", (s) => setState(s));
+window.mercy.on("mercy:asked", (text) => userFinal(text));
+window.mercy.on("mercy:permission", showPermission);
+window.mercy.on("mercy:audio", playChunk);
+window.mercy.on("mercy:audioStop", ({ gen }) => stopAudio(gen));
+window.mercy.on("mercy:wake", renderWake);
+window.mercy.on("mercy:speak", renderSpeak);
 
-// A newer Halo is on GitHub: offer the download (shown once per launch).
+// A newer Mercy is on GitHub: offer the download (shown once per launch).
 let updateShown = false;
 function showUpdate(info) {
   if (!info || updateShown) return;
@@ -681,18 +681,18 @@ function showUpdate(info) {
   el.innerHTML = `<div class="enroll-title"></div>
     <div class="enroll-text">Download the new version and drag it into Applications to replace this one.</div>
     <div class="perm-actions"><button class="btn primary" data-a="get">Download</button><button class="btn ghost" data-a="later">Later</button></div>`;
-  el.querySelector(".enroll-title").textContent = `Halo ${info.version} is out`;
+  el.querySelector(".enroll-title").textContent = `Mercy ${info.version} is out`;
   el.addEventListener("click", (e) => {
     const a = e.target.closest("button")?.dataset.a;
-    if (a === "get") window.halo.invoke("halo:openUpdate");
+    if (a === "get") window.mercy.invoke("mercy:openUpdate");
     if (a) el.remove();
   });
   log.prepend(el);
 }
-window.halo.on("halo:update", showUpdate);
-window.halo.invoke("halo:updateInfo").then(showUpdate);
+window.mercy.on("mercy:update", showUpdate);
+window.mercy.invoke("mercy:updateInfo").then(showUpdate);
 // Opened from the menu bar icon: show the conversation, cursor in the text box.
-window.halo.on("halo:openComposer", () => {
+window.mercy.on("mercy:openComposer", () => {
   // Control Center–style drop-in each time it opens.
   card.classList.remove("open");
   void card.offsetWidth;
@@ -701,19 +701,19 @@ window.halo.on("halo:openComposer", () => {
   scheduleCollapse();
   requestAnimationFrame(() => input.focus());
 });
-window.halo.on("halo:startEnroll", () => startEnroll());
-window.halo.on("halo:trayHidden", () =>
-  addNote("Your menu bar is full, so macOS is hiding Halo's icon. Hold ⌘ and drag a few menu bar icons off, or move Halo's icon right (⌘-drag) when it shows. “Hey Halo” still works."),
+window.mercy.on("mercy:startEnroll", () => startEnroll());
+window.mercy.on("mercy:trayHidden", () =>
+  addNote("Your menu bar is full, so macOS is hiding Mercy's icon. Hold ⌘ and drag a few menu bar icons off, or move Mercy's icon right (⌘-drag) when it shows. “Hey Mercy” still works."),
 );
-window.halo.on("halo:enroll", onEnroll);
-Promise.all([window.halo.invoke("halo:keysState"), window.halo.invoke("halo:wakeState")]).then(([keys, s]) => {
+window.mercy.on("mercy:enroll", onEnroll);
+Promise.all([window.mercy.invoke("mercy:keysState"), window.mercy.invoke("mercy:wakeState")]).then(([keys, s]) => {
   renderWake(s);
   // First run: keys first, then voice setup.
   if (!keys.ready) showConnect();
   else if (s.available && !s.enrolled) showEnrollInvite();
 });
-window.halo.on("halo:permission:closed", closePermission);
-window.halo.invoke("halo:getState").then((s) => {
+window.mercy.on("mercy:permission:closed", closePermission);
+window.mercy.invoke("mercy:getState").then((s) => {
   renderSpeak(s.voiceEnabled);
   setState(s.state);
 });

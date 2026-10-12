@@ -1,6 +1,6 @@
-// Halo's button in the Touch Bar Control Strip (where Siri's was).
-// A small native helper (native/touchbar/HaloTouchBar.swift) owns the button;
-// it prints "tap" when pressed and we send it Halo's state for the icon.
+// Mercy's button in the Touch Bar Control Strip (where Siri's was).
+// A small native helper (native/touchbar/MercyTouchBar.swift) owns the button;
+// it prints "tap" when pressed and we send it Mercy's state for the icon.
 // Tap = the 🎤 path: start listening, tap again to send, tap while she talks
 // to interrupt. Quietly does nothing on Macs without a Touch Bar or without
 // a Swift compiler to build the helper.
@@ -13,9 +13,9 @@ import { PACKAGED, RESOURCES, ROOT } from "./paths.js";
 import { log } from "./log.js";
 
 const DIR = path.join(ROOT, "native", "touchbar");
-const SOURCE = path.join(DIR, "HaloTouchBar.swift");
+const SOURCE = path.join(DIR, "MercyTouchBar.swift");
 // Installed app: prebuilt helper in Contents/Resources. Development: built next to its source.
-const BINARY = PACKAGED ? path.join(RESOURCES, "halo-touchbar") : path.join(DIR, "halo-touchbar");
+const BINARY = PACKAGED ? path.join(RESOURCES, "mercy-touchbar") : path.join(DIR, "mercy-touchbar");
 const MAX_RESTARTS = 3;
 
 /** Compile the helper if it's missing or older than its source. */
@@ -31,7 +31,7 @@ export async function buildTouchBarHelper() {
   return BINARY;
 }
 
-const COLLAPSE_AFTER_MS = 3000; // after Halo is done, the strip folds back into the button
+const COLLAPSE_AFTER_MS = 3000; // after Mercy is done, the strip folds back into the button
 
 /** Answer text for a 520 pt strip: code blocks become a note, markdown symbols go. */
 function stripText(md) {
@@ -78,11 +78,11 @@ export class TouchBarService {
     this.wake.onChange(() => this.sync());
     this.realtime.onFrame((f) => this.onFrame(f));
     // Her voice level from the panel's audio meter → the face's mouth.
-    this.gateway.handle("halo:level", (v) => this.send(`level ${Number(v).toFixed(2)}`));
+    this.gateway.handle("mercy:level", (v) => this.send(`level ${Number(v).toFixed(2)}`));
     this.start();
   }
 
-  /** Halo's state as the strip shows it; expand while active, fold back after. */
+  /** Mercy's state as the strip shows it; expand while active, fold back after. */
   sync() {
     const followup = this.voice.state === "idle" && this.wake.mode === "followup";
     const state = followup ? "followup" : this.voice.state;
@@ -112,28 +112,28 @@ export class TouchBarService {
       this.send(`you ${[...this.you.values()].join(" ").replace(/\s+/g, " ")}`);
     } else if (frame.type === "turn.started") {
       this.answer = "";
-      this.send("halo ");
+      this.send("mercy ");
     } else if (frame.type === "turn.token") {
       this.answer += d.delta;
       // ~10 updates a second is plenty for the strip.
       this.answerTimer ??= setTimeout(() => {
         this.answerTimer = null;
-        this.send(`halo ${stripText(this.answer)}`);
+        this.send(`mercy ${stripText(this.answer)}`);
       }, 100);
     } else if (frame.type === "turn.done") {
-      this.send(`halo ${stripText(this.answer)}`);
+      this.send(`mercy ${stripText(this.answer)}`);
     }
   }
 
   start() {
     if (this.stopped) return;
-    const args = process.env.HALO_TOUCHBAR_TAP_AFTER ? ["--tap-after", process.env.HALO_TOUCHBAR_TAP_AFTER] : [];
+    const args = process.env.MERCY_TOUCHBAR_TAP_AFTER ? ["--tap-after", process.env.MERCY_TOUCHBAR_TAP_AFTER] : [];
     const child = spawn(BINARY, args, { stdio: ["pipe", "pipe", "pipe"] });
     this.child = child;
     this.expanded = false;
     readline.createInterface({ input: child.stdout }).on("line", (line) => {
       if (line === "ready") {
-        log.info("[touchbar] Halo button is in the Control Strip");
+        log.info("[touchbar] Mercy button is in the Control Strip");
         this.sync();
       } else if (line === "strip ok") {
         this.stripAvailable = true;
@@ -141,7 +141,7 @@ export class TouchBarService {
         log.info("[touchbar] tapped");
         this.voice.toggle();
       } else if (line === "close") {
-        // The strip's ✕: stop whatever Halo is doing.
+        // The strip's ✕: stop whatever Mercy is doing.
         log.info("[touchbar] closed");
         this.expanded = false;
         if (this.voice.state === "listening") this.voice.cancelListening();

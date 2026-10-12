@@ -1,4 +1,4 @@
-// IPC gateway: window.halo.invoke(channel, payload) in the preloads resolves
+// IPC gateway: window.mercy.invoke(channel, payload) in the preloads resolves
 // here. Results are wrapped as { ok, value } / { ok: false, error } and the
 // preloads unwrap them (throwing on ok:false).
 import { ipcMain, BrowserWindow } from "electron";

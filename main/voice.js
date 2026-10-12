@@ -1,11 +1,11 @@
 // Push-to-talk + spoken replies.
 //
-//   "Hey Halo" / 🎤 ──► listening (mic finals collected by the brain; TTS socket warms up)
+//   "Hey Mercy" / 🎤 ──► listening (mic finals collected by the brain; TTS socket warms up)
 //   end of speech / 🎤 ──► finalize transcript ──► brain.ask(utterance)
 //          ──► turn.token* ──► sentences ──► streaming Aura-2 (websocket)
 //          ──► PCM chunks ──► panel (Web Audio) plays them gaplessly
 //
-// Starting to listen while Halo is talking cuts her off.
+// Starting to listen while Mercy is talking cuts her off.
 // Each sentence is sent as soon as it completes; audio starts ~200 ms later.
 import { app } from "electron";
 import { spawn } from "node:child_process";
@@ -51,7 +51,7 @@ export class VoiceService {
           log.info(`[voice] first audio ${Date.now() - this.askedAt}ms after the question`);
           this.askedAt = 0;
         }
-        this.gateway.broadcast("halo:audio", { gen: this.gen, rate: TTS_SAMPLE_RATE, pcm }, { to: ["panel"] });
+        this.gateway.broadcast("mercy:audio", { gen: this.gen, rate: TTS_SAMPLE_RATE, pcm }, { to: ["panel"] });
       },
       onFlushed: () => {
         this.pending = Math.max(0, this.pending - 1);
@@ -82,17 +82,17 @@ export class VoiceService {
       }
     });
     this.gateway.handleAll({
-      "halo:getState": () => ({ state: this.state, voiceEnabled: this.prefs().enabled }),
-      "halo:toggleTalk": () => this.toggle(),
-      "halo:askText": (text) => this.askText(text),
-      "halo:setVoiceEnabled": (on) => this.setEnabled(on),
-      "halo:playback": ({ playing, gen } = {}) => {
+      "mercy:getState": () => ({ state: this.state, voiceEnabled: this.prefs().enabled }),
+      "mercy:toggleTalk": () => this.toggle(),
+      "mercy:askText": (text) => this.askText(text),
+      "mercy:setVoiceEnabled": (on) => this.setEnabled(on),
+      "mercy:playback": ({ playing, gen } = {}) => {
         if (gen !== this.gen) return;
         this.panelPlaying = Boolean(playing);
         if (this.panelPlaying && this.state !== "listening" && this.state !== "waiting") this.setState("speaking");
         else this.settle();
       },
-      "halo:quit": () => app.quit(),
+      "mercy:quit": () => app.quit(),
     });
   }
 
@@ -100,14 +100,14 @@ export class VoiceService {
   setEnabled(on) {
     store.set("voice", { ...this.prefs(), enabled: Boolean(on) });
     if (!on) this.stopSpeaking();
-    this.gateway.broadcast("halo:speak", Boolean(on), { to: ["panel"] });
+    this.gateway.broadcast("mercy:speak", Boolean(on), { to: ["panel"] });
   }
 
   setState(state) {
     if (this.state === state) return;
     const prev = this.state;
     this.state = state;
-    this.gateway.broadcast("halo:state", state, { to: ["panel", "pill"] });
+    this.gateway.broadcast("mercy:state", state, { to: ["panel", "pill"] });
     for (const cb of this.stateListeners) cb(state, prev);
   }
 
@@ -155,16 +155,16 @@ export class VoiceService {
     const via = this.listeningVia;
     this.listeningVia = null;
     let text = this.brain.stopListening();
-    // "Hey Halo, what's the time" → "what's the time"
-    if (via === "wake") text = text.replace(/^\s*(?:(?:hey|hi|okay|ok|a)[\s,]+)?(?:halo|hello|hailo|hallo|haylo)\b[\s,.!?]*/i, "").trim();
-    // A "yes"/"no" while Halo is waiting for permission answers it.
+    // "Hey Mercy, what's the time" → "what's the time"
+    if (via === "wake") text = text.replace(/^\s*(?:(?:hey|hi|okay|ok|a)[\s,]+)?(?:mercy|hello|hailo|hallo|haylo)\b[\s,.!?]*/i, "").trim();
+    // A "yes"/"no" while Mercy is waiting for permission answers it.
     if (text && this.permissions.answerByVoice(text)) {
-      this.gateway.broadcast("halo:asked", text, { to: ["panel"] });
+      this.gateway.broadcast("mercy:asked", text, { to: ["panel"] });
       this.setState(this.permissions.pending.size ? "waiting" : "thinking");
       return;
     }
     if (text) {
-      this.gateway.broadcast("halo:asked", text, { to: ["panel"] });
+      this.gateway.broadcast("mercy:asked", text, { to: ["panel"] });
       this.setState("thinking");
       this.askedAt = released;
       this.brain.ask(text);
@@ -201,7 +201,7 @@ export class VoiceService {
     cue(CUE.start);
     // Connect TTS while the user is still talking.
     if (this.prefs().enabled) this.tts.warm();
-    // "Hey Halo" / follow-ups are ended by wake.js; button + Touch Bar end here.
+    // "Hey Mercy" / follow-ups are ended by wake.js; button + Touch Bar end here.
     if (via === "button") this.startEndpointing();
   }
 
@@ -253,7 +253,7 @@ export class VoiceService {
     }
     this.stopSpeaking();
     if (this.prefs().enabled) this.tts.warm();
-    this.gateway.broadcast("halo:asked", text, { to: ["panel"] });
+    this.gateway.broadcast("mercy:asked", text, { to: ["panel"] });
     if (this.permissions.answerByVoice(text)) {
       this.setState(this.permissions.pending.size ? "waiting" : "thinking");
       return;
@@ -343,7 +343,7 @@ export class VoiceService {
     this.pending = 0;
     this.panelPlaying = false;
     this.reply = null;
-    this.gateway.broadcast("halo:audioStop", { gen: this.gen }, { to: ["panel"] });
+    this.gateway.broadcast("mercy:audioStop", { gen: this.gen }, { to: ["panel"] });
   }
 }
 

@@ -1,7 +1,7 @@
 {
-  "name": "halo",
-  "productName": "Halo",
-  "version": "1.1.1",
+  "name": "mercy",
+  "productName": "Mercy",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "main": "main/index.js",
@@ -22,12 +22,12 @@
     "sherpa-onnx-node": "^1.13.8",
     "ws": "^8.22.0"
   },
-  "description": "Halo — a friendly AI sidekick for your Mac.",
+  "description": "Mercy — a friendly AI sidekick for your Mac.",
   "author": "Abdirashiid Sammantar",
-  "repository": "https://github.com/Rashid0312/halo",
+  "repository": "https://github.com/Rashid0312/mercy",
   "build": {
-    "appId": "app.halo",
-    "productName": "Halo",
+    "appId": "app.mercy",
+    "productName": "Mercy",
     "copyright": "Copyright © 2026 Abdirashiid Sammantar",
     "files": [
       "main/**",
@@ -46,8 +46,8 @@
         "to": "models"
       },
       {
-        "from": "native/touchbar/halo-touchbar",
-        "to": "halo-touchbar"
+        "from": "native/touchbar/mercy-touchbar",
+        "to": "mercy-touchbar"
       }
     ],
     "mac": {
@@ -66,13 +66,13 @@
       "gatekeeperAssess": false,
       "extendInfo": {
         "LSUIElement": true,
-        "NSMicrophoneUsageDescription": "Halo listens for “Hey Halo” and to what you ask her.",
-        "NSAppleEventsUsageDescription": "Halo controls the apps you ask her to — Calendar, Reminders, Notes, Messages and more."
+        "NSMicrophoneUsageDescription": "Mercy listens for “Hey Mercy” and to what you ask her.",
+        "NSAppleEventsUsageDescription": "Mercy controls the apps you ask her to — Calendar, Reminders, Notes, Messages and more."
       }
     },
     "dmg": {
-      "title": "Halo ${version}",
-      "artifactName": "Halo-${version}-${arch}.${ext}"
+      "title": "Mercy ${version}",
+      "artifactName": "Mercy-${version}-${arch}.${ext}"
     },
     "afterPack": "build/after-pack.cjs",
     "directories": {

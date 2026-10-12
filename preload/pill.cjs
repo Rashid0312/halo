@@ -1,11 +1,11 @@
 // Preload for the "mic bubble" pill: open the panel, report its size, and
-// receive Halo's state.
+// receive Mercy's state.
 const { contextBridge, ipcRenderer } = require("electron");
 
-const INVOKE = new Set(["halo:openPanel", "halo:pillResize"]);
-const EVENTS = new Set(["halo:state", "halo:wake", "halo:pillOut"]);
+const INVOKE = new Set(["mercy:openPanel", "mercy:pillResize"]);
+const EVENTS = new Set(["mercy:state", "mercy:wake", "mercy:pillOut"]);
 
-contextBridge.exposeInMainWorld("halo", {
+contextBridge.exposeInMainWorld("mercy", {
   invoke: async (channel, payload) => {
     if (!INVOKE.has(channel)) throw new Error(`blocked channel ${channel}`);
     const res = await ipcRenderer.invoke(channel, payload);

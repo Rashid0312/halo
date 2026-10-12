@@ -16,7 +16,7 @@ export const MODELS = {
 
 function headers() {
   const key = getKey("deepseek");
-  if (!key) throw Object.assign(new Error("No DeepSeek key yet — add it in Halo (··· → API keys)"), { code: "config" });
+  if (!key) throw Object.assign(new Error("No DeepSeek key yet — add it in Mercy (··· → API keys)"), { code: "config" });
   return { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
 }
 

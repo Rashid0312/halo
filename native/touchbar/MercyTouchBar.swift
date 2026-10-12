@@ -1,11 +1,11 @@
-// Halo on the Touch Bar.
+// Mercy on the Touch Bar.
 //
-// Collapsed: a button with Halo's pixel black hole in the Control Strip (where
+// Collapsed: a button with Mercy's pixel black hole in the Control Strip (where
 //            Siri's was), claimed back whenever something else takes the slot.
 // Expanded:  a full-width strip (like the volume slider takeover) with the
 //            animated orb, your words while you talk, and her answer.
 //
-// Protocol with Halo (main/touchbar.js):
+// Protocol with Mercy (main/touchbar.js):
 //   stdout  "ready"                        — the button is in the Control Strip
 //           "strip ok" | "strip unavailable" — whether the full-width strip works here
 //           "tap"                          — the face was tapped (talk / interrupt)
@@ -13,9 +13,9 @@
 //   stdin   "state <idle|listening|thinking|speaking|waiting|followup>"
 //           "expand" | "collapse"
 //           "you <text>"                   — what you're saying (live)
-//           "halo <text>"                  — her answer so far
+//           "mercy <text>"                  — her answer so far
 //           "level <0..1>"                 — her voice level (mouth)
-//   stdin closes                           — Halo quit: exit, the button disappears
+//   stdin closes                           — Mercy quit: exit, the button disappears
 //
 // Control Strip buttons and the takeover strip are private API
 // (DFRFoundation, NSTouchBarItem.addSystemTrayItem,
@@ -23,9 +23,9 @@
 // that drops them just loses the feature instead of crashing.
 import AppKit
 
-let trayID = NSTouchBarItem.Identifier("app.halo.controlstrip")
-let faceID = NSTouchBarItem.Identifier("app.halo.strip.face")
-let textID = NSTouchBarItem.Identifier("app.halo.strip.text")
+let trayID = NSTouchBarItem.Identifier("app.mercy.controlstrip")
+let faceID = NSTouchBarItem.Identifier("app.mercy.strip.face")
+let textID = NSTouchBarItem.Identifier("app.mercy.strip.text")
 
 typealias SetPresence = @convention(c) (CFString, Bool) -> Void
 typealias ShowsCloseBox = @convention(c) (Bool) -> Void
@@ -44,14 +44,14 @@ func hex(_ v: Int) -> NSColor {
   NSColor(red: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255, blue: CGFloat(v & 0xff) / 255, alpha: 1)
 }
 
-// Halo's pixel black hole — same rules as renderer/shared/pixel-orb.js.
+// Mercy's pixel black hole — same rules as renderer/shared/pixel-orb.js.
 let C = (
   core: hex(0x08031c), star1: hex(0x2a1a8a), star2: hex(0x4d2da6), star3: hex(0x7a3fc8),
   rim: hex(0xa64bf0), cyan: hex(0x55e3f2), spark: hex(0xffd3ef), magenta: hex(0xe041e6), dust: hex(0x3b1f4d)
 )
 let frameSeconds: [String: Double] = ["idle": 0.22, "listening": 0.11, "thinking": 0.09, "speaking": 0.10, "waiting": 0.30, "followup": 0.16]
 let dirs: [(Double, Double)] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)]
-let labelLight = hex(0xffb08a) // text color while listening / waiting (Halo orange, light)
+let labelLight = hex(0xffb08a) // text color while listening / waiting (Mercy orange, light)
 
 /// One frame of the orb as [(x, y, color)] on a grid×grid pixel grid.
 func orbCells(phase: Int, state: String, level: Double, grid: Int = 24, scale: Double = 1) -> [(Int, Int, NSColor)] {
@@ -144,7 +144,7 @@ func orbCells(phase: Int, state: String, level: Double, grid: Int = 24, scale: D
   return Array(cells.values)
 }
 
-/// Halo's animated pixel orb (Control Strip button and strip).
+/// Mercy's animated pixel orb (Control Strip button and strip).
 final class OrbView: NSView {
   var state = "idle" { didSet { if state != oldValue { schedule() } } }
   var level: Double = 0
@@ -219,7 +219,7 @@ final class Helper: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     dfrSymbol("DFRElementSetControlStripPresenceForIdentifier", as: SetPresence.self)?(trayID.rawValue as CFString, true)
     dfrSymbol("DFRSystemModalShowsCloseBoxWhenFrontMost", as: ShowsCloseBox.self)?(true)
     // The Control Strip has one slot for app buttons: when something else takes
-    // it (Now Playing as soon as music or a video plays), Halo's button is gone
+    // it (Now Playing as soon as music or a video plays), Mercy's button is gone
     // for good. Claim it back every few seconds, and right after wake / unlock.
     Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.pin() }
     NSWorkspace.shared.notificationCenter.addObserver(
@@ -234,7 +234,7 @@ final class Helper: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     strip.delegate = self
     strip.defaultItemIdentifiers = [faceID, textID]
     stripWorks = (NSTouchBar.self as AnyObject).responds(to: NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:"))
-    // The ✕ the system puts on the strip: tell Halo it was closed.
+    // The ✕ the system puts on the strip: tell Mercy it was closed.
     visibility = strip.observe(\.isVisible, options: [.new]) { [weak self] bar, _ in
       guard let self, self.expanded, !bar.isVisible else { return }
       self.expanded = false
@@ -326,7 +326,7 @@ final class Helper: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     case "expand": expand()
     case "collapse": collapse()
     case "you": you = arg
-    case "halo": answer = arg
+    case "mercy": answer = arg
     case "level":
       let v = Double(arg) ?? 0
       trayFace.level = v

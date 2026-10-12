@@ -1,4 +1,4 @@
-// Builds Halo-<version>-arm64.dmg into ./dist.
+// Builds Mercy-<version>-arm64.dmg into ./dist.
 //
 //   npm run dist
 //
@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const out = fs.mkdtempSync(path.join(os.tmpdir(), "halo-dist-"));
+const out = fs.mkdtempSync(path.join(os.tmpdir(), "mercy-dist-"));
 execFileSync("npx", ["electron-builder", "--mac", "--arm64", `-c.directories.output=${out}`], { cwd: ROOT, stdio: "inherit" });
 fs.mkdirSync(path.join(ROOT, "dist"), { recursive: true });
 for (const f of fs.readdirSync(out).filter((f) => f.endsWith(".dmg"))) {

@@ -1,8 +1,8 @@
-// Halo in the macOS menu bar.
+// Mercy in the macOS menu bar.
 //   left-click  → drop the panel down under the icon (click again to hide)
-//   right-click → menu: open, "Hey Halo", speak replies, re-train voice, quit
+//   right-click → menu: open, "Hey Mercy", speak replies, re-train voice, quit
 // The icon is a template image (macOS tints it for light/dark menu bars) of
-// Halo's pixel black hole: a thin ring when idle, thicker with sparks while
+// Mercy's pixel black hole: a thin ring when idle, thicker with sparks while
 // she's listening or talking.
 import { Menu, Tray, nativeImage } from "electron";
 import zlib from "node:zlib";
@@ -28,19 +28,19 @@ export class TrayService {
 
   register() {
     this.tray = new Tray(this.icons.idle);
-    this.tray.setToolTip("Halo");
+    this.tray.setToolTip("Mercy");
     // macOS hides menu bar icons that collide with the front app's menus when
     // the bar is full. Tell the user once instead of silently being invisible.
     setTimeout(() => {
       const b = this.tray.getBounds();
       if (b.y < 0 || !b.width) {
-        log.warn("[tray] menu bar is full — macOS is hiding Halo's icon");
-        // Explain once; after that "Hey Halo" and the pill are enough.
+        log.warn("[tray] menu bar is full — macOS is hiding Mercy's icon");
+        // Explain once; after that "Hey Mercy" and the pill are enough.
         const ui = store.get("ui") ?? {};
         if (!ui.trayHiddenNoticed) {
           store.set("ui", { ...ui, trayHiddenNoticed: true });
           this.session.showPanel();
-          this.gateway.broadcast("halo:trayHidden", null, { to: ["panel"] });
+          this.gateway.broadcast("mercy:trayHidden", null, { to: ["panel"] });
         }
       }
     }, 1500);
@@ -61,7 +61,7 @@ export class TrayService {
       return;
     }
     this.session.showPanel({ focus: true });
-    this.gateway.broadcast("halo:openComposer", null, { to: ["panel"] });
+    this.gateway.broadcast("mercy:openComposer", null, { to: ["panel"] });
   }
 
   menu() {
@@ -69,14 +69,14 @@ export class TrayService {
     const voice = store.get("voice");
     const openSetup = () => {
       this.session.showPanel({ focus: true });
-      this.gateway.broadcast("halo:startEnroll", null, { to: ["panel"] });
+      this.gateway.broadcast("mercy:startEnroll", null, { to: ["panel"] });
     };
     return Menu.buildFromTemplate([
-      { label: "Open Halo", click: () => this.toggle() },
+      { label: "Open Mercy", click: () => this.toggle() },
       { type: "separator" },
       wake.enrolled
         ? {
-            label: "“Hey Halo” — only my voice",
+            label: "“Hey Mercy” — only my voice",
             type: "checkbox",
             checked: wake.enabled,
             click: async (item) => {
@@ -84,7 +84,7 @@ export class TrayService {
               await this.wake.sync();
             },
           }
-        : { label: "Set up “Hey Halo”…", enabled: wake.available, click: openSetup },
+        : { label: "Set up “Hey Mercy”…", enabled: wake.available, click: openSetup },
       {
         label: "Speak replies",
         type: "checkbox",
@@ -98,7 +98,7 @@ export class TrayService {
         : []),
       ...(this.showLogs ? [{ label: "Show logs", click: () => this.showLogs() }] : []),
       { type: "separator" },
-      { label: "Quit Halo", role: "quit" },
+      { label: "Quit Mercy", role: "quit" },
     ]);
   }
 }
@@ -115,7 +115,7 @@ function icon(filled) {
 }
 
 /**
- * Coverage (0 or 1) at (x, y) in an 18×18 pt box — Halo's pixel black hole in
+ * Coverage (0 or 1) at (x, y) in an 18×18 pt box — Mercy's pixel black hole in
  * one color (template image), on a 1 pt pixel grid so it stays crisp.
  * Idle: a pixel ring with two specks inside. Active: a thicker ring and four
  * little diagonal sparks.

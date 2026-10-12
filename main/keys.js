@@ -63,9 +63,9 @@ async function check(name, key) {
 
 export function registerKeys(gateway) {
   gateway.handleAll({
-    "halo:keysState": () => keysState(),
+    "mercy:keysState": () => keysState(),
     /** @param {{ deepgram?: string, deepseek?: string }} input — blank fields keep the current key */
-    "halo:setKeys": async (input = {}) => {
+    "mercy:setKeys": async (input = {}) => {
       const errors = {};
       const next = { ...saved };
       for (const name of ["deepgram", "deepseek"]) {
@@ -81,6 +81,6 @@ export function registerKeys(gateway) {
       log.info(`[keys] saved (${Object.keys(saved).join(", ")})`); // names only, never values
       return { ok: true, errors: {}, ...keysState() };
     },
-    "halo:openKeyConsole": (name) => CONSOLES[name] && shell.openExternal(CONSOLES[name]),
+    "mercy:openKeyConsole": (name) => CONSOLES[name] && shell.openExternal(CONSOLES[name]),
   });
 }

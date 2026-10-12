@@ -1,19 +1,19 @@
-// Logging to the terminal and to ~/Library/Logs/Halo/halo.log (rotated at
-// 5 MB to halo.1.log), since the installed app has no terminal.
+// Logging to the terminal and to ~/Library/Logs/Mercy/mercy.log (rotated at
+// 5 MB to mercy.1.log), since the installed app has no terminal.
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
-const debug = process.env.HALO_DEBUG === "1";
+const debug = process.env.MERCY_DEBUG === "1";
 const MAX_BYTES = 5 * 1024 * 1024;
 let file = null;
 
 export function logFile() {
   if (file) return file;
   try {
-    const dir = process.env.HALO_USER_DATA ? path.join(process.env.HALO_USER_DATA, "logs") : app.getPath("logs");
+    const dir = process.env.MERCY_USER_DATA ? path.join(process.env.MERCY_USER_DATA, "logs") : app.getPath("logs");
     fs.mkdirSync(dir, { recursive: true });
-    file = path.join(dir, "halo.log");
+    file = path.join(dir, "mercy.log");
   } catch {
     file = null;
   }
@@ -28,7 +28,7 @@ function write(level, args) {
     if (fs.existsSync(f) && fs.statSync(f).size > MAX_BYTES) fs.renameSync(f, f.replace(/\.log$/, ".1.log"));
     fs.appendFileSync(f, `${new Date().toISOString()} ${level} ${text}\n`);
   } catch {
-    // Logging must never take Halo down.
+    // Logging must never take Mercy down.
   }
 }
 

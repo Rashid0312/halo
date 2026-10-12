@@ -1,4 +1,4 @@
-// "Look at my screen": screenshot the display the mouse is on (Halo's own
+// "Look at my screen": screenshot the display the mouse is on (Mercy's own
 // windows are kept out of the shot) and ask the vision model about it.
 import { BrowserWindow, desktopCapturer, screen } from "electron";
 import { log } from "./log.js";
@@ -33,7 +33,7 @@ export class ScreenService {
       const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: size, fetchWindowIcons: false });
       const source = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
       if (!source || source.thumbnail.isEmpty()) {
-        throw Object.assign(new Error("Halo can't see the screen yet — allow it in System Settings → Privacy & Security → Screen Recording"), {
+        throw Object.assign(new Error("Mercy can't see the screen yet — allow it in System Settings → Privacy & Security → Screen Recording"), {
           code: "PROCEDURAL",
         });
       }

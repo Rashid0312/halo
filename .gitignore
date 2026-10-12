@@ -40,4 +40,4 @@ voice-samples/
 models/
 
 # Built Touch Bar helper (npm run touchbar, or automatic on launch)
-native/touchbar/halo-touchbar
+native/touchbar/mercy-touchbar

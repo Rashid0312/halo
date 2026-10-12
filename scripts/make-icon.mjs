@@ -1,4 +1,4 @@
-// Draws Halo's app icon (her pixel black hole on a dark rounded square) and
+// Draws Mercy's app icon (her pixel black hole on a dark rounded square) and
 // writes build/icon.icns.
 //
 //   npx electron scripts/make-icon.mjs
@@ -13,7 +13,7 @@ import { orbCells } from "../renderer/shared/pixel-orb.js";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(ROOT, "build");
 
-// One frame of Halo's pixel black hole (renderer/shared/pixel-orb.js), mid-beat
+// One frame of Mercy's pixel black hole (renderer/shared/pixel-orb.js), mid-beat
 // with a spark burst, on the dark rounded square.
 let seed = 11;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -65,7 +65,7 @@ app.whenReady().then(async () => {
   fs.mkdirSync(OUT, { recursive: true });
   fs.writeFileSync(path.join(OUT, "icon.png"), png);
 
-  const iconset = fs.mkdtempSync(path.join(os.tmpdir(), "halo-icon-")) + "/icon.iconset";
+  const iconset = fs.mkdtempSync(path.join(os.tmpdir(), "mercy-icon-")) + "/icon.iconset";
   fs.mkdirSync(iconset);
   for (const size of [16, 32, 128, 256, 512]) {
     for (const scale of [1, 2]) {

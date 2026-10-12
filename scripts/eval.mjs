@@ -1,4 +1,4 @@
-// Halo eval: tool routing accuracy, latency, multi-turn memory, TTS latency.
+// Mercy eval: tool routing accuracy, latency, multi-turn memory, TTS latency.
 //
 //   npm run eval
 //
@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const H = path.join(ROOT, "main");
-app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), "halo-eval-")));
+app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), "mercy-eval-")));
 process.loadEnvFile(path.join(ROOT, ".env"));
 
 const ROUTING = [

@@ -1,6 +1,6 @@
 // Transcription session: audio capture → Deepgram (one stream per source) →
 // `transcript` frames. Started automatically when a session goes active,
-// so the mic is ready as soon as Halo starts listening.
+// so the mic is ready as soon as Mercy starts listening.
 import { DeepgramStream } from "./stt/deepgram.js";
 import { log } from "./log.js";
 import { getKey } from "./keys.js";
@@ -32,9 +32,9 @@ export class SpeechService {
     // (start ≈ 65 ms, stop < 10 ms); the Deepgram sockets stay connected.
     this.open = false;
     this.audioOp = Promise.resolve(); // serializes capture start/stop
-    // Wake mode ("Hey Halo"): WakeService keeps the mic running at 16 kHz;
+    // Wake mode ("Hey Mercy"): WakeService keeps the mic running at 16 kHz;
     // push-to-talk only gates what reaches Deepgram, with a short lead-in so
-    // the first word after "Hey Halo" isn't clipped.
+    // the first word after "Hey Mercy" isn't clipped.
     this.wakeMode = false;
     this.preroll = [];
   }
@@ -96,10 +96,10 @@ export class SpeechService {
     this.realtime.reset();
     this.realtime.setStatus({ state: "connecting" });
 
-    if (process.env.HALO_FAKE_STT === "1") return this.startFake(sessionId);
+    if (process.env.MERCY_FAKE_STT === "1") return this.startFake(sessionId);
 
     if (!apiKey) {
-      const message = "No Deepgram key yet — add it in Halo (··· → API keys)";
+      const message = "No Deepgram key yet — add it in Mercy (··· → API keys)";
       log.error(`[speech] ${message}`);
       this.setState({ status: "error", error: message });
       this.realtime.setStatus({ state: "disconnected" });
@@ -150,7 +150,7 @@ export class SpeechService {
       stream.send(chunk.data);
     });
 
-    // Listening may already be open (the 🎤 button or "Hey Halo" started this session).
+    // Listening may already be open (the 🎤 button or "Hey Mercy" started this session).
     if (this.open) this.setOpen(true);
     this.realtime.setStatus({ state: "live" });
     this.setState({ status: "transcribing", startedAt: Date.now() });

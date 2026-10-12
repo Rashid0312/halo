@@ -1,11 +1,11 @@
-// "Halo x.y is out": checks GitHub Releases once a day (installed app only)
+// "Mercy x.y is out": checks GitHub Releases once a day (installed app only)
 // and tells the panel. No auto-install — the app isn't signed with an Apple
 // Developer ID, so updating means downloading the new DMG.
 import { app, shell } from "electron";
 import { PACKAGED } from "./paths.js";
 import { log } from "./log.js";
 
-const REPO = "Rashid0312/halo";
+const REPO = "Rashid0312/mercy";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** "1.2.10" > "1.2.9" */
@@ -27,10 +27,10 @@ export class UpdateService {
 
   register() {
     this.gateway.handleAll({
-      "halo:updateInfo": () => this.latest,
-      "halo:openUpdate": () => this.latest && shell.openExternal(this.latest.url),
+      "mercy:updateInfo": () => this.latest,
+      "mercy:openUpdate": () => this.latest && shell.openExternal(this.latest.url),
     });
-    if (!PACKAGED && !process.env.HALO_CHECK_UPDATES) return;
+    if (!PACKAGED && !process.env.MERCY_CHECK_UPDATES) return;
     setTimeout(() => this.check(), 10000);
     setInterval(() => this.check(), DAY_MS);
   }
@@ -38,15 +38,15 @@ export class UpdateService {
   async check() {
     try {
       const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-        headers: { "User-Agent": `Halo/${app.getVersion()}`, Accept: "application/vnd.github+json" },
+        headers: { "User-Agent": `Mercy/${app.getVersion()}`, Accept: "application/vnd.github+json" },
       });
       if (!res.ok) return; // no releases yet, rate limit, offline…
       const rel = await res.json();
       const version = String(rel.tag_name ?? "").replace(/^v/, "");
       if (!version || !newer(version, app.getVersion())) return;
       this.latest = { version, url: rel.html_url };
-      log.info(`[update] Halo ${version} is available`);
-      this.gateway.broadcast("halo:update", this.latest, { to: ["panel"] });
+      log.info(`[update] Mercy ${version} is available`);
+      this.gateway.broadcast("mercy:update", this.latest, { to: ["panel"] });
     } catch (err) {
       log.debug(`[update] check failed: ${err.message}`);
     }

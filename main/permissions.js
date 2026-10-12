@@ -3,12 +3,12 @@
 // by voice ("yes"/"no", spoken or typed). Unanswered requests are denied after a
 // timeout.
 //
-// How much Halo is trusted is the user's call, per kind of action (panel →
+// How much Mercy is trusted is the user's call, per kind of action (panel →
 // ··· → Permissions):
 //   ask   ask every time (things marked "Always allow" don't ask)
 //   auto  just do it — except risky ones (deleting, killing, shutting down…),
 //         which still ask
-//   off   never; Halo is told it's turned off
+//   off   never; Mercy is told it's turned off
 import crypto from "node:crypto";
 import { store } from "./store.js";
 import { log } from "./log.js";
@@ -31,13 +31,13 @@ export class Permissions {
 
   register() {
     this.gateway.handleAll({
-      "halo:permissionReply": ({ id, decision } = {}) => this.reply(id, decision),
-      "halo:getTrust": () => this.settings(),
-      "halo:setTrust": ({ kind, level } = {}) => {
+      "mercy:permissionReply": ({ id, decision } = {}) => this.reply(id, decision),
+      "mercy:getTrust": () => this.settings(),
+      "mercy:setTrust": ({ kind, level } = {}) => {
         if (kind in KINDS && LEVELS.has(level)) this.save({ trust: { ...this.settings().trust, [kind]: level } });
         return this.settings();
       },
-      "halo:forgetAlways": (key) => {
+      "mercy:forgetAlways": (key) => {
         this.save({ always: this.settings().always.filter((k) => k !== key) });
         return this.settings();
       },
@@ -87,7 +87,7 @@ export class Permissions {
       this.pending.set(id, { resolve, timer, alwaysKey: req.alwaysKey });
       signal?.addEventListener("abort", () => this.reply(id, "deny", "cancelled"), { once: true });
       this.showPanel?.(); // permission cards must be seen: open the panel
-      this.gateway.broadcast("halo:permission", { id, ...req }, { to: ["panel"] });
+      this.gateway.broadcast("mercy:permission", { id, ...req }, { to: ["panel"] });
       log.info(`[perm] ask ${id.slice(0, 8)}: ${req.title} — ${req.detail.slice(0, 120)}`);
       this.emitPending();
     });
@@ -101,7 +101,7 @@ export class Permissions {
     const d = decision === "always" && p.alwaysKey ? "always" : decision === "allow" || decision === "always" ? "allow" : "deny";
     if (d === "always") this.save({ always: [...new Set([...this.settings().always, p.alwaysKey])] });
     log.info(`[perm] ${id.slice(0, 8)} → ${d}${reason ? ` (${reason})` : ""}`);
-    this.gateway.broadcast("halo:permission:closed", { id, decision: d, reason }, { to: ["panel"] });
+    this.gateway.broadcast("mercy:permission:closed", { id, decision: d, reason }, { to: ["panel"] });
     p.resolve(d);
     this.emitPending();
   }
@@ -110,7 +110,7 @@ export class Permissions {
   answerByVoice(text) {
     const id = [...this.pending.keys()].at(-1);
     if (!id) return false;
-    const t = text.trim().replace(/^(hey |ok |um |uh )?(halo,? )?/i, "");
+    const t = text.trim().replace(/^(hey |ok |um |uh )?(mercy,? )?/i, "");
     if (YES.test(t)) this.reply(id, "allow", "voice");
     else if (NO.test(t)) this.reply(id, "deny", "voice");
     else return false;

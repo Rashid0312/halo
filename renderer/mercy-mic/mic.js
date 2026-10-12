@@ -1,4 +1,4 @@
-// Halo's microphone: a hidden window records with Chromium's echo
+// Mercy's microphone: a hidden window records with Chromium's echo
 // cancellation / noise suppression and streams 16 kHz PCM16 chunks to main.
 let ctx = null;
 let stream = null;

@@ -50,7 +50,9 @@ export class DeepgramStream {
       this.attempt = 0;
       log.info(`[deepgram:${this.opts.name}] open @${this.opts.sampleRate}Hz`);
       this.opts.onState?.("live");
-      for (const buf of this.pending.splice(0)) ws.send(buf);
+      this.sentSec = 0;
+      this.heardSec = 0;
+      for (const buf of this.pending.splice(0)) this.sendNow(buf);
       this.keepalive = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "KeepAlive" }));
       }, KEEPALIVE_MS);
@@ -78,6 +80,7 @@ export class DeepgramStream {
       return;
     }
     if (msg.type !== "Results") return;
+    this.heardSec = Math.max(this.heardSec ?? 0, (msg.start ?? 0) + (msg.duration ?? 0));
     if (msg.from_finalize) queueMicrotask(() => this.finalizeDone?.());
     const text = msg.channel?.alternatives?.[0]?.transcript ?? "";
     const final = msg.is_final === true;
@@ -98,8 +101,17 @@ export class DeepgramStream {
 
   /** @param {Buffer} pcm16 */
   send(pcm16) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(pcm16);
+    if (this.ws?.readyState === WebSocket.OPEN) this.sendNow(pcm16);
     else if (this.pending.length < 1000) this.pending.push(pcm16); // ~10s buffered while connecting
+  }
+
+  sendNow(pcm16) {
+    this.ws.send(pcm16);
+    this.sentSec = (this.sentSec ?? 0) + this.seconds(pcm16);
+  }
+
+  seconds(pcm16) {
+    return pcm16.length / 2 / this.opts.sampleRate;
   }
 
   /**
@@ -109,14 +121,20 @@ export class DeepgramStream {
   finalize(maxMs = 600) {
     // Audio still buffered because the socket is connecting: wait for it to open
     // (it flushes the buffer on open), then finalize with more time.
+    // Deepgram works through a burst of audio at about real-time speed, and a
+    // Finalize sent too early answers with only what it got through so far
+    // ("He…"). So after the flush, wait until its results are close to the end
+    // of what was sent, then finalize.
     if (this.pending.length && !this.closed) {
+      const backlogMs = this.pending.reduce((ms, b) => ms + this.seconds(b) * 1000, 0);
       return new Promise((resolve) => {
         const started = Date.now();
         const poll = setInterval(() => {
-          if (this.ws?.readyState === WebSocket.OPEN && !this.pending.length) {
+          const flushed = this.ws?.readyState === WebSocket.OPEN && !this.pending.length;
+          if (flushed && (this.heardSec >= this.sentSec - 1.2 || Date.now() - started > 1500 + backlogMs)) {
             clearInterval(poll);
             this.finalize(1500).then(resolve);
-          } else if (Date.now() - started > 4000) {
+          } else if (Date.now() - started > 4000 + backlogMs) {
             clearInterval(poll);
             resolve();
           }

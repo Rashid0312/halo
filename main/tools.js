@@ -3,7 +3,7 @@
 // that returns a short JSON-able result for the model.
 //
 // The specific tools never delete data. Mac app access goes through JXA
-// (main/mac/*.jxa); macOS asks once per app ("Halo wants to control Calendar").
+// (main/mac/*.jxa); macOS asks once per app ("Mercy wants to control Calendar").
 // The general tools (run_shell, run_applescript) can do anything, so every
 // call asks the user first (permissions.js) unless they chose "Always allow".
 import { execFile } from "node:child_process";
@@ -83,7 +83,7 @@ export function findApp(query, apps = installedApps()) {
 const OUTPUT_CHARS = 4000;
 // Never run, even if approved.
 const BLOCKED = [
-  [/(^|[\s;&|(])sudo\b/, "sudo isn't allowed (Halo can't type your password)."],
+  [/(^|[\s;&|(])sudo\b/, "sudo isn't allowed (Mercy can't type your password)."],
   [/\brm\s+(-[a-z]*\s+)*(-[a-z]*[rf][a-z]*\s+)+(\/|~|\$HOME)\/?(\s|$|\*)/i, "Deleting your whole disk or home folder isn't allowed."],
   [/\b(mkfs|diskutil\s+(erase|partition|zero))/i, "Disk formatting isn't allowed."],
   [/:\(\)\s*\{\s*:\|:&\s*\};:/, "Fork bombs aren't allowed."],
@@ -113,9 +113,9 @@ function programs(command) {
 function riskyCommand(command) {
   return programs(command).some((p) => RISKY.has(p)) || RISKY_PATTERNS.some((re) => re.test(command));
 }
-const OFF = (what) => ({ ok: false, denied: true, error: `${what} is turned off in Halo's settings (··· → Permissions). Tell the user they can turn it on there.` });
+const OFF = (what) => ({ ok: false, denied: true, error: `${what} is turned off in Mercy's settings (··· → Permissions). Tell the user they can turn it on there.` });
 
-// Strip secrets from anything Halo runs.
+// Strip secrets from anything Mercy runs.
 const childEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSWORD/i.test(k)));
 
 function firstProgram(command) {
@@ -213,7 +213,7 @@ const TOOLS = {
       const args = ["run", name];
       let tmp = null;
       if (input) {
-        tmp = path.join(os.tmpdir(), `halo-shortcut-${Date.now()}.txt`);
+        tmp = path.join(os.tmpdir(), `mercy-shortcut-${Date.now()}.txt`);
         fs.writeFileSync(tmp, input);
         args.push("--input-path", tmp);
       }
@@ -419,9 +419,9 @@ export async function runTool(name, rawArgs, ctx = {}) {
   } catch (err) {
     const message = String(err?.stderr || err?.message || err).trim().slice(0, 400);
     log.warn(`[tool] ${name} ${rawArgs} → ${message}`);
-    // -1743: the user hasn't allowed Halo to control that app yet.
+    // -1743: the user hasn't allowed Mercy to control that app yet.
     const hint = /-1743|not authori[sz]ed/i.test(message)
-      ? " The user needs to allow Halo in System Settings → Privacy & Security → Automation."
+      ? " The user needs to allow Mercy in System Settings → Privacy & Security → Automation."
       : "";
     return JSON.stringify({ ok: false, error: message + hint });
   }

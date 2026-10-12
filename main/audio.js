@@ -43,7 +43,7 @@ export class AudioService {
         for (const cb of this.endedListeners) cb();
       }
     });
-    // Only Halo's own pages may use the mic.
+    // Only Mercy's own pages may use the mic.
     session.defaultSession.setPermissionRequestHandler((wc, permission, cb) =>
       cb(permission === "media" && wc.getURL().startsWith("file://")),
     );
@@ -99,12 +99,12 @@ export class AudioService {
   /** Start the microphone (other sources from older callers are ignored). */
   async start() {
     if (this.status === "capturing" || this.status === "starting") return;
-    if (process.env.HALO_FAKE_MIC) return this.startFake(process.env.HALO_FAKE_MIC);
+    if (process.env.MERCY_FAKE_MIC) return this.startFake(process.env.MERCY_FAKE_MIC);
     this.setStatus("starting");
     try {
       if (systemPreferences.getMediaAccessStatus("microphone") !== "granted") {
         const ok = await systemPreferences.askForMediaAccess("microphone");
-        if (!ok) throw new Error("Microphone access is off — allow Halo in System Settings → Privacy & Security → Microphone");
+        if (!ok) throw new Error("Microphone access is off — allow Mercy in System Settings → Privacy & Security → Microphone");
       }
       this.firstChunkLogged = false;
       const device = await this.command("start");

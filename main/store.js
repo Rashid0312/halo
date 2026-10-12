@@ -1,11 +1,11 @@
-// Tiny JSON-file store for Halo's settings (userData/store.json).
+// Tiny JSON-file store for Mercy's settings (userData/store.json).
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULTS = {
   userPrefs: { language: "en-US", coding_language: "Python" },
-  // "Hey Halo": on by default, starts once the user has enrolled their voice.
+  // "Hey Mercy": on by default, starts once the user has enrolled their voice.
   wake: { enabled: true, followUpMs: 6000 },
   permissions: { always: [] }, // "shell:git", "applescript:Finder" — see permissions.js
   voice: { enabled: true, model: "aura-2-andromeda-en" },

@@ -1,4 +1,4 @@
-/* Halo panel: drops down from the menu bar like Control Center.
+/* Mercy panel: drops down from the menu bar like Control Center.
    The frosted glass behind everything is native macOS vibrancy (session.js);
    tiles are translucent white on top of it. */
 @font-face {
@@ -120,7 +120,7 @@ svg .fill {
   color: #ffb08a;
 }
 
-/* ── orb: Halo's pixel black hole (renderer/shared/pixel-orb.js) ── */
+/* ── orb: Mercy's pixel black hole (renderer/shared/pixel-orb.js) ── */
 .orb {
   width: 26px;
   height: 26px;
@@ -297,7 +297,7 @@ label.row input {
   color: var(--brand);
   animation: breathe 1s infinite;
 }
-.msg.halo .who {
+.msg.mercy .who {
   color: #ff8a55;
 }
 .text p {
@@ -588,7 +588,7 @@ label.row input {
   color: var(--text-3);
 }
 
-/* ── "Connect Halo" key fields ── */
+/* ── "Connect Mercy" key fields ── */
 .field {
   display: grid;
   gap: 4px;
