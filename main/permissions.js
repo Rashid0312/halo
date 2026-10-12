@@ -1,6 +1,14 @@
-// Ask-before-acting: general tools (shell, AppleScript) call request() and wait
-// for the user to answer in the panel (Allow once / Always / Deny) or by voice
-// ("yes"/"no", spoken or typed). Unanswered requests are denied after a timeout.
+// Ask-before-acting: general tools (shell, AppleScript, Messages) call request()
+// and wait for the user to answer in the panel (Allow once / Always / Deny) or
+// by voice ("yes"/"no", spoken or typed). Unanswered requests are denied after a
+// timeout.
+//
+// How much Halo is trusted is the user's call, per kind of action (panel →
+// ··· → Permissions):
+//   ask   ask every time (things marked "Always allow" don't ask)
+//   auto  just do it — except risky ones (deleting, killing, shutting down…),
+//         which still ask
+//   off   never; Halo is told it's turned off
 import crypto from "node:crypto";
 import { store } from "./store.js";
 import { log } from "./log.js";
@@ -8,6 +16,10 @@ import { log } from "./log.js";
 const TIMEOUT_MS = 120000;
 const YES = /^(yes|yeah|yep|yup|sure|ok(ay)?|do it|go ahead|allow( it)?|approved?|please do|go for it)\b/i;
 const NO = /^(no|nope|nah|don'?t|do not|cancel|stop|deny|never mind|nevermind)\b/i;
+
+/** Kinds of actions with their own trust setting, and the default. */
+export const KINDS = { shell: "ask", applescript: "ask", message: "ask" };
+const LEVELS = new Set(["ask", "auto", "off"]);
 
 export class Permissions {
   /** @param {import("./gateway.js").Gateway} gateway */
@@ -18,7 +30,18 @@ export class Permissions {
   }
 
   register() {
-    this.gateway.handle("halo:permissionReply", ({ id, decision } = {}) => this.reply(id, decision));
+    this.gateway.handleAll({
+      "halo:permissionReply": ({ id, decision } = {}) => this.reply(id, decision),
+      "halo:getTrust": () => this.settings(),
+      "halo:setTrust": ({ kind, level } = {}) => {
+        if (kind in KINDS && LEVELS.has(level)) this.save({ trust: { ...this.settings().trust, [kind]: level } });
+        return this.settings();
+      },
+      "halo:forgetAlways": (key) => {
+        this.save({ always: this.settings().always.filter((k) => k !== key) });
+        return this.settings();
+      },
+    });
   }
 
   /** Called with true when a request opens, false when none are left. */
@@ -26,17 +49,38 @@ export class Permissions {
     this.listeners.add(cb);
   }
 
+  /** { trust: { shell, applescript, message }, always: [...] } */
+  settings() {
+    const p = store.get("permissions") ?? {};
+    const trust = Object.fromEntries(Object.entries(KINDS).map(([k, d]) => [k, LEVELS.has(p.trust?.[k]) ? p.trust[k] : d]));
+    return { trust, always: p.always ?? [] };
+  }
+
+  save(patch) {
+    store.set("permissions", { ...(store.get("permissions") ?? {}), ...patch });
+  }
+
   isAlwaysAllowed(key) {
-    return Boolean(key) && (store.get("permissions")?.always ?? []).includes(key);
+    return Boolean(key) && this.settings().always.includes(key);
   }
 
   /**
-   * @param {{ title: string, detail: string, why?: string, alwaysKey?: string, alwaysLabel?: string }} req
+   * @param {{ kind: string, title: string, detail: string, why?: string, risky?: boolean, alwaysKey?: string, alwaysLabel?: string }} req
+   *   risky: asks even when the kind is set to "auto"
    * @param {AbortSignal} [signal] turn signal: an interrupted turn denies its request
-   * @returns {Promise<"allow" | "always" | "deny">}
+   * @returns {Promise<"allow" | "deny" | "off">}
    */
   request(req, signal) {
-    if (this.isAlwaysAllowed(req.alwaysKey)) return Promise.resolve("allow");
+    const level = this.settings().trust[req.kind] ?? "ask";
+    if (level === "off") {
+      log.info(`[perm] ${req.kind} is turned off → ${req.title}`);
+      return Promise.resolve("off");
+    }
+    if (level === "auto" && !req.risky) {
+      log.info(`[perm] auto-allowed: ${req.title} — ${req.detail.slice(0, 120)}`);
+      return Promise.resolve("allow");
+    }
+    if (!req.risky && this.isAlwaysAllowed(req.alwaysKey)) return Promise.resolve("allow");
     const id = crypto.randomUUID();
     return new Promise((resolve) => {
       const timer = setTimeout(() => this.reply(id, "deny", "timed out"), TIMEOUT_MS);
@@ -55,10 +99,7 @@ export class Permissions {
     this.pending.delete(id);
     clearTimeout(p.timer);
     const d = decision === "always" && p.alwaysKey ? "always" : decision === "allow" || decision === "always" ? "allow" : "deny";
-    if (d === "always") {
-      const perms = store.get("permissions") ?? { always: [] };
-      store.set("permissions", { ...perms, always: [...new Set([...(perms.always ?? []), p.alwaysKey])] });
-    }
+    if (d === "always") this.save({ always: [...new Set([...this.settings().always, p.alwaysKey])] });
     log.info(`[perm] ${id.slice(0, 8)} → ${d}${reason ? ` (${reason})` : ""}`);
     this.gateway.broadcast("halo:permission:closed", { id, decision: d, reason }, { to: ["panel"] });
     p.resolve(d);

@@ -41,7 +41,7 @@ function expand() {
 function scheduleCollapse() {
   clearTimeout(collapseTimer);
   collapseTimer = setTimeout(() => {
-    if (state === "idle" && !card.matches(":hover") && $("menu").hidden && !enrollEl?.dataset.active && !log.querySelector(".perm:not(.allowed):not(.denied)")) {
+    if (state === "idle" && !card.matches(":hover") && $("menu").hidden && !enrollEl?.dataset.active && !permsEl && !log.querySelector(".perm:not(.allowed):not(.denied)")) {
       // Tuck back into the menu bar; the conversation stays.
       window.halo.invoke("halo:autoHide").catch(() => {});
     }
@@ -574,6 +574,91 @@ window.halo.invoke("halo:getOpenAtLogin").then((on) => ($("loginToggle").checked
 $("apiKeys").addEventListener("click", () => {
   $("menu").hidden = true;
   showConnect({ change: true });
+});
+
+// ── Permissions: how much Halo is trusted, per kind of action ───────────
+const TRUST_ROWS = [
+  { kind: "shell", name: "Run commands", hint: "Terminal commands: files, folders, git, installs…", auto: "Deleting, killing or system changes still ask." },
+  { kind: "applescript", name: "Control apps", hint: "Click menus, move windows, use Finder, Mail, Music…", auto: "Scripts that run risky commands still ask." },
+  { kind: "message", name: "Send messages", hint: "iMessage / SMS from your Messages app.", auto: "Sends without showing you the text first." },
+];
+const LEVEL_LABEL = { ask: "Ask", auto: "Just do it", off: "Never" };
+let permsEl = null;
+
+function alwaysLabel(key) {
+  const [kind, rest] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+  return { shell: `Command: ${rest}`, applescript: `Control ${rest}`, messages: `Messages to ${rest}` }[kind] ?? key;
+}
+
+function renderPerms(settings) {
+  for (const row of TRUST_ROWS) {
+    const level = settings.trust[row.kind];
+    for (const b of permsEl.querySelectorAll(`[data-kind="${row.kind}"] [data-level]`)) {
+      b.setAttribute("aria-pressed", String(b.dataset.level === level));
+    }
+    permsEl.querySelector(`[data-kind="${row.kind}"] .trust-note`).textContent =
+      level === "auto" ? row.auto : level === "off" ? "Halo won't do this." : "Halo asks you every time.";
+  }
+  const list = permsEl.querySelector(".always-list");
+  list.replaceChildren(
+    ...settings.always.map((key) => {
+      const chip = document.createElement("span");
+      chip.className = "always-chip";
+      chip.textContent = alwaysLabel(key);
+      const x = document.createElement("button");
+      x.textContent = "✕";
+      x.title = "Ask again";
+      x.dataset.forget = key;
+      chip.append(x);
+      return chip;
+    }),
+  );
+  permsEl.querySelector(".always").hidden = !settings.always.length;
+}
+
+async function showPerms() {
+  if (permsEl) return;
+  permsEl = document.createElement("div");
+  permsEl.className = "enroll perms";
+  permsEl.innerHTML = `
+    <div class="enroll-title">Permissions</div>
+    <div class="enroll-text">How much should Halo do without asking? Opening apps, websites, Calendar, Reminders and Notes never asks.</div>
+    ${TRUST_ROWS.map(
+      (r) => `
+      <div class="trust" data-kind="${r.kind}">
+        <div class="trust-head"><b>${r.name}</b><small>${r.hint}</small></div>
+        <div class="seg" role="group" aria-label="${r.name}">
+          ${["ask", "auto", "off"].map((l) => `<button type="button" data-level="${l}">${LEVEL_LABEL[l]}</button>`).join("")}
+        </div>
+        <small class="trust-note"></small>
+      </div>`,
+    ).join("")}
+    <div class="always" hidden>
+      <div class="trust-head"><b>Always allowed</b><small>Things you said “Always allow” to. ✕ to be asked again.</small></div>
+      <div class="always-list"></div>
+    </div>
+    <div class="perm-actions"><button class="btn primary" data-a="done">Done</button></div>`;
+  permsEl.addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.a === "done") return closePerms();
+    if (b.dataset.forget) return renderPerms(await window.halo.invoke("halo:forgetAlways", b.dataset.forget));
+    const kind = b.closest("[data-kind]")?.dataset.kind;
+    if (kind && b.dataset.level) renderPerms(await window.halo.invoke("halo:setTrust", { kind, level: b.dataset.level }));
+  });
+  renderPerms(await window.halo.invoke("halo:getTrust"));
+  log.prepend(permsEl);
+  expand();
+}
+
+function closePerms() {
+  permsEl?.remove();
+  permsEl = null;
+}
+
+$("permsBtn").addEventListener("click", () => {
+  $("menu").hidden = true;
+  showPerms();
 });
 
 // ── wire up ────────────────────────────────────────────────────────────

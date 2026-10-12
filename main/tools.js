@@ -92,6 +92,29 @@ const BLOCKED = [
 const ALWAYS_ASK = new Set(
   "rm rmdir mv dd chmod chown kill killall pkill shutdown reboot halt launchctl defaults diskutil curl wget ssh scp rsync sh bash zsh fish python python3 node ruby perl osascript open eval exec xargs find git npm npx pip pip3 brew crontab security".split(" "),
 );
+// Programs that ask even when commands are set to "just do it": they delete,
+// overwrite, stop things or change the system.
+const RISKY = new Set(
+  "rm rmdir srm mv dd chmod chown kill killall pkill shutdown reboot halt launchctl defaults diskutil crontab security tccutil csrutil networksetup pmset systemsetup".split(" "),
+);
+const RISKY_PATTERNS = [
+  /\|\s*(sudo\s+)?(sh|bash|zsh|python3?|node|ruby|perl)\b/, // piping into an interpreter (curl … | sh)
+  /\bgit\s+(push|reset\s+--hard|clean|checkout\s+--|branch\s+-D|rebase)\b/,
+  /\bfind\b.*\s-(delete|exec)\b/,
+  /\b(npm|pnpm|yarn|brew|pip3?)\s+(uninstall|remove|rm)\b/,
+];
+/** Every program a command line runs (each part of ; && || | chains). */
+function programs(command) {
+  return command
+    .split(/;|&&|\|\||\||\$\(|`/)
+    .map(firstProgram)
+    .filter(Boolean);
+}
+function riskyCommand(command) {
+  return programs(command).some((p) => RISKY.has(p)) || RISKY_PATTERNS.some((re) => re.test(command));
+}
+const OFF = (what) => ({ ok: false, denied: true, error: `${what} is turned off in Halo's settings (··· → Permissions). Tell the user they can turn it on there.` });
+
 // Strip secrets from anything Halo runs.
 const childEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSWORD/i.test(k)));
 
@@ -257,6 +280,7 @@ TOOLS.messages_send = {
       alwaysKey: `messages:${handle}`,
       alwaysLabel: `Always allow messages to ${name}`,
     });
+    if (decision === "off") return OFF("Sending messages");
     if (decision === "deny") return { ok: false, denied: true, error: "The user chose not to send it." };
     const { stdout } = await run("osascript", [path.join(UNPACKED, "main", "mac", "messages-send.applescript"), handle, text], {
       env: childEnv(),
@@ -275,7 +299,7 @@ TOOLS.messages_send = {
 TOOLS.run_shell = {
   def: fn(
     "run_shell",
-    "Run a zsh command on the user's Mac (cwd: home folder). Use for anything no specific tool covers: files, folders, git, system info, installing, scripts, launching CLIs. The user approves each command first. Prefer one clear command; chain with && when needed.",
+    "Run a zsh command on the user's Mac (cwd: home folder). Use for anything no specific tool covers: files, folders, git, system info, installing, scripts, launching CLIs. Depending on their settings the user may approve it first. Prefer one clear command; chain with && when needed.",
     {
       command: str("The exact zsh command"),
       why: str("One short sentence the user sees explaining what this does"),
@@ -292,8 +316,10 @@ TOOLS.run_shell = {
       title: "Run a command",
       detail: command,
       why,
+      risky: riskyCommand(command),
       ...(simple ? { alwaysKey: `shell:${program}`, alwaysLabel: `Always allow ${program}` } : {}),
     });
+    if (decision === "off") return OFF("Running commands");
     if (decision === "deny") return { ok: false, denied: true, error: "The user said no." };
     const dir = cwd ? cwd.replace(/^~(?=$|\/)/, os.homedir()) : os.homedir();
     try {
@@ -308,7 +334,7 @@ TOOLS.run_shell = {
 TOOLS.run_applescript = {
   def: fn(
     "run_applescript",
-    "Run AppleScript to control any scriptable Mac app or UI (Finder, Safari, Mail, Messages, Music, System Events, window management, clicking menus…). The user approves each script first.",
+    "Run AppleScript to control any scriptable Mac app or UI (Finder, Safari, Mail, Messages, Music, System Events, window management, clicking menus…). Depending on their settings the user may approve it first.",
     { script: str("The AppleScript source"), why: str("One short sentence the user sees explaining what this does") },
     ["script", "why"],
   ),
@@ -325,8 +351,12 @@ TOOLS.run_applescript = {
       title: single ? `Control ${single}` : "Run an AppleScript",
       detail: script,
       why,
+      // Shell commands inside AppleScript follow the same rules as run_shell.
+      risky: [...script.matchAll(/do shell script\s+"((?:[^"\\]|\\.)*)"/g)].some((m) => riskyCommand(m[1])) ||
+        (/do shell script/i.test(script) && !/do shell script\s+"/.test(script)),
       ...(single ? { alwaysKey: `applescript:${single}`, alwaysLabel: `Always allow ${single}` } : {}),
     });
+    if (decision === "off") return OFF("Controlling apps");
     if (decision === "deny") return { ok: false, denied: true, error: "The user said no." };
     const { stdout } = await run("osascript", ["-e", script], { env: childEnv(), timeout: 60000 });
     return { ok: true, result: clip(stdout.trim()) };
