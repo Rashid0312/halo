@@ -9,7 +9,8 @@ const DEFAULTS = {
   wake: { enabled: true, followUpMs: 6000 },
   permissions: { always: [] }, // "shell:git", "applescript:Finder" — see permissions.js
   voice: { enabled: true, model: "aura-2-andromeda-en" },
-  stt: { engine: "deepgram" }, // "deepgram" | "apple" | "auto" — see speech.js
+  stt: { engine: "deepgram" },
+  brain: { provider: "deepseek" }, // "deepseek" | "chatgpt" (+ chatgptModel) — see llm/index.js // "deepgram" | "apple" | "auto" — see speech.js
   ui: {},
 };
 

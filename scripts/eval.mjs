@@ -3,8 +3,9 @@
 //
 //   npm run eval
 //   npm run eval -- stt     (speech-to-text only)
+//   npm run eval -- brain   (brains only: DeepSeek, and ChatGPT with CHATGPT_ACCESS_TOKEN)
 //
-// Calls DeepSeek and Deepgram with the keys in .env. Tools are NOT executed,
+// Calls DeepSeek, Deepgram (and ChatGPT with CHATGPT_ACCESS_TOKEN) with the keys in .env. Tools are NOT executed,
 // except read-only battery/date commands in the multi-turn check.
 import { app } from "electron";
 import { execFileSync } from "node:child_process";
@@ -142,7 +143,11 @@ app.whenReady().then(async () => {
     return app.exit(0);
   }
   const { TOOL_DEFS } = await import(`${H}/tools.js`);
-  const { streamChat, MODELS } = await import(`${H}/llm/deepseek.js`);
+  const { streamChat } = await import(`${H}/llm/index.js`);
+  const { chatgptState } = await import(`${H}/llm/chatgpt-auth.js`);
+  const { listModels } = await import(`${H}/llm/chatgpt.js`);
+  const { getKey } = await import(`${H}/keys.js`);
+  const { store } = await import(`${H}/store.js`);
   const { Brain } = await import(`${H}/brain.js`);
   const { TtsStream } = await import(`${H}/tts/stream.js`);
 
@@ -150,47 +155,71 @@ app.whenReady().then(async () => {
   const stubBrain = new Brain({ emit() {}, onFrame() {} }, { context: {}, onChange() {} }, null);
   const system = stubBrain.answerMessages("x", "general")[0];
 
-  // 1. Routing (model only, no tool execution), run in parallel.
-  const results = await Promise.all(
-    ROUTING.map(async ([ask, expect]) => {
-      const t0 = Date.now();
-      let first = 0, calls = null, text = "";
-      try {
-        for await (const ev of streamChat({ model: MODELS.answer, messages: [system, { role: "user", content: ask }], tools: TOOL_DEFS, maxTokens: 300, temperature: 0.5 })) {
-          if (!first) first = Date.now() - t0;
-          if (ev.type === "tool_calls") calls = ev.calls; else text += ev.delta;
-        }
-      } catch (e) { text = "ERROR " + e.message; }
-      const got = calls ? calls.map((c) => c.name).join("+") : "none";
-      const pass = expect.split("|").some((e) => got.split("+")[0] === e);
-      return { ask, expect, got, pass, first, args: calls?.[0]?.arguments ?? text.slice(0, 80) };
-    }),
-  );
-  let passed = 0;
-  console.log("=== 1. TOOL ROUTING ===");
-  for (const r of results) {
-    if (r.pass) passed++;
-    console.log(`${r.pass ? "PASS" : "FAIL"}  ${String(r.first).padStart(5)}ms  ${r.ask}  → ${r.got}  ${r.args.slice(0, 110)}`);
-  }
-  const firsts = results.map((r) => r.first).sort((a, b) => a - b);
-  console.log(`routing ${passed}/${results.length}, first-event median ${firsts[Math.floor(firsts.length / 2)]}ms, max ${firsts.at(-1)}ms`);
+  // Every brain that's set up: DeepSeek with a key, ChatGPT with CHATGPT_ACCESS_TOKEN
+  // (each of the account's models, or only CHATGPT_MODEL).
+  const brains = [];
+  if (getKey("deepseek")) brains.push({ label: "deepseek", prefs: { provider: "deepseek" } });
+  else console.log("deepseek: skipped (no key)");
+  if (chatgptState().sharing) {
+    const models = await listModels().catch((e) => (console.log(`chatgpt: ${e.message}`), []));
+    for (const m of models.filter((m) => !process.env.CHATGPT_MODEL || m.slug === process.env.CHATGPT_MODEL)) {
+      brains.push({ label: `chatgpt ${m.slug}`, prefs: { provider: "chatgpt", chatgptModel: m.slug } });
+    }
+  } else console.log("chatgpt: skipped (set CHATGPT_ACCESS_TOKEN)");
 
-  // 2. Multi-turn memory through the real Brain (read-only commands auto-approved).
-  console.log("\n=== 2. MULTI-TURN ===");
-  const frames = [];
-  const perms = { request: async (req) => (console.log(`  [ask] ${req.detail}`), /^(df|pmset|date|uptime)\b/.test(req.detail) ? "allow" : "deny") };
-  const brain = new Brain({ emit: (f) => (frames.push(f), frames.length), onFrame() {} }, { context: {}, onChange() {} }, perms);
-  const turn = async (q) => {
-    frames.length = 0;
-    const t0 = Date.now();
-    await brain.ask(q);
-    const ans = frames.filter((f) => f.type === "turn.token").map((f) => f.data.delta).join("").trim();
-    const tools = frames.filter((f) => f.type === "tool.started").map((f) => f.data.name);
-    console.log(`Q: ${q}\n   tools=[${tools}] ${Date.now() - t0}ms\n   A: ${ans.replace(/\s+/g, " ").slice(0, 220)}`);
-  };
-  await turn("How much battery do I have?");
-  await turn("And is it charging?");
-  await turn("What did I ask you first?");
+  const summary = [];
+  for (const b of brains) {
+    store.set("brain", b.prefs);
+    console.log(`\n######## ${b.label} ########`);
+
+    // 1. Routing (model only, no tool execution), run in parallel.
+    const results = await Promise.all(
+      ROUTING.map(async ([ask, expect]) => {
+        const t0 = Date.now();
+        let first = 0, calls = null, text = "";
+        try {
+          for await (const ev of streamChat({ role: "answer", messages: [system, { role: "user", content: ask }], tools: TOOL_DEFS, maxTokens: 300, temperature: 0.5 })) {
+            if (!first) first = Date.now() - t0;
+            if (ev.type === "tool_calls") calls = ev.calls; else text += ev.delta;
+          }
+        } catch (e) { text = "ERROR " + e.message; }
+        const got = calls ? calls.map((c) => c.name).join("+") : "none";
+        const pass = expect.split("|").some((e) => got.split("+")[0] === e);
+        return { ask, expect, got, pass, first, args: calls?.[0]?.arguments ?? text.slice(0, 80) };
+      }),
+    );
+    let passed = 0;
+    console.log("=== 1. TOOL ROUTING ===");
+    for (const r of results) {
+      if (r.pass) passed++;
+      console.log(`${r.pass ? "PASS" : "FAIL"}  ${String(r.first).padStart(5)}ms  ${r.ask}  → ${r.got}  ${r.args.slice(0, 110)}`);
+    }
+    const firsts = results.map((r) => r.first).sort((a, b) => a - b);
+    const median = firsts[Math.floor(firsts.length / 2)];
+    console.log(`routing ${passed}/${results.length}, first-event median ${median}ms, max ${firsts.at(-1)}ms`);
+    summary.push(`${b.label.padEnd(28)} routing ${passed}/${results.length}  first-event median ${median}ms`);
+
+    // 2. Multi-turn memory through the real Brain (read-only commands auto-approved).
+    console.log("\n=== 2. MULTI-TURN ===");
+    const frames = [];
+    const perms = { request: async (req) => (console.log(`  [ask] ${req.detail}`), /^(df|pmset|date|uptime)\b/.test(req.detail) ? "allow" : "deny") };
+    const brain = new Brain({ emit: (f) => (frames.push(f), frames.length), onFrame() {} }, { context: {}, onChange() {} }, perms);
+    const turn = async (q) => {
+      frames.length = 0;
+      const t0 = Date.now();
+      await brain.ask(q);
+      const ans = frames.filter((f) => f.type === "turn.token").map((f) => f.data.delta).join("").trim();
+      const err = frames.find((f) => f.type === "error")?.data.message;
+      const tools = frames.filter((f) => f.type === "tool.started").map((f) => f.data.name);
+      console.log(`Q: ${q}\n   tools=[${tools}] ${Date.now() - t0}ms\n   A: ${err ? `ERROR ${err}` : ans.replace(/\s+/g, " ").slice(0, 220)}`);
+    };
+    await turn("How much battery do I have?");
+    await turn("And is it charging?");
+    await turn("What did I ask you first?");
+  }
+  if (summary.length > 1) console.log(`\n=== BRAINS ===\n${summary.join("\n")}`);
+  // npm run eval -- brain: only the brains.
+  if (process.argv.includes("brain")) return app.exit(0);
 
   // 3. Streaming TTS: time to first audio chunk on a warm socket.
   console.log("\n=== 3. TTS (streaming) ===");

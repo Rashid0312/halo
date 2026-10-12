@@ -6,7 +6,7 @@
 // Frames go to the panel and voice via realtime.js; transcript frames from
 // speech.js (role "user") fill in what was heard while listening.
 import crypto from "node:crypto";
-import { streamChat, imageContent, MODELS } from "./llm/deepseek.js";
+import { streamChat, imageContent } from "./llm/index.js";
 import { TOOL_DEFS, runTool, toolLabel } from "./tools.js";
 import { log } from "./log.js";
 
@@ -73,7 +73,7 @@ export class Brain {
     log.info(`[ask] "${utterance}"`);
     this.pushHistory("user", utterance);
     return this.runTurn({
-      model: MODELS.answer,
+      role: "answer",
       messages: this.answerMessages(utterance),
       tools: TOOL_DEFS,
       source: "spoken",
@@ -83,7 +83,7 @@ export class Brain {
 
   /** "Look at my screen": screenshot(s) go straight to the vision model. */
   solveScreen(images) {
-    return this.runTurn({ model: MODELS.vision, messages: this.solveMessages(images), source: "screen", maxTokens: 4000 });
+    return this.runTurn({ role: "vision", messages: this.solveMessages(images), source: "screen", maxTokens: 4000 });
   }
 
   pushHistory(role, text) {
@@ -98,7 +98,7 @@ export class Brain {
     this.turn = null;
   }
 
-  async runTurn({ model, messages, tools, source, maxTokens = 2000, temperature }) {
+  async runTurn({ role, messages, tools, source, maxTokens = 2000, temperature }) {
     // A newer question cancels the stale answer instead of queueing behind it.
     this.abortTurn();
     const turn = { id: crypto.randomUUID(), controller: new AbortController() };
@@ -118,7 +118,7 @@ export class Brain {
       for (let step = 0; step < MAX_TOOL_STEPS; step++) {
         let text = "";
         let calls = null;
-        const opts = { model, messages: msgs, tools, maxTokens, temperature, signal: turn.controller.signal };
+        const opts = { role, messages: msgs, tools, maxTokens, temperature, signal: turn.controller.signal };
         for await (const ev of streamChat(opts)) {
           if (this.turn !== turn) return;
           if (ev.type === "text") {

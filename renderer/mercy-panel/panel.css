@@ -631,6 +631,35 @@ label.row select {
 .field-error:empty {
   display: none;
 }
+/* "or use your ChatGPT plan" + "Continue with ChatGPT" (OpenAI's button: black, white logo) */
+.or {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.chatgpt-row {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.btn.chatgpt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  background: #000;
+  color: #fff;
+  border-color: rgb(255 255 255 / 0.18);
+}
+.btn.chatgpt:hover {
+  background: #1a1a1a;
+}
+.btn.chatgpt img {
+  width: 16px;
+  height: 16px;
+}
 .link {
   font-size: 12px;
   font-weight: 500;

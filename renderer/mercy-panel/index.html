@@ -48,6 +48,15 @@
 
       <div id="menu" class="popover" hidden>
         <label class="row"><input id="loginToggle" type="checkbox" /> Open at login</label>
+        <label class="row">Brain
+          <select id="brain" aria-label="Brain">
+            <option value="deepseek">DeepSeek</option>
+            <option value="chatgpt">ChatGPT</option>
+          </select>
+        </label>
+        <label class="row" hidden>Model
+          <select id="brainModel" aria-label="ChatGPT model"></select>
+        </label>
         <label class="row">Speech recognition
           <select id="sttEngine" aria-label="Speech recognition">
             <option value="deepgram">Deepgram</option>

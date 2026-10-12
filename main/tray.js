@@ -1,6 +1,6 @@
 // Mercy in the macOS menu bar.
 //   left-click  → drop the panel down under the icon (click again to hide)
-//   right-click → menu: open, "Hey Mercy", speak replies, speech recognition, re-train voice, quit
+//   right-click → menu: open, "Hey Mercy", speak replies, brain, speech recognition, re-train voice, quit
 // The icon is a template image (macOS tints it for light/dark menu bars) of
 // Mercy's pixel black hole: a thin ring when idle, thicker with sparks while
 // she's listening or talking.
@@ -9,6 +9,8 @@ import zlib from "node:zlib";
 import { store } from "./store.js";
 import { log } from "./log.js";
 import { appleSttSupported } from "./stt/apple.js";
+import { brainPrefs, provider } from "./llm/index.js";
+import { chatgptState } from "./llm/chatgpt-auth.js";
 
 const ACTIVE = new Set(["listening", "thinking", "speaking", "waiting"]);
 
@@ -67,6 +69,11 @@ export class TrayService {
     this.gateway.broadcast("mercy:openComposer", null, { to: ["panel"] });
   }
 
+  openConnect() {
+    this.session.showPanel({ focus: true });
+    this.gateway.broadcast("mercy:openConnect", null, { to: ["panel"] });
+  }
+
   menu() {
     const wake = this.wake.snapshot();
     const voice = store.get("voice");
@@ -93,6 +100,23 @@ export class TrayService {
         type: "checkbox",
         checked: voice.enabled,
         click: (item) => this.voice.setEnabled(item.checked),
+      },
+      {
+        label: "Brain",
+        submenu: [
+          ["deepseek", "DeepSeek"],
+          ["chatgpt", "ChatGPT (your plan)"],
+        ].map(([id, label]) => ({
+          label,
+          type: "radio",
+          checked: provider() === id,
+          click: () => {
+            // ChatGPT before signing in (or on a plan Mercy can't use): sign in from the panel.
+            if (id === "chatgpt" && !chatgptState().sharing) return this.openConnect();
+            store.set("brain", { ...brainPrefs(), provider: id });
+            log.info(`[brain] ${id}`);
+          },
+        })),
       },
       {
         label: "Speech recognition",

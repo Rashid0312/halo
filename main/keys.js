@@ -5,6 +5,7 @@ import { app, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { log } from "./log.js";
+import { chatgptState } from "./llm/chatgpt-auth.js";
 
 const ENV = { deepgram: "DEEPGRAM_API_KEY", deepseek: "DEEPSEEK_API_KEY" };
 const CONSOLES = {
@@ -48,7 +49,9 @@ export function getKey(name) {
 
 export function keysState() {
   const has = (n) => Boolean(getKey(n));
-  return { deepgram: has("deepgram"), deepseek: has("deepseek"), ready: has("deepgram") && has("deepseek") };
+  // The brain is ready with a DeepSeek key or a ChatGPT plan Mercy can use.
+  const chatgpt = chatgptState().sharing;
+  return { deepgram: has("deepgram"), deepseek: has("deepseek"), chatgpt, ready: has("deepgram") && (has("deepseek") || chatgpt) };
 }
 
 /** Check a key against its service. Resolves to an error message, or "" if it works. */

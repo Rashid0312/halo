@@ -19,6 +19,8 @@ import { TrayService } from "./tray.js";
 import { PillService } from "./pill.js";
 import { TouchBarService } from "./touchbar.js";
 import { loadKeys, keysState, registerKeys } from "./keys.js";
+import { loadChatgpt, registerChatgpt } from "./llm/chatgpt-auth.js";
+import { registerBrain } from "./llm/index.js";
 import { UpdateService } from "./updates.js";
 
 // Dev/test hook: MERCY_USER_DATA=/tmp/dir keeps test runs out of the real profile.
@@ -70,7 +72,10 @@ app.whenReady().then(async () => {
   // First run of the installed app: start at login by default.
   if (app.isPackaged && store.get("ui")?.openAtLogin === undefined) setOpenAtLogin(true);
   await loadKeys();
+  await loadChatgpt();
   registerKeys(gateway);
+  registerChatgpt(gateway);
+  registerBrain(gateway);
   const session = new SessionService(gateway, registry);
   session.register();
   const audio = new AudioService(gateway, registry);

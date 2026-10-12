@@ -246,7 +246,7 @@ $("screen").addEventListener("click", () => window.mercy.invoke("mercy:solveScre
 $("quit").addEventListener("click", () => window.mercy.invoke("mercy:quit"));
 $("settings").addEventListener("click", () => {
   $("menu").hidden = !$("menu").hidden;
-  if (!$("menu").hidden) loadEngine(); // may have changed from the menu bar
+  if (!$("menu").hidden) (loadEngine(), loadBrain()); // may have changed from the menu bar
   expand();
 });
 // Esc tucks the panel back into the menu bar (like Control Center).
@@ -505,7 +505,7 @@ $("forget").addEventListener("click", async () => {
   addNote("Your voice profile was deleted from this Mac.");
 });
 
-// ── "Connect Mercy": the user's own Deepgram + DeepSeek keys ────────────
+// ── "Connect Mercy": Deepgram key (voice) + DeepSeek key or ChatGPT plan (brain) ──
 let connectEl = null;
 
 function showConnect({ change = false } = {}) {
@@ -514,7 +514,7 @@ function showConnect({ change = false } = {}) {
   connectEl.className = "enroll connect";
   connectEl.innerHTML = `
     <div class="enroll-title">${change ? "API keys" : "Connect Mercy"}</div>
-    <div class="enroll-text">Mercy uses your own keys: <b>Deepgram</b> for her voice and <b>DeepSeek</b> for her brain. Both give free credit to start. They're stored encrypted on this Mac.</div>
+    <div class="enroll-text">Mercy uses your own accounts: <b>Deepgram</b> for her voice, and <b>DeepSeek</b> or your <b>ChatGPT</b> plan for her brain. Keys are stored encrypted on this Mac.</div>
     ${["deepgram", "deepseek"]
       .map(
         (name) => `
@@ -526,6 +526,8 @@ function showConnect({ change = false } = {}) {
       </label>`,
       )
       .join("")}
+    <div class="or">or use your ChatGPT plan for her brain</div>
+    <div class="chatgpt-row" data-chatgpt></div>
     <div class="perm-actions">
       <button class="btn primary" data-a="save">${change ? "Save" : "Connect"}</button>
       ${change ? '<button class="btn ghost" data-a="cancel">Cancel</button>' : ""}
@@ -535,6 +537,7 @@ function showConnect({ change = false } = {}) {
     if (consoleFor) return window.mercy.invoke("mercy:openKeyConsole", consoleFor);
     const a = e.target.closest("button")?.dataset.a;
     if (a === "cancel") return closeConnect();
+    if (a === "chatgpt" || a === "signout" || a === "usage") return chatgptAction(a, e.target.closest("button"));
     if (a !== "save") return;
     const btn = e.target.closest("button");
     btn.disabled = true;
@@ -544,7 +547,8 @@ function showConnect({ change = false } = {}) {
     btn.disabled = false;
     btn.textContent = change ? "Save" : "Connect";
     for (const n of ["deepgram", "deepseek"]) {
-      const missing = !res.errors[n] && !res[n] ? "Paste this key to continue." : "";
+      // A ChatGPT plan Mercy can use stands in for the DeepSeek key.
+      const missing = !res.errors[n] && !res[n] && !(n === "deepseek" && res.chatgpt) ? "Paste this key to continue." : "";
       connectEl.querySelector(`[data-error="${n}"]`).textContent = res.errors[n] || missing;
     }
     if (res.ok && res.ready) {
@@ -554,8 +558,51 @@ function showConnect({ change = false } = {}) {
     }
   });
   log.prepend(connectEl);
+  window.mercy.invoke("mercy:chatgptState").then(renderChatgpt);
   expand();
   requestAnimationFrame(() => connectEl.querySelector("input")?.focus());
+}
+
+/** The ChatGPT row in the Connect card: "Continue with ChatGPT", or who's signed in. */
+function renderChatgpt(s) {
+  const row = connectEl?.querySelector("[data-chatgpt]");
+  if (!row) return;
+  row.replaceChildren();
+  if (!s.signedIn) {
+    row.innerHTML = `
+      <button type="button" class="btn chatgpt" data-a="chatgpt"><img src="chatgpt-logo-white.svg" alt="" /> Continue with ChatGPT</button>
+      <small>Needs ChatGPT Plus or Pro. Mercy's use counts toward your plan's limits.</small>`;
+    return;
+  }
+  const who = document.createElement("span");
+  who.textContent = s.sharing ? `Using your ChatGPT plan · ${s.email}` : `Signed in as ${s.email}, but this ChatGPT plan can't be used by Mercy (it needs Plus or Pro).`;
+  const links = document.createElement("span");
+  links.innerHTML = `${s.sharing ? '<button type="button" class="link" data-a="usage">Manage usage</button> · ' : ""}<button type="button" class="link" data-a="signout">Sign out</button>`;
+  row.append(who, links);
+}
+
+async function chatgptAction(a, btn) {
+  if (a === "usage") return window.mercy.invoke("mercy:chatgptManageUsage");
+  if (a === "signout") return renderChatgpt(await window.mercy.invoke("mercy:chatgptSignOut"));
+  btn.disabled = true;
+  btn.lastChild.textContent = " Waiting for the browser…";
+  try {
+    const s = await window.mercy.invoke("mercy:chatgptSignIn");
+    renderChatgpt(s);
+    if (s.sharing) {
+      await window.mercy.invoke("mercy:setBrain", { provider: "chatgpt" });
+      loadBrain();
+      addNote("You're using your ChatGPT plan for Mercy's brain. Switch back any time under ··· → Brain.");
+      const keys = await window.mercy.invoke("mercy:keysState");
+      if (keys.ready && !connectEl?.querySelector('[data-key="deepgram"]').value) {
+        closeConnect();
+        if (wake.available && !wake.enrolled) showEnrollInvite();
+      }
+    }
+  } catch (err) {
+    addNote(err.message, "error");
+    renderChatgpt(await window.mercy.invoke("mercy:chatgptState"));
+  }
 }
 
 function closeConnect() {
@@ -571,6 +618,31 @@ $("showLogs").addEventListener("click", () => {
   window.mercy.invoke("mercy:showLogs");
 });
 window.mercy.invoke("mercy:getOpenAtLogin").then((on) => ($("loginToggle").checked = on));
+
+// Brain: DeepSeek (key) or ChatGPT (your plan); with ChatGPT, which model.
+function loadBrain() {
+  window.mercy.invoke("mercy:getBrain").then((b) => {
+    $("brain").value = b.provider;
+    const pick = $("brainModel");
+    pick.replaceChildren(...b.models.map((m) => new Option(m.name, m.slug, false, m.slug === b.chatgptModel)));
+    pick.closest("label").hidden = b.provider !== "chatgpt" || !b.models.length;
+  });
+}
+loadBrain();
+$("brain").addEventListener("change", async (e) => {
+  $("menu").hidden = true;
+  if (e.target.value === "chatgpt" && !(await window.mercy.invoke("mercy:chatgptState")).sharing) {
+    // Not signed in (or the plan can't be used): sign in from the Connect card.
+    e.target.value = "deepseek";
+    return showConnect({ change: true });
+  }
+  await window.mercy.invoke("mercy:setBrain", { provider: e.target.value }).catch((err) => addNote(err.message, "error"));
+  loadBrain();
+});
+$("brainModel").addEventListener("change", (e) => {
+  $("menu").hidden = true;
+  window.mercy.invoke("mercy:setBrain", { model: e.target.value }).catch((err) => addNote(err.message, "error"));
+});
 
 // Speech recognition: Deepgram (cloud), on this Mac (Apple, macOS 26+), or auto.
 function loadEngine() {
@@ -680,6 +752,7 @@ window.mercy.on("speech:realtime-frame:received", onFrame);
 window.mercy.on("mercy:state", (s) => setState(s));
 window.mercy.on("mercy:asked", (text) => userFinal(text));
 window.mercy.on("mercy:permission", showPermission);
+window.mercy.on("mercy:openConnect", () => showConnect({ change: true }));
 window.mercy.on("mercy:audio", playChunk);
 window.mercy.on("mercy:audioStop", ({ gen }) => stopAudio(gen));
 window.mercy.on("mercy:wake", renderWake);
