@@ -7,13 +7,16 @@
 //     │              VAD: request ends after 0.9 s of silence (no speech in 4 s → cancel, cap 15 s)
 //     │              └─ voice check on trigger + request ── not you ─► discarded
 //     │                   └─ you ─► voice.finishListening() → brain; learn the voice
-//     └─ follow-up: for 6 s after Mercy stops talking, speech that matches your
-//        voice is a new request (no "Hey Mercy" needed). The first second is
-//        voice-checked on the Mac before Deepgram hears anything.
+//     ├─ follow-up: for 6 s after Mercy stops talking, speech that matches your
+//     │  voice is a new request (no "Hey Mercy" needed). The first second is
+//     │  voice-checked on the Mac before Deepgram hears anything.
+//     └─ talking over her: while Mercy speaks, ~0.8 s of speech that matches your
+//        voice (or "Hey Mercy") stops her and becomes the next request. Her own
+//        voice is mostly removed by the mic's echo cancellation, and what leaks
+//        through doesn't match your voice.
 //
 // Nothing is sent to Deepgram until both checks pass the trigger stage, and no
-// audio is written to disk. Paused while Mercy speaks (no echo cancellation on
-// the mic-only stream) and while the 🎤 button is in use.
+// audio is written to disk. Paused while the 🎤 button is in use.
 import { createKeywordSpotter, createVad, downsample, modelsReady, pcm16ToFloat, rms, SAMPLE_RATE } from "./ondevice.js";
 import { enrollPrompt, Voiceprint } from "./voiceprint.js";
 import { store } from "./store.js";
@@ -31,6 +34,10 @@ const FOLLOWUP_GUARD_MS = 400; // ignore the echo of Mercy's last words right af
 // this and the trigger threshold it's unsure, so the whole sentence decides
 // (request check in completeRequest — you score ~0.6–0.8 there, others < 0.15).
 const FOLLOWUP_UNSURE = 0.12;
+const BARGE_IN_SEC = 0.8; // your speech while Mercy talks, checked before she stops
+// Talking over her needs a clearer match than a follow-up: echo of her voice
+// must never cut her off. ("Hey Mercy" over her uses the normal trigger check.)
+const BARGE_IN_MIN = 0.25;
 
 export class WakeService {
   /**
@@ -200,10 +207,11 @@ export class WakeService {
     this.sendLevel(x);
     switch (this.mode) {
       case "waiting":
-        // Paused while Mercy talks (her voice would echo into the mic) or is already
-        // listening. Stays on while a permission card waits: "Hey Mercy, yes".
-        if (this.voice.state === "speaking" || this.voice.state === "listening") return;
-        this.spot(x);
+        // Off while already listening. Stays on while a permission card waits
+        // ("Hey Mercy, yes") and while Mercy talks (talking over her stops her).
+        if (this.voice.state === "listening") return;
+        if (this.voice.state === "speaking") this.feedBargeIn(x);
+        if (this.mode === "waiting") this.spot(x);
         break;
       case "request":
         this.feedRequest(x);
@@ -342,9 +350,37 @@ export class WakeService {
     clearTimeout(r.cap);
   }
 
+  // ── talking over Mercy ───────────────────────────────────────────────
+  feedBargeIn(x) {
+    for (let i = 0; i + 512 <= x.length; i += 512) this.vad.acceptWaveform(x.subarray(i, i + 512));
+    const speaking = this.vad.isDetected();
+    while (!this.vad.isEmpty()) this.vad.pop();
+    if (!speaking) {
+      this.bargeSamples = 0;
+      return;
+    }
+    this.bargeSamples = (this.bargeSamples || Math.round(0.3 * SAMPLE_RATE)) + x.length; // VAD lags ~0.3 s
+    if (this.bargeSamples < BARGE_IN_SEC * SAMPLE_RATE) return;
+    const heard = this.recent(this.bargeSamples / SAMPLE_RATE);
+    this.bargeSamples = 0;
+    const v = this.voiceprint.verify(heard, "trigger");
+    if (v.score < BARGE_IN_MIN) {
+      log.info(`[wake] speech while Mercy talks — voice score ${v.score.toFixed(2)} → not you, she keeps going`);
+      return;
+    }
+    log.info(`[wake] you talked over Mercy — voice score ${v.score.toFixed(2)} → she stops`);
+    // Like a follow-up: the words so far come from speech.js's pre-roll, and the
+    // whole request is voice-checked again when it ends.
+    this.beginRequest(heard, "followup");
+  }
+
   // ── follow-up window ─────────────────────────────────────────────────
   onVoiceState(state, prev) {
     if (!this.running || this.mode === "enroll") return;
+    if (state === "speaking" && prev !== "speaking") {
+      this.vad.reset();
+      this.bargeSamples = 0;
+    }
     // The request was finished or cancelled elsewhere (🎤 button, typing): stand down.
     if (this.mode === "request" && state !== "listening") {
       this.endRequest();
