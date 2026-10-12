@@ -27,6 +27,15 @@ export class AudioService {
     ipcMain.on("mic:chunk", (event, buf) => {
       if (this.status !== "capturing" || !this.isMicWindow(event.sender)) return;
       const out = { source: "microphone", data: Buffer.from(buf), sampleRate: SAMPLE_RATE };
+      // Watchdog: a live mic always has some noise. 3 s of exact digital
+      // silence means the recording is dead even if nothing said so.
+      this.zeroChunks = out.data.every((b) => b === 0) ? (this.zeroChunks ?? 0) + 1 : 0;
+      if (this.zeroChunks >= 94 && Date.now() - (this.lastWatchdog ?? 0) > 15000) {
+        this.lastWatchdog = Date.now();
+        this.zeroChunks = 0;
+        this.command("stop").catch(() => {});
+        return this.ended("mic went silent");
+      }
       if (!this.firstChunkLogged) {
         this.firstChunkLogged = true;
         log.debug(`[audio] first mic chunk: ${out.data.length} bytes`);
@@ -37,11 +46,7 @@ export class AudioService {
       if (this.isMicWindow(event.sender)) this.pending.get(id)?.(res);
     });
     ipcMain.on("mic:status", (event, s) => {
-      if (this.isMicWindow(event.sender) && s?.state === "ended") {
-        log.warn("[audio] microphone went away (unplugged, sleep, or taken over)");
-        this.setStatus("idle");
-        for (const cb of this.endedListeners) cb();
-      }
+      if (this.isMicWindow(event.sender) && s?.state === "ended") this.ended(s.reason ?? "mic stopped");
     });
     // Only Mercy's own pages may use the mic.
     session.defaultSession.setPermissionRequestHandler((wc, permission, cb) =>
@@ -61,6 +66,12 @@ export class AudioService {
   }
 
   /** @param {() => void} cb called when the mic stops by itself */
+  ended(reason) {
+    log.warn(`[audio] microphone stopped: ${reason}`);
+    this.setStatus("idle");
+    for (const cb of this.endedListeners) cb(reason);
+  }
+
   onEnded(cb) {
     this.endedListeners.add(cb);
   }

@@ -136,7 +136,14 @@ app.whenReady().then(async () => {
   });
   // After sleep the mic and sockets may be gone: get listening again.
   powerMonitor.on("resume", () => wake.restartMic("woke from sleep"));
-  audio.onEnded(() => setTimeout(() => wake.restartMic("mic stopped"), 1000));
+  // The mic went away or the Mac's input changed: open the current one again,
+  // for "Hey Mercy" or for listening that's in progress.
+  audio.onEnded((reason) =>
+    setTimeout(() => {
+      if (wake.running) wake.restartMic(reason);
+      else if (speech.open) audio.start().catch((err) => log.warn(`[audio] restart failed: ${err.message}`));
+    }, 1000),
+  );
 
   // Test hooks for self-healing: MERCY_TEST="resume@2000,crash@6000" (ms after launch).
   for (const ev of (process.env.MERCY_TEST ?? "").split(",").filter(Boolean)) {
