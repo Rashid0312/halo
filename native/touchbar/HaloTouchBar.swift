@@ -1,7 +1,7 @@
 // Halo on the Touch Bar.
 //
 // Collapsed: a button with Halo's pixel black hole in the Control Strip (where
-//            Siri's was).
+//            Siri's was), claimed back whenever something else takes the slot.
 // Expanded:  a full-width strip (like the volume slider takeover) with the
 //            animated orb, your words while you talk, and her answer.
 //
@@ -218,6 +218,14 @@ final class Helper: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     _ = (NSTouchBarItem.self as AnyObject).perform(add, with: tray)
     dfrSymbol("DFRElementSetControlStripPresenceForIdentifier", as: SetPresence.self)?(trayID.rawValue as CFString, true)
     dfrSymbol("DFRSystemModalShowsCloseBoxWhenFrontMost", as: ShowsCloseBox.self)?(true)
+    // The Control Strip has one slot for app buttons: when something else takes
+    // it (Now Playing as soon as music or a video plays), Halo's button is gone
+    // for good. Claim it back every few seconds, and right after wake / unlock.
+    Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.pin() }
+    NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.pin() }
+    DistributedNotificationCenter.default().addObserver(
+      forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in self?.pin() }
 
     label.font = .systemFont(ofSize: 15, weight: .medium)
     label.textColor = .white
@@ -261,6 +269,11 @@ final class Helper: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
       item.view = box
     }
     return item
+  }
+
+  func pin() {
+    guard !expanded else { return } // the strip owns the Touch Bar right now
+    dfrSymbol("DFRElementSetControlStripPresenceForIdentifier", as: SetPresence.self)?(trayID.rawValue as CFString, true)
   }
 
   func expand() {

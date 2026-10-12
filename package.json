@@ -1,7 +1,7 @@
 {
   "name": "halo",
   "productName": "Halo",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "main": "main/index.js",
@@ -22,13 +22,13 @@
     "sherpa-onnx-node": "^1.13.8",
     "ws": "^8.22.0"
   },
-  "description": "Halo \u2014 a friendly AI sidekick for your Mac.",
+  "description": "Halo — a friendly AI sidekick for your Mac.",
   "author": "Abdirashiid Sammantar",
   "repository": "https://github.com/Rashid0312/halo",
   "build": {
     "appId": "app.halo",
     "productName": "Halo",
-    "copyright": "Copyright \u00a9 2026 Abdirashiid Sammantar",
+    "copyright": "Copyright © 2026 Abdirashiid Sammantar",
     "files": [
       "main/**",
       "preload/**",
@@ -66,8 +66,8 @@
       "gatekeeperAssess": false,
       "extendInfo": {
         "LSUIElement": true,
-        "NSMicrophoneUsageDescription": "Halo listens for \u201cHey Halo\u201d and to what you ask her.",
-        "NSAppleEventsUsageDescription": "Halo controls the apps you ask her to \u2014 Calendar, Reminders, Notes, Messages and more."
+        "NSMicrophoneUsageDescription": "Halo listens for “Hey Halo” and to what you ask her.",
+        "NSAppleEventsUsageDescription": "Halo controls the apps you ask her to — Calendar, Reminders, Notes, Messages and more."
       }
     },
     "dmg": {
