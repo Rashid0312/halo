@@ -31,6 +31,8 @@ const INVOKE = new Set([
   "mercy:level",
   "mercy:updateInfo",
   "mercy:openUpdate",
+  "speech:getEngine",
+  "speech:setEngine",
 ]);
 const EVENTS = new Set([
   "mercy:state",

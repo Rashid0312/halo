@@ -29,19 +29,21 @@ npm run dist          # builds dist/Mercy-<version>-arm64.dmg
 
 - **"Hey Mercy, …"** — only your voice wakes her. After she answers you have ~6 s to follow up without the wake word.
 - **Type** in the panel, or tap 🎤.
-- Click the menu bar ring or the pill for the panel: tiles for "Hey Mercy", Speak replies, Look at my screen, My voice (re-train), and ··· (open at login, API keys, logs, delete voice, quit).
+- Click the menu bar ring or the pill for the panel: tiles for "Hey Mercy", Speak replies, Look at my screen, My voice (re-train), and ··· (open at login, speech recognition, API keys, logs, delete voice, quit).
+- **Speech recognition** (··· or the menu bar menu): *Deepgram* (cloud), *On this Mac* (Apple's on-device recognizer, macOS 26+; the language model downloads once on first use), or *Auto* (on this Mac when it can, otherwise Deepgram). Mercy's spoken replies still use Deepgram.
 - **Touch Bar:** Mercy's ◉ button sits in the Control Strip (remove Siri's in System Settings → Keyboard → Touch Bar Settings → Customize Control Strip). Tap to talk, tap again to send. It uses private macOS API, so a future macOS update could break it.
 
 ## Privacy
 
 - The wake word and voice check run **on your Mac** (sherpa-onnx). Mic audio lives in a 2–3 s memory buffer and is never written to disk.
-- Nothing is sent to Deepgram until "Hey Mercy" (or a follow-up) has matched your voice locally.
+- Nothing is sent to Deepgram until "Hey Mercy" (or a follow-up) has matched your voice locally. With speech recognition set to *On this Mac*, what you say is turned into text on your Mac and no audio goes to Deepgram at all.
 - Your voice profile is encrypted with the macOS Keychain (`voiceprint.bin` in Mercy's app data) and never uploaded. ⚙ → *Delete my voice* removes it.
 - Voice matching keeps strangers out but isn't a security lock — a recording of you could fool it. Risky actions always show an approval card.
 
 ## Development
 
-- `npm run eval` — tool routing, multi-turn and voice latency checks (calls DeepSeek/Deepgram).
+- `npm run eval` — tool routing, multi-turn and voice latency checks (calls DeepSeek/Deepgram). `npm run eval -- stt` compares speech recognition only: Deepgram vs on this Mac, word error rate and latency.
+- `npm run native` — builds the Swift helpers (Touch Bar button, on-device speech). `npm start` also builds them when their source changes.
 - `MERCY_DEBUG=1` — verbose logs. `MERCY_USER_DATA=/tmp/x` — use a throwaway profile.
 - `MERCY_FAKE_MIC=file.pcm` (16 kHz mono s16le) plays a file as the microphone; `MERCY_FAKE_WAKE_AT="2.9,37"` simulates the wake word at those times.
 

@@ -48,6 +48,13 @@
 
       <div id="menu" class="popover" hidden>
         <label class="row"><input id="loginToggle" type="checkbox" /> Open at login</label>
+        <label class="row">Speech recognition
+          <select id="sttEngine" aria-label="Speech recognition">
+            <option value="deepgram">Deepgram</option>
+            <option value="apple">On this Mac</option>
+            <option value="auto">Auto</option>
+          </select>
+        </label>
         <button id="permsBtn" class="row">Permissions…</button>
         <button id="apiKeys" class="row">API keys…</button>
         <button id="showLogs" class="row">Show logs</button>

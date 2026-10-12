@@ -246,6 +246,7 @@ $("screen").addEventListener("click", () => window.mercy.invoke("mercy:solveScre
 $("quit").addEventListener("click", () => window.mercy.invoke("mercy:quit"));
 $("settings").addEventListener("click", () => {
   $("menu").hidden = !$("menu").hidden;
+  if (!$("menu").hidden) loadEngine(); // may have changed from the menu bar
   expand();
 });
 // Esc tucks the panel back into the menu bar (like Control Center).
@@ -570,6 +571,19 @@ $("showLogs").addEventListener("click", () => {
   window.mercy.invoke("mercy:showLogs");
 });
 window.mercy.invoke("mercy:getOpenAtLogin").then((on) => ($("loginToggle").checked = on));
+
+// Speech recognition: Deepgram (cloud), on this Mac (Apple, macOS 26+), or auto.
+function loadEngine() {
+  window.mercy.invoke("speech:getEngine").then(({ engine, onDevice }) => {
+    $("sttEngine").value = engine;
+    $("sttEngine").querySelector("[value=apple]").disabled = !onDevice;
+  });
+}
+loadEngine();
+$("sttEngine").addEventListener("change", (e) => {
+  $("menu").hidden = true;
+  window.mercy.invoke("speech:setEngine", e.target.value).catch((err) => addNote(err.message, "error"));
+});
 
 $("apiKeys").addEventListener("click", () => {
   $("menu").hidden = true;

@@ -4,32 +4,13 @@
 // Tap = the 🎤 path: start listening, tap again to send, tap while she talks
 // to interrupt. Quietly does nothing on Macs without a Touch Bar or without
 // a Swift compiler to build the helper.
-import { execFile, spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import { spawn } from "node:child_process";
 import readline from "node:readline";
-import { promisify } from "node:util";
-import { PACKAGED, RESOURCES, ROOT } from "./paths.js";
+import { buildHelper, helperPath } from "./native.js";
 import { log } from "./log.js";
 
-const DIR = path.join(ROOT, "native", "touchbar");
-const SOURCE = path.join(DIR, "MercyTouchBar.swift");
-// Installed app: prebuilt helper in Contents/Resources. Development: built next to its source.
-const BINARY = PACKAGED ? path.join(RESOURCES, "mercy-touchbar") : path.join(DIR, "mercy-touchbar");
+const BINARY = helperPath("touchbar", "mercy-touchbar");
 const MAX_RESTARTS = 3;
-
-/** Compile the helper if it's missing or older than its source. */
-export async function buildTouchBarHelper() {
-  if (PACKAGED) {
-    if (!fs.existsSync(BINARY)) throw new Error("helper missing from the app bundle");
-    return BINARY;
-  }
-  const fresh = fs.existsSync(BINARY) && fs.statSync(BINARY).mtimeMs >= fs.statSync(SOURCE).mtimeMs;
-  if (fresh) return BINARY;
-  log.info("[touchbar] building the Touch Bar helper…");
-  await promisify(execFile)("swiftc", ["-O", SOURCE, "-o", BINARY], { timeout: 180000 });
-  return BINARY;
-}
 
 const COLLAPSE_AFTER_MS = 3000; // after Mercy is done, the strip folds back into the button
 
@@ -69,7 +50,7 @@ export class TouchBarService {
   async register() {
     if (process.platform !== "darwin") return;
     try {
-      await buildTouchBarHelper();
+      await buildHelper("touchbar", "MercyTouchBar.swift", "mercy-touchbar");
     } catch (err) {
       log.warn(`[touchbar] helper not available (${err.code === "ENOENT" ? "no swiftc" : err.message.split("\n")[0]}) — no Touch Bar button`);
       return;

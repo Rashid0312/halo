@@ -87,7 +87,7 @@ app.whenReady().then(async () => {
   voice.audio = audio; // end-of-speech detection for button / Touch Bar listening
   voice.register();
   const wake = new WakeService(gateway, audio, speech, voice);
-  const tray = new TrayService(session, voice, wake, gateway);
+  const tray = new TrayService(session, voice, wake, gateway, speech);
   tray.register();
   tray.loginItem = { get: openAtLogin, set: setOpenAtLogin };
   tray.showLogs = () => logFile() && shell.showItemInFolder(logFile());

@@ -1,9 +1,16 @@
-// Transcription session: audio capture → Deepgram (one stream per source) →
-// `transcript` frames. Started automatically when a session goes active,
-// so the mic is ready as soon as Mercy starts listening.
+// Transcription session: audio capture → speech-to-text (one stream per
+// source) → `transcript` frames. Started automatically when a session goes
+// active, so the mic is ready as soon as Mercy starts listening.
+//
+// Engine (store "stt"): "deepgram" (cloud), "apple" (on-device, macOS 26+), or
+// "auto" — on-device when this Mac can, otherwise Deepgram.
 import { DeepgramStream } from "./stt/deepgram.js";
+import { AppleStream, appleSttSupported, prepareAppleStt } from "./stt/apple.js";
 import { log } from "./log.js";
 import { getKey, onKeysSaved } from "./keys.js";
+import { store } from "./store.js";
+
+export const STT_ENGINES = ["deepgram", "apple", "auto"];
 
 // Sources are already separated, so role comes from the stream, not diarization.
 const STREAMS = {
@@ -37,6 +44,44 @@ export class SpeechService {
     // the first word after "Hey Mercy" isn't clipped.
     this.wakeMode = false;
     this.preroll = [];
+    this.appleFailed = ""; // why on-device recognition can't run here (then "auto" uses Deepgram)
+  }
+
+  engine() {
+    return store.get("stt")?.engine ?? "deepgram";
+  }
+
+  async setEngine(engine) {
+    if (!STT_ENGINES.includes(engine)) throw Object.assign(new Error(`unknown engine ${engine}`), { code: "PROCEDURAL" });
+    store.set("stt", { ...store.get("stt"), engine });
+    this.appleFailed = "";
+    log.info(`[speech] engine → ${engine}`);
+    if (this.session.sessionId && this.state) await this.restart();
+    return engine;
+  }
+
+  /** Stop and start again; listening stays open if it was (e.g. "auto" falling back mid-request). */
+  async restart() {
+    const open = this.open;
+    await this.stop();
+    this.open = open;
+    return this.start();
+  }
+
+  /** The engine to use now: "deepgram" or "apple", or an error message. */
+  async pickEngine() {
+    const wanted = this.engine();
+    if (wanted === "deepgram") return { engine: "deepgram" };
+    if (!this.appleFailed && !appleSttSupported()) this.appleFailed = "On-device speech recognition needs macOS 26 or later";
+    if (!this.appleFailed) {
+      try {
+        return { engine: "apple", binary: await prepareAppleStt() };
+      } catch (err) {
+        this.appleFailed = `On-device speech recognition isn't available (${err.code === "ENOENT" ? "no Swift compiler" : err.message.split("\n")[0]})`;
+      }
+    }
+    if (wanted === "auto") return { engine: "deepgram" };
+    return { error: this.appleFailed };
   }
 
   setWakeMode(on) {
@@ -92,29 +137,36 @@ export class SpeechService {
 
     const apiKey = getKey("deepgram");
     const language = ctx?.language ?? "en-US";
-    this.setState({ id: sessionId, status: "starting", language, startedAt: null });
+    this.setState({ id: sessionId, status: "starting", language, startedAt: null, engine: null });
     this.realtime.reset();
     this.realtime.setStatus({ state: "connecting" });
 
     if (process.env.MERCY_FAKE_STT === "1") return this.startFake(sessionId);
 
-    if (!apiKey) {
-      const message = "No Deepgram key yet — add it in Mercy (··· → API keys)";
+    const picked = await this.pickEngine();
+    // Stopped while the on-device helper was being built.
+    if (this.state?.status !== "starting" || this.session.sessionId !== sessionId) return this.state;
+    const fail = (message) => {
       log.error(`[speech] ${message}`);
       this.setState({ status: "error", error: message });
       this.realtime.setStatus({ state: "disconnected" });
       this.realtime.emit({ type: "error", data: { code: "config", message, turnId: "", retry: null } });
       return this.state;
-    }
+    };
+    if (picked.error) return fail(picked.error);
+    if (picked.engine === "deepgram" && !apiKey) return fail("No Deepgram key yet — add it in Mercy (··· → API keys)");
 
     // The mic always arrives at 16 kHz (main/audio.js).
     const sampleRates = { microphone: 16000 };
     for (const [name, meta] of Object.entries(STREAMS)) {
-      const stream = new DeepgramStream({
+      const Stream = picked.engine === "apple" ? AppleStream : DeepgramStream;
+      const stream = new Stream({
         apiKey,
+        binary: picked.binary,
         name,
         sampleRate: sampleRates[name],
         language,
+        onFatal: (message) => this.onAppleFatal(message),
         onResult: (r) => {
           log.debug(`[stt:${meta.role}]${r.final ? " FINAL" : ""}${r.speechFinal ? " ENDPOINT" : ""} ${r.text}`);
           this.realtime.emit({
@@ -145,7 +197,7 @@ export class SpeechService {
       if (chunk.sampleRate !== stream.opts.sampleRate) {
         log.warn(`[speech] ${chunk.source} rate ${chunk.sampleRate} != ${stream.opts.sampleRate}`);
         stream.opts.sampleRate = chunk.sampleRate;
-        stream.ws?.close();
+        stream.restart();
       }
       stream.send(chunk.data);
     });
@@ -153,9 +205,15 @@ export class SpeechService {
     // Listening may already be open (the 🎤 button or "Hey Mercy" started this session).
     if (this.open) this.setOpen(true);
     this.realtime.setStatus({ state: "live" });
-    this.setState({ status: "transcribing", startedAt: Date.now() });
-    log.info(`[speech] transcribing session ${sessionId}`);
+    this.setState({ status: "transcribing", startedAt: Date.now(), engine: picked.engine });
+    log.info(`[speech] transcribing session ${sessionId} (${picked.engine})`);
     return this.state;
+  }
+
+  /** The on-device helper can't run on this Mac: "auto" moves to Deepgram, "apple" reports it. */
+  onAppleFatal(message) {
+    this.appleFailed = `On-device speech recognition isn't available (${message})`;
+    this.restart().catch((err) => log.error(`[speech] restart failed: ${err?.message ?? err}`));
   }
 
   /** Dev mode: scripted transcript frames, no audio or network. */
@@ -206,10 +264,9 @@ export class SpeechService {
       "speech:start": () => this.start(),
       "speech:stop": () => this.stop(),
       "speech:disconnect": () => this.stop(),
-      "speech:reconnect": async () => {
-        await this.stop();
-        return this.start();
-      },
+      "speech:reconnect": () => this.restart(),
+      "speech:getEngine": () => ({ engine: this.engine(), inUse: this.state?.engine ?? null, onDevice: appleSttSupported() }),
+      "speech:setEngine": (engine) => this.setEngine(engine),
       "speech:getVadEnabled": () => false,
       "speech:setVadEnabled": () => null,
     });
@@ -217,10 +274,9 @@ export class SpeechService {
     // there was any key and is stuck on "no key").
     onKeysSaved((changed) => {
       if (!changed.includes("deepgram") || !this.session.sessionId || !this.state) return;
+      if (this.state.engine === "apple") return;
       log.info("[speech] Deepgram key changed → reconnecting");
-      this.stop()
-        .then(() => this.start())
-        .catch((err) => log.error(`[speech] reconnect failed: ${err?.message ?? err}`));
+      this.restart().catch((err) => log.error(`[speech] reconnect failed: ${err?.message ?? err}`));
     });
     this.session.onChange((snap) => {
       if (snap.status === "active") {

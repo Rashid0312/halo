@@ -1,6 +1,6 @@
 // Mercy in the macOS menu bar.
 //   left-click  → drop the panel down under the icon (click again to hide)
-//   right-click → menu: open, "Hey Mercy", speak replies, re-train voice, quit
+//   right-click → menu: open, "Hey Mercy", speak replies, speech recognition, re-train voice, quit
 // The icon is a template image (macOS tints it for light/dark menu bars) of
 // Mercy's pixel black hole: a thin ring when idle, thicker with sparks while
 // she's listening or talking.
@@ -8,6 +8,7 @@ import { Menu, Tray, nativeImage } from "electron";
 import zlib from "node:zlib";
 import { store } from "./store.js";
 import { log } from "./log.js";
+import { appleSttSupported } from "./stt/apple.js";
 
 const ACTIVE = new Set(["listening", "thinking", "speaking", "waiting"]);
 
@@ -17,11 +18,13 @@ export class TrayService {
    * @param {import("./voice.js").VoiceService} voice
    * @param {import("./wake.js").WakeService} wake
    * @param {import("./gateway.js").Gateway} gateway
+   * @param {import("./speech.js").SpeechService} speech
    */
-  constructor(session, voice, wake, gateway) {
+  constructor(session, voice, wake, gateway, speech) {
     this.session = session;
     this.voice = voice;
     this.wake = wake;
+    this.speech = speech;
     this.gateway = gateway;
     this.icons = { idle: icon(false), active: icon(true) };
   }
@@ -90,6 +93,20 @@ export class TrayService {
         type: "checkbox",
         checked: voice.enabled,
         click: (item) => this.voice.setEnabled(item.checked),
+      },
+      {
+        label: "Speech recognition",
+        submenu: [
+          ["deepgram", "Deepgram"],
+          ["apple", "On this Mac"],
+          ["auto", "Auto"],
+        ].map(([engine, label]) => ({
+          label,
+          type: "radio",
+          checked: this.speech.engine() === engine,
+          enabled: engine !== "apple" || appleSttSupported(),
+          click: () => this.speech.setEngine(engine).catch((err) => log.error(`[tray] ${err.message}`)),
+        })),
       },
       ...(wake.enrolled ? [{ label: "Re-train my voice…", click: openSetup }] : []),
       { type: "separator" },

@@ -9,9 +9,9 @@
     "start": "electron .",
     "eval": "electron scripts/eval.mjs",
     "models": "node scripts/fetch-models.mjs",
-    "touchbar": "node scripts/build-touchbar.mjs",
+    "native": "node scripts/build-native.mjs",
     "icon": "electron scripts/make-icon.mjs",
-    "dist": "npm run models && npm run touchbar && node scripts/dist.mjs"
+    "dist": "npm run models && npm run native && node scripts/dist.mjs"
   },
   "devDependencies": {
     "electron": "^44.7.0",
@@ -48,6 +48,10 @@
       {
         "from": "native/touchbar/mercy-touchbar",
         "to": "mercy-touchbar"
+      },
+      {
+        "from": "native/speech/mercy-speech",
+        "to": "mercy-speech"
       }
     ],
     "mac": {
@@ -67,6 +71,7 @@
       "extendInfo": {
         "LSUIElement": true,
         "NSMicrophoneUsageDescription": "Mercy listens for “Hey Mercy” and to what you ask her.",
+        "NSSpeechRecognitionUsageDescription": "With on-device speech recognition on, Mercy turns what you say into text on this Mac.",
         "NSAppleEventsUsageDescription": "Mercy controls the apps you ask her to — Calendar, Reminders, Notes, Messages and more."
       }
     },

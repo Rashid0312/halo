@@ -94,6 +94,11 @@ export class DeepgramStream {
     if (final) this.segment++;
   }
 
+  /** Reconnect (e.g. at a new sample rate); the close handler reopens the socket. */
+  restart() {
+    this.ws?.close();
+  }
+
   /** True while audio is waiting for the socket to open. */
   hasBacklog() {
     return this.pending.length > 0;

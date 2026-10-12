@@ -251,6 +251,15 @@ label.row {
 label.row input {
   accent-color: var(--brand);
 }
+label.row select {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--tile-border);
+  background: var(--tile-hover);
+  color: var(--text-1);
+  font: inherit;
+}
 .danger {
   color: var(--bad);
 }
