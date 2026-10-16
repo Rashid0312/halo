@@ -18,7 +18,9 @@ const YES = /^(yes|yeah|yep|yup|sure|ok(ay)?|do it|go ahead|allow( it)?|approved
 const NO = /^(no|nope|nah|don'?t|do not|cancel|stop|deny|never mind|nevermind)\b/i;
 
 /** Kinds of actions with their own trust setting, and the default. */
-export const KINDS = { shell: "ask", applescript: "ask", message: "ask" };
+// claude: Claude Code asking for permission (claude/index.js) — "auto" lets
+// Mercy approve the safe ones, "off" leaves them to Claude's own terminal prompt.
+export const KINDS = { shell: "ask", applescript: "ask", message: "ask", claude: "ask" };
 const LEVELS = new Set(["ask", "auto", "off"]);
 
 export class Permissions {
@@ -65,8 +67,9 @@ export class Permissions {
   }
 
   /**
-   * @param {{ kind: string, title: string, detail: string, why?: string, risky?: boolean, alwaysKey?: string, alwaysLabel?: string }} req
+   * @param {{ kind: string, title: string, detail: string, why?: string, risky?: boolean, alwaysKey?: string, alwaysLabel?: string, spoken?: string }} req
    *   risky: asks even when the kind is set to "auto"
+   *   spoken: what Mercy says out loud while it waits (default: a generic "say yes or no")
    * @param {AbortSignal} [signal] turn signal: an interrupted turn denies its request
    * @returns {Promise<"allow" | "deny" | "off">}
    */
@@ -84,7 +87,7 @@ export class Permissions {
     const id = crypto.randomUUID();
     return new Promise((resolve) => {
       const timer = setTimeout(() => this.reply(id, "deny", "timed out"), TIMEOUT_MS);
-      this.pending.set(id, { resolve, timer, alwaysKey: req.alwaysKey });
+      this.pending.set(id, { resolve, timer, alwaysKey: req.alwaysKey, spoken: req.spoken });
       signal?.addEventListener("abort", () => this.reply(id, "deny", "cancelled"), { once: true });
       this.showPanel?.(); // permission cards must be seen: open the panel
       this.gateway.broadcast("mercy:permission", { id, ...req }, { to: ["panel"] });
@@ -115,6 +118,11 @@ export class Permissions {
     else if (NO.test(t)) this.reply(id, "deny", "voice");
     else return false;
     return true;
+  }
+
+  /** The newest open request, if any. */
+  latest() {
+    return [...this.pending.values()].at(-1) ?? null;
   }
 
   emitPending() {

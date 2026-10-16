@@ -10,6 +10,7 @@ import { log } from "../log.js";
 const MAX_BACKOFF_MS = 10000;
 const AUDIO = 0x41; // "A"
 const FINALIZE = 0x46; // "F"
+const WORDS = 0x57; // "W"
 
 /** True when this Mac can run Apple's on-device recognizer (macOS 26 = Darwin 25). */
 export function appleSttSupported() {
@@ -38,6 +39,8 @@ export class AppleStream {
    * @param {(r: {text: string, final: boolean, speechFinal: boolean, segmentId: string}) => void} opts.onResult
    * @param {(state: "live" | "degraded") => void} [opts.onState]
    * @param {(message: string) => void} [opts.onFatal]  the helper can't run here at all
+   * @param {"speech" | "dictation"} [opts.transcriber]  Apple's general model (default) or its dictation model
+   * @param {() => string[]} [opts.words]  words to listen for (only the dictation model uses them)
    */
   constructor(opts) {
     this.opts = opts;
@@ -53,7 +56,9 @@ export class AppleStream {
 
   connect() {
     if (this.closed) return;
-    const child = spawn(this.opts.binary, ["--locale", this.opts.language ?? "en-US", "--rate", String(this.opts.sampleRate)], {
+    const args = ["--locale", this.opts.language ?? "en-US", "--rate", String(this.opts.sampleRate)];
+    if (this.opts.transcriber) args.push("--transcriber", this.opts.transcriber);
+    const child = spawn(this.opts.binary, args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
@@ -74,6 +79,8 @@ export class AppleStream {
         this.attempt = 0;
         log.info(`[apple-stt:${this.opts.name}] ready @${this.opts.sampleRate}Hz`);
         this.opts.onState?.("live");
+        const words = this.opts.words?.() ?? [];
+        if (words.length) child.stdin.write(frame(WORDS, Buffer.from(words.join("\n"))));
         for (const buf of this.pending.splice(0)) this.sendNow(buf);
       } else if (msg.type === "state" && msg.state === "downloading") {
         log.info(`[apple-stt:${this.opts.name}] downloading the ${this.opts.language ?? "en-US"} speech model…`);

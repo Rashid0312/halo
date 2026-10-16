@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { streamChat, imageContent } from "./llm/index.js";
 import { TOOL_DEFS, runTool, toolLabel } from "./tools.js";
 import { log } from "./log.js";
+import { claude } from "./claude/index.js";
 
 const HISTORY_LINES = 16;
 const MAX_TOOL_STEPS = 10; // model → tools → model rounds per turn
@@ -84,6 +85,26 @@ export class Brain {
   /** "Look at my screen": screenshot(s) go straight to the vision model. */
   solveScreen(images) {
     return this.runTurn({ role: "vision", messages: this.solveMessages(images), source: "screen", maxTokens: 4000 });
+  }
+
+  /** A one-off completion that isn't shown or spoken (Claude summaries, driving decisions). */
+  async complete(messages, { maxTokens = 300, temperature = 0.2 } = {}) {
+    let text = "";
+    for await (const ev of streamChat({ role: "answer", messages, maxTokens, temperature })) {
+      if (ev.type === "text") text += ev.delta;
+    }
+    return text.trim();
+  }
+
+  /** Mercy speaks up on her own (a Claude session finished…): shown and spoken like an answer. */
+  announce(text) {
+    if (this.turn || this.listening || !text) return false;
+    const turn_id = crypto.randomUUID();
+    this.realtime.emit({ type: "turn.started", data: { turn_id, source: "claude" } });
+    this.realtime.emit({ type: "turn.token", data: { turn_id, delta: text } });
+    this.realtime.emit({ type: "turn.done", data: { turn_id } });
+    this.pushHistory("assistant", text);
+    return true;
   }
 
   pushHistory(role, text) {
@@ -192,6 +213,9 @@ export class Brain {
       "You can act on the user's Mac with your tools. Use the specific tools first (apps, websites, Calendar, Reminders, Notes, Shortcuts). For ANYTHING else, use run_shell (terminal commands) or run_applescript (control any app or the UI). Mercy's permission settings decide whether the user approves a command first, so don't refuse and don't ask in chat whether you should: just call the tool with a clear `why`. If a tool says it's turned off, tell the user they can turn it on in ··· → Permissions.",
       "To text or iMessage someone, ALWAYS use messages_send (it looks the contact up and shows the user the exact text before sending). Never send messages any other way. Write the message exactly as the user wants it, without adding your own sign-off.",
       "Never say you can't access the user's computer, files or apps. Find a way with the tools. If the user denies a command, accept it and offer an alternative.",
+      "Windows: to arrange, tile, maximize or move app windows between screens, ALWAYS use window_layout (it knows the user's screens: the laptop's built-in one and any external monitor). Never write AppleScript for that.",
+      "Claude Code (claude_* tools): the user runs Claude Code, a much stronger coding agent, in terminal windows. You are its assistant and messenger: list and read sessions, relay what the user wants with claude_send in their words (don't add technical instructions of your own), answer its questions when the user tells you to, start new sessions, and drive one toward a goal when asked. Questions about code or the project go to Claude, not to your own guesses.",
+      claudeContext(),
       "Work step by step: look first (e.g. list files) before changing things. After acting, confirm in a few words what you did or what went wrong. Never use sudo.",
       // Replies are spoken: keep them short.
       "- Answer in ONE short sentence. Two only if one can't hold the answer. Just the accurate answer: no background, tips, alternatives or follow-up offers unless the user asks.",
@@ -213,4 +237,12 @@ export class Brain {
       { role: "user", content: (transcript ? `Conversation so far:\n${transcript}\n\n` : "") + `The user just said: "${utterance}"` },
     ];
   }
+}
+
+/** The open Claude Code sessions, so "what's Claude doing?" needs no tool call. */
+function claudeContext() {
+  const sessions = claude.sessions.list();
+  if (!sessions.length) return "";
+  const line = (s) => `${s.name} (${s.cwd}): ${s.status}${s.activity ? `, ${s.activity}` : ""}${s.goal ? `, you're driving it toward "${s.goal.text}"` : ""}`;
+  return `Claude Code sessions right now: ${sessions.map(line).join("; ")}.`;
 }

@@ -13,6 +13,7 @@ import { TtsStream, TTS_SAMPLE_RATE } from "./tts/stream.js";
 import { createVad, modelsReady, pcm16ToFloat } from "./ondevice.js";
 import { store } from "./store.js";
 import { log } from "./log.js";
+import { recordingLeft, saveSample } from "./stt/samples.js";
 
 // Button / Touch Bar listening ends by itself: after you've spoken, this much
 // silence sends the request; saying nothing for NO_SPEECH_MS cancels it.
@@ -70,7 +71,7 @@ export class VoiceService {
     this.permissions.onPendingChange((waiting) => {
       if (waiting) {
         this.setState("waiting");
-        if (this.prefs().enabled) this.say("I need your okay for this. Say yes or no.");
+        if (this.prefs().enabled) this.say(this.permissions.latest()?.spoken ?? "I need your okay for this. Say yes or no.");
       } else if (this.state === "waiting") this.setState("thinking");
     });
     this.session.onChange((snap) => {
@@ -155,8 +156,15 @@ export class VoiceService {
     const via = this.listeningVia;
     this.listeningVia = null;
     let text = this.brain.stopListening();
-    // "Hey Mercy, what's the time" → "what's the time"
-    if (via === "wake") text = text.replace(/^\s*(?:(?:hey|hi|okay|ok|a)[\s,]+)?(?:mercy|hello|hailo|hallo|haylo)\b[\s,.!?]*/i, "").trim();
+    const recorded = this.speech.takeCapture();
+    if (recorded) {
+      try {
+        saveSample(recorded, { heard: text, engine: this.speech.state?.engine ?? this.speech.engine(), via });
+      } catch (err) {
+        log.warn(`[stt] couldn't save sample: ${err.message}`);
+      }
+    }
+    if (via === "wake") text = stripWake(text);
     // A "yes"/"no" while Mercy is waiting for permission answers it.
     if (text && this.permissions.answerByVoice(text)) {
       this.gateway.broadcast("mercy:asked", text, { to: ["panel"] });
@@ -180,6 +188,7 @@ export class VoiceService {
     this.stopEndpointing();
     this.listeningVia = null;
     await this.speech.setOpen(false);
+    this.speech.takeCapture(); // not the user, or nothing said: never saved
     this.brain.stopListening();
     this.setState(this.permissions.pending.size ? "waiting" : "idle");
   }
@@ -196,7 +205,7 @@ export class VoiceService {
     if (this.session.status !== "active") this.session.start();
     // Keep the running turn alive if we're only collecting a yes/no.
     this.brain.startListening({ keepTurn: this.permissions.pending.size > 0 });
-    this.speech.setOpen(true);
+    this.speech.setOpen(true, { preroll: via === "wake" ? "wake" : "all", capture: recordingLeft() > 0 });
     this.setState("listening");
     cue(CUE.start);
     // Connect TTS while the user is still talking.
@@ -345,6 +354,25 @@ export class VoiceService {
     this.reply = null;
     this.gateway.broadcast("mercy:audioStop", { gen: this.gen }, { to: ["panel"] });
   }
+}
+
+const WAKE_AT_START = /^\s*(?:(?:hey|hi|okay|ok|a)[\s,]+)?(?:mercy|hello|hailo|hallo|haylo)\b[\s,.!?]*/i;
+const WAKE_ANYWHERE = /\b(?:(?:hey|hi|okay|ok|a)[\s,]+)?(?:mercy|hailo|hallo|haylo)\b[\s,.!?]*/gi;
+const WAKE_WITHIN_WORDS = 15;
+
+/**
+ * The request after "Hey Mercy": "Hey Mercy, what's the time" → "what's the time".
+ * Anything said before the last wake phrase near the start is someone else, or
+ * a false start ("…too? Hey, Mercy. Um, open VS Code" → "open VS Code").
+ */
+export function stripWake(text) {
+  let cut = 0;
+  for (const m of text.matchAll(WAKE_ANYWHERE)) {
+    if (text.slice(0, m.index).split(/\s+/).filter(Boolean).length > WAKE_WITHIN_WORDS) break;
+    cut = m.index + m[0].length;
+  }
+  const rest = cut ? text.slice(cut) : text.replace(WAKE_AT_START, "");
+  return rest.replace(/^(?:\s*(?:um+|uh+|erm|hmm+)\b[\s,.]*)+/i, "").trim();
 }
 
 /** Strip markdown so the voice doesn't read symbols aloud. */

@@ -1,11 +1,12 @@
 // Mercy's on-device speech recognition (Apple SpeechAnalyzer, macOS 26+).
 //
-// Usage: mercy-speech --locale en-US --rate 16000
+// Usage: mercy-speech --locale en-US --rate 16000 [--transcriber speech|dictation]
 //
 // Protocol with Mercy (main/stt/apple.js):
 //   stdin   frames: [1 byte type][4 byte little-endian length][payload]
 //             "A" — PCM16 mono audio at --rate
 //             "F" — finalize: turn everything sent so far into final text
+//             "W" — words to listen for (UTF-8, one per line), from the next turn on
 //   stdin closes                           — exit
 //   stdout  one JSON object per line:
 //           {"type":"state","state":"downloading"} — fetching the language model
@@ -36,6 +37,7 @@ func arg(_ name: String, _ fallback: String) -> String {
 enum Command {
   case audio(Data)
   case finalize
+  case words([String])
 }
 
 /// Reads stdin frames on a background thread.
@@ -59,6 +61,9 @@ func readCommands() -> AsyncStream<Command> {
         switch type {
         case UInt8(ascii: "A"): continuation.yield(.audio(payload))
         case UInt8(ascii: "F"): continuation.yield(.finalize)
+        case UInt8(ascii: "W"):
+          let words = String(decoding: payload, as: UTF8.self).split(separator: "\n").map { String($0) }.filter { !$0.isEmpty }
+          continuation.yield(.words(words))
         default: break
         }
       }
@@ -80,26 +85,54 @@ final class Turn {
   let analyzer: SpeechAnalyzer
   let feed: AsyncStream<AnalyzerInput>.Continuation
   let pending = Pending()
+  var started = false // audio has been fed
 
-  init(locale: Locale, format: AVAudioFormat) async throws {
-    let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [.volatileResults, .fastResults], attributeOptions: [])
+  init(locale: Locale, format: AVAudioFormat, dictation: Bool, words: [String]) async throws {
     let (inputs, feed) = AsyncStream.makeStream(of: AnalyzerInput.self)
     self.feed = feed
-    analyzer = SpeechAnalyzer(modules: [transcriber])
-    try await analyzer.prepareToAnalyze(in: format)
-    try await analyzer.start(inputSequence: inputs)
     let pending = pending
-    Task {
-      do {
-        for try await result in transcriber.results {
-          let text = String(result.text.characters).trimmingCharacters(in: .whitespaces)
-          await pending.set(!result.isFinal && !text.isEmpty)
-          if !text.isEmpty { emit(["type": "result", "text": text, "final": result.isFinal]) }
+    func report(_ text: AttributedString, _ isFinal: Bool) async {
+      let text = String(text.characters).trimmingCharacters(in: .whitespaces)
+      await pending.set(!isFinal && !text.isEmpty)
+      if !text.isEmpty { emit(["type": "result", "text": text, "final": isFinal]) }
+    }
+    if dictation {
+      let transcriber = DictationTranscriber(locale: locale, contentHints: [.shortForm], transcriptionOptions: [.punctuation], reportingOptions: [.volatileResults], attributeOptions: [])
+      analyzer = SpeechAnalyzer(modules: [transcriber])
+      Task {
+        do {
+          for try await result in transcriber.results { await report(result.text, result.isFinal) }
+        } catch is CancellationError {
+          // a turn replaced before it heard anything (new word hints)
+        } catch {
+          fail("recognition failed: \(error.localizedDescription)")
         }
-      } catch {
-        fail("recognition failed: \(error.localizedDescription)")
+      }
+    } else {
+      let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [.volatileResults, .fastResults], attributeOptions: [])
+      analyzer = SpeechAnalyzer(modules: [transcriber])
+      Task {
+        do {
+          for try await result in transcriber.results { await report(result.text, result.isFinal) }
+        } catch is CancellationError {
+          // a turn replaced before it heard anything (new word hints)
+        } catch {
+          fail("recognition failed: \(error.localizedDescription)")
+        }
       }
     }
+    // Words to listen for (names, apps…): a hint, never required.
+    if !words.isEmpty {
+      let context = AnalysisContext()
+      context.contextualStrings[.general] = words
+      do {
+        try await analyzer.setContext(context)
+      } catch {
+        FileHandle.standardError.write(Data("word hints not applied: \(error.localizedDescription)\n".utf8))
+      }
+    }
+    try await analyzer.prepareToAnalyze(in: format)
+    try await analyzer.start(inputSequence: inputs)
   }
 
   /// Final text for everything fed so far, then shut down.
@@ -117,11 +150,20 @@ final class Turn {
 @available(macOS 26.0, *)
 func run() async {
   let rate = Double(arg("--rate", "16000")) ?? 16000
-  guard SpeechTranscriber.isAvailable else { fail("SpeechTranscriber is not available on this Mac") }
-  guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: arg("--locale", "en-US"))) else {
-    fail("language not supported on device")
+  let dictation = arg("--transcriber", "speech") == "dictation"
+  let wanted = Locale(identifier: arg("--locale", "en-US"))
+  let locale: Locale
+  let probe: any SpeechModule
+  if dictation {
+    guard let l = await DictationTranscriber.supportedLocale(equivalentTo: wanted) else { fail("language not supported on device") }
+    locale = l
+    probe = DictationTranscriber(locale: l, preset: .progressiveShortDictation)
+  } else {
+    guard SpeechTranscriber.isAvailable else { fail("SpeechTranscriber is not available on this Mac") }
+    guard let l = await SpeechTranscriber.supportedLocale(equivalentTo: wanted) else { fail("language not supported on device") }
+    locale = l
+    probe = SpeechTranscriber(locale: l, preset: .progressiveTranscription)
   }
-  let probe = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
 
   do {
     if await AssetInventory.status(forModules: [probe]) != .installed,
@@ -140,9 +182,10 @@ func run() async {
   }
   let converter = format == inputFormat ? nil : AVAudioConverter(from: inputFormat, to: format)
 
+  var words: [String] = []
   func newTurn() async -> Turn {
     do {
-      return try await Turn(locale: locale, format: format)
+      return try await Turn(locale: locale, format: format, dictation: dictation, words: words)
     } catch {
       fail("could not start: \(error.localizedDescription)")
     }
@@ -177,11 +220,19 @@ func run() async {
         if error != nil { continue }
         buffer = out
       }
+      turn.started = true
       turn.feed.yield(AnalyzerInput(buffer: buffer))
     case .finalize:
       await turn.finish()
       emit(["type": "finalized"])
       turn = await newTurn()
+    case .words(let list):
+      words = list
+      // Nothing heard yet in this turn: start it again with the hints.
+      if await !turn.pending.volatile, !turn.started {
+        await turn.analyzer.cancelAndFinishNow()
+        turn = await newTurn()
+      }
     }
   }
   await turn.analyzer.cancelAndFinishNow()

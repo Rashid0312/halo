@@ -743,3 +743,20 @@ label.row select {
   background: var(--tile-hover);
   color: var(--text-1);
 }
+
+.claude-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.claude-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.claude-row small {
+  opacity: 0.7;
+}

@@ -20,6 +20,9 @@ const STREAMS = {
 // ~2.2 s of 512-sample chunks at 16 kHz: covers the words spoken while a
 // follow-up is voice-checked locally (1.5 s + VAD lag) before Deepgram hears it.
 const PREROLL_CHUNKS = 70;
+// After "Hey Mercy" only the last ~0.8 s: enough for the keyword spotter's lag
+// and the voice check, without the room's talk from before the wake word.
+const WAKE_PREROLL_CHUNKS = 25;
 
 export class SpeechService {
   /**
@@ -44,6 +47,8 @@ export class SpeechService {
     // the first word after "Hey Mercy" isn't clipped.
     this.wakeMode = false;
     this.preroll = [];
+    this.prerollMode = "all";
+    this.capture = null; // mic chunks sent this request, while recording test samples (stt/samples.js)
     this.appleFailed = ""; // why on-device recognition can't run here (then "auto" uses Deepgram)
   }
 
@@ -84,6 +89,18 @@ export class SpeechService {
     return { error: this.appleFailed };
   }
 
+  sendMic(data) {
+    this.capture?.push(data);
+    this.streams.get("microphone")?.send(data);
+  }
+
+  /** The mic audio this request sent to the engine (when capturing), as one PCM16 buffer. */
+  takeCapture() {
+    const chunks = this.capture;
+    this.capture = null;
+    return chunks?.length ? Buffer.concat(chunks) : null;
+  }
+
   setWakeMode(on) {
     this.wakeMode = on;
     this.preroll = [];
@@ -99,11 +116,19 @@ export class SpeechService {
     return this.streams.get(source)?.hasBacklog() ?? false;
   }
 
-  /** Open/close push-to-talk: starts or stops audio capture. Resolves when done. */
-  setOpen(open) {
+  /**
+   * Open/close push-to-talk: starts or stops audio capture. Resolves when done.
+   * preroll "wake": after the wake word, only its short lead-in reaches the engine.
+   */
+  setOpen(open, { preroll = this.prerollMode, capture = false } = {}) {
+    if (open && !this.open) this.capture = capture ? [] : null;
     this.open = open;
+    this.prerollMode = preroll;
     if (this.wakeMode) {
-      if (open) for (const data of this.preroll.splice(0)) this.streams.get("microphone")?.send(data);
+      if (open) {
+        const lead = this.preroll.splice(0);
+        for (const data of preroll === "wake" ? lead.slice(-WAKE_PREROLL_CHUNKS) : lead) this.sendMic(data);
+      }
       return this.audioOp;
     }
     this.audioOp = this.audioOp
@@ -199,7 +224,8 @@ export class SpeechService {
         stream.opts.sampleRate = chunk.sampleRate;
         stream.restart();
       }
-      stream.send(chunk.data);
+      if (chunk.source === "microphone") this.sendMic(chunk.data);
+      else stream.send(chunk.data);
     });
 
     // Listening may already be open (the 🎤 button or "Hey Mercy" started this session).

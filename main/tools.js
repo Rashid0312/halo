@@ -13,6 +13,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { UNPACKED } from "./paths.js";
 import { log } from "./log.js";
+import { CLAUDE_TOOLS, claudeLabel } from "./claude/tools.js";
 
 const run = promisify(execFile);
 const TIMEOUT_MS = 20000;
@@ -110,13 +111,19 @@ function programs(command) {
     .map(firstProgram)
     .filter(Boolean);
 }
-function riskyCommand(command) {
+export function riskyCommand(command) {
   return programs(command).some((p) => RISKY.has(p)) || RISKY_PATTERNS.some((re) => re.test(command));
 }
 const OFF = (what) => ({ ok: false, denied: true, error: `${what} is turned off in Mercy's settings (··· → Permissions). Tell the user they can turn it on there.` });
 
 // Strip secrets from anything Mercy runs.
 const childEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/KEY|TOKEN|SECRET|PASSWORD/i.test(k)));
+
+/** The program a plain command runs ("npm" for "npm test"), or null when it chains, redirects, or always asks. */
+export function simpleProgram(command) {
+  const program = firstProgram(command);
+  return program && !ALWAYS_ASK.has(program) && !/[;&|`$<>]/.test(command) ? program : null;
+}
 
 function firstProgram(command) {
   const m = command.trim().match(/^(?:\w+=\S*\s+)*([^\s;&|()]+)/);
@@ -227,6 +234,44 @@ const TOOLS = {
   },
 };
 
+// ── windows ────────────────────────────────────────────────────────────
+const POSITIONS = ["left", "right", "top", "bottom", "left-third", "center-third", "right-third", "left-two-thirds", "right-two-thirds", "top-left", "top-right", "bottom-left", "bottom-right", "maximize", "center", "keep"];
+
+TOOLS.window_layout = {
+  def: fn(
+    "window_layout",
+    "Arrange app windows on the user's screens: side by side, halves, thirds, corners, maximize, center, or move to another screen. Handles full-screen windows and several screens. ALWAYS use this for window arrangement, never AppleScript. Example: Terminal left + Chrome right = two entries.",
+    {
+      windows: {
+        type: "array",
+        description: "One entry per app, in order",
+        items: {
+          type: "object",
+          properties: {
+            app: str("App name as the user said it"),
+            position: { type: "string", enum: POSITIONS, description: "Where on the screen; 'keep' = same shape, only change screen" },
+            screen: str("'laptop' (the Mac's built-in screen), 'external' (the monitor), 'other' (the one it isn't on), or empty = the screen the first app is on"),
+          },
+          required: ["app", "position"],
+        },
+      },
+    },
+    ["windows"],
+  ),
+  async run({ windows = [] }) {
+    const placements = [];
+    for (const w of windows) {
+      const app = findApp(String(w.app ?? ""));
+      if (!app) return { ok: false, error: `No installed app matches "${w.app}".` };
+      placements.push({ app: app.path, position: POSITIONS.includes(w.position) ? w.position : "maximize", screen: w.screen || "" });
+    }
+    if (!placements.length) return { ok: false, error: "Which apps?" };
+    const out = await jxa("window-layout.jxa", JSON.stringify({ placements }));
+    const failed = out.results.filter((r) => !r.ok);
+    return { ok: !failed.length, screens: out.screens, results: out.results };
+  },
+};
+
 // Apps that can act as the user (send, type, run anything): every script asks.
 const NEVER_ALWAYS_APPS = /^(messages|mail|terminal|iterm2?|system events|contacts|finder|script editor|shortcuts)$/i;
 
@@ -309,15 +354,14 @@ TOOLS.run_shell = {
   ),
   async run({ command, why, cwd }, ctx) {
     for (const [re, msg] of BLOCKED) if (re.test(command)) return { ok: false, error: msg };
-    const program = firstProgram(command);
-    const simple = program && !ALWAYS_ASK.has(program) && !/[;&|`$<>]/.test(command);
+    const program = simpleProgram(command);
     const decision = await ask(ctx, {
       kind: "shell",
       title: "Run a command",
       detail: command,
       why,
       risky: riskyCommand(command),
-      ...(simple ? { alwaysKey: `shell:${program}`, alwaysLabel: `Always allow ${program}` } : {}),
+      ...(program ? { alwaysKey: `shell:${program}`, alwaysLabel: `Always allow ${program}` } : {}),
     });
     if (decision === "off") return OFF("Running commands");
     if (decision === "deny") return { ok: false, denied: true, error: "The user said no." };
@@ -363,6 +407,8 @@ TOOLS.run_applescript = {
   },
 };
 
+Object.assign(TOOLS, CLAUDE_TOOLS);
+
 export const TOOL_DEFS = Object.values(TOOLS).map((t) => t.def);
 
 /** Short present-tense label for the panel, e.g. "Opening Visual Studio". */
@@ -386,6 +432,8 @@ export function toolLabel(name, args = {}) {
       return "Looking at your Shortcuts";
     case "shortcut_run":
       return `Running shortcut "${args.name}"`;
+    case "window_layout":
+      return `Arranging ${(args.windows ?? []).map((w) => w.app).join(" and ")}`;
     case "contacts_find":
       return `Looking up ${args.name} in Contacts`;
     case "messages_send":
@@ -394,7 +442,7 @@ export function toolLabel(name, args = {}) {
     case "run_applescript":
       return args.why || (name === "run_shell" ? "Running a command" : "Running AppleScript");
     default:
-      return name;
+      return claudeLabel(name, args) ?? name;
   }
 }
 
@@ -422,7 +470,9 @@ export async function runTool(name, rawArgs, ctx = {}) {
     // -1743: the user hasn't allowed Mercy to control that app yet.
     const hint = /-1743|not authori[sz]ed/i.test(message)
       ? " The user needs to allow Mercy in System Settings → Privacy & Security → Automation."
-      : "";
+      : /-25211|\(1002\)|assistive access/i.test(message)
+        ? " The user needs to turn Mercy on in System Settings → Privacy & Security → Accessibility."
+        : "";
     return JSON.stringify({ ok: false, error: message + hint });
   }
 }

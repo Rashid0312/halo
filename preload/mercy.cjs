@@ -37,6 +37,11 @@ const INVOKE = new Set([
   "mercy:chatgptManageUsage",
   "mercy:getBrain",
   "mercy:setBrain",
+  "mercy:claudeState",
+  "mercy:samplesState",
+  "mercy:setRecording",
+  "mercy:deleteSamples",
+  "mercy:setClaude",
   "speech:getEngine",
   "speech:setEngine",
 ]);
@@ -55,6 +60,7 @@ const EVENTS = new Set([
   "mercy:trayHidden",
   "mercy:speak",
   "mercy:update",
+  "mercy:claude",
   "speech:realtime-frame:received",
 ]);
 

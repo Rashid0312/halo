@@ -11,6 +11,7 @@
     "models": "node scripts/fetch-models.mjs",
     "native": "node scripts/build-native.mjs",
     "icon": "electron scripts/make-icon.mjs",
+    "cert": "node scripts/make-cert.mjs",
     "dist": "npm run models && npm run native && node scripts/dist.mjs"
   },
   "devDependencies": {

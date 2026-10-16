@@ -15,6 +15,7 @@ export class DeepgramStream {
    * @param {string} [opts.language]  BCP-47, e.g. "en-US"
    * @param {(r: {text: string, final: boolean, speechFinal: boolean, segmentId: string}) => void} opts.onResult
    * @param {(state: "live" | "degraded") => void} [opts.onState]
+   * @param {() => string[]} [opts.words]  keyterms to listen for (nova-3; billed as an add-on)
    */
   constructor(opts) {
     this.opts = opts;
@@ -39,6 +40,8 @@ export class DeepgramStream {
       vad_events: "true",
     });
     if (this.opts.language) p.set("language", this.opts.language);
+    // Deepgram: "focus on the most important 20-50 terms", 500 tokens at most.
+    for (const w of (this.opts.words?.() ?? []).slice(0, 50)) p.append("keyterm", w);
     return `wss://api.deepgram.com/v1/listen?${p}`;
   }
 

@@ -246,7 +246,7 @@ $("screen").addEventListener("click", () => window.mercy.invoke("mercy:solveScre
 $("quit").addEventListener("click", () => window.mercy.invoke("mercy:quit"));
 $("settings").addEventListener("click", () => {
   $("menu").hidden = !$("menu").hidden;
-  if (!$("menu").hidden) (loadEngine(), loadBrain()); // may have changed from the menu bar
+  if (!$("menu").hidden) (loadEngine(), loadBrain(), window.mercy.invoke("mercy:samplesState").then(renderSamples)); // may have changed from the menu bar
   expand();
 });
 // Esc tucks the panel back into the menu bar (like Control Center).
@@ -268,7 +268,7 @@ function showPermission(req) {
       ${req.alwaysKey ? '<button class="btn" data-d="always"></button>' : ""}
       <button class="btn ghost" data-d="deny">Deny</button>
     </div>`;
-  el.querySelector(".perm-title").textContent = req.kind === "message" ? req.title : `Mercy wants to: ${req.title}`;
+  el.querySelector(".perm-title").textContent = req.kind === "message" || req.kind === "claude" ? req.title : `Mercy wants to: ${req.title}`;
   el.querySelector(".perm-why").textContent = req.why || "";
   el.querySelector(".perm-detail").textContent = req.detail;
   el.querySelector(".primary").textContent = req.allowLabel || "Allow once";
@@ -613,6 +613,21 @@ function closeConnect() {
 $("loginToggle").addEventListener("change", async (e) => {
   e.target.checked = await window.mercy.invoke("mercy:setOpenAtLogin", e.target.checked);
 });
+// Opt-in test recordings of real requests (main/stt/samples.js): start, or stop + delete.
+function renderSamples({ left, saved }) {
+  $("recordSamples").textContent = left
+    ? `Recording requests: ${left} left · stop & delete`
+    : saved
+      ? `Delete ${saved} recorded request${saved === 1 ? "" : "s"}`
+      : "Record my next 20 requests (testing)";
+  $("recordSamples").classList.toggle("danger", Boolean(left || saved));
+}
+$("recordSamples").addEventListener("click", async () => {
+  const st = await window.mercy.invoke("mercy:samplesState");
+  renderSamples(await window.mercy.invoke(st.left || st.saved ? "mercy:deleteSamples" : "mercy:setRecording", true));
+});
+window.mercy.invoke("mercy:samplesState").then(renderSamples);
+
 $("showLogs").addEventListener("click", () => {
   $("menu").hidden = true;
   window.mercy.invoke("mercy:showLogs");
@@ -667,12 +682,18 @@ const TRUST_ROWS = [
   { kind: "shell", name: "Run commands", hint: "Terminal commands: files, folders, git, installs…", auto: "Deleting, killing or system changes still ask." },
   { kind: "applescript", name: "Control apps", hint: "Click menus, move windows, use Finder, Mail, Music…", auto: "Scripts that run risky commands still ask." },
   { kind: "message", name: "Send messages", hint: "iMessage / SMS from your Messages app.", auto: "Sends without showing you the text first." },
+  { kind: "claude", name: "Claude Code asks", hint: "When Claude Code wants permission for a command or edit.", auto: "Mercy allows safe ones; deleting, pushing or system changes still ask.", off: "Claude asks in its own terminal." },
 ];
 const LEVEL_LABEL = { ask: "Ask", auto: "Just do it", off: "Never" };
 let permsEl = null;
 
 function alwaysLabel(key) {
   const [kind, rest] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+  if (kind === "claude") {
+    const [what, ...more] = rest.split(":");
+    const target = more.join(":");
+    return { bash: `Claude runs ${target}`, edit: `Claude edits ${target.split("/").pop()}`, tool: `Claude uses ${target}` }[what] ?? key;
+  }
   return { shell: `Command: ${rest}`, applescript: `Control ${rest}`, messages: `Messages to ${rest}` }[kind] ?? key;
 }
 
@@ -683,7 +704,7 @@ function renderPerms(settings) {
       b.setAttribute("aria-pressed", String(b.dataset.level === level));
     }
     permsEl.querySelector(`[data-kind="${row.kind}"] .trust-note`).textContent =
-      level === "auto" ? row.auto : level === "off" ? "Mercy won't do this." : "Mercy asks you every time.";
+      level === "auto" ? row.auto : level === "off" ? row.off ?? "Mercy won't do this." : "Mercy asks you every time.";
   }
   const list = permsEl.querySelector(".always-list");
   list.replaceChildren(
@@ -747,6 +768,62 @@ $("permsBtn").addEventListener("click", () => {
   showPerms();
 });
 
+// ── Claude Code: connect, announcements, open sessions ─────────────────
+let claudeEl = null;
+const STATUS_LABEL = { working: "working", waiting: "waiting for you", idle: "idle" };
+
+function renderClaude(st) {
+  if (!claudeEl) return;
+  claudeEl.querySelector('[data-c="connected"]').checked = st.connected;
+  claudeEl.querySelector('[data-c="announce"]').checked = st.announce;
+  const list = claudeEl.querySelector(".claude-list");
+  list.replaceChildren(
+    ...st.sessions.map((s) => {
+      const row = document.createElement("div");
+      row.className = "claude-row";
+      const b = document.createElement("b");
+      b.textContent = s.name;
+      const small = document.createElement("small");
+      small.textContent = [STATUS_LABEL[s.status] ?? s.status, s.activity, s.goal && `driving: ${s.goal}`].filter(Boolean).join(" · ");
+      row.append(b, small);
+      return row;
+    }),
+  );
+  claudeEl.querySelector(".claude-empty").hidden = Boolean(st.sessions.length) || !st.connected;
+}
+
+async function showClaude() {
+  if (claudeEl) return;
+  claudeEl = document.createElement("div");
+  claudeEl.className = "enroll perms";
+  claudeEl.innerHTML = `
+    <div class="enroll-title">Claude Code</div>
+    <div class="enroll-text">Mercy follows your Claude Code sessions: she tells you when one finishes, passes on what you say, asks you about its permission requests and can keep one going toward a goal. Try “Hey Mercy, what's Claude doing?”</div>
+    <label class="row"><input type="checkbox" data-c="connected" /> Connected (hooks in ~/.claude/settings.json)</label>
+    <label class="row"><input type="checkbox" data-c="announce" /> Tell me when a session finishes</label>
+    <div class="claude-list"></div>
+    <small class="trust-note claude-empty">No sessions yet. Claude windows opened before connecting show up after a restart.</small>
+    <div class="perm-actions"><button class="btn primary" data-a="done">Done</button></div>`;
+  claudeEl.addEventListener("change", async (e) => {
+    const c = e.target.dataset.c;
+    if (c) renderClaude(await window.mercy.invoke("mercy:setClaude", { [c]: e.target.checked }));
+  });
+  claudeEl.addEventListener("click", (e) => {
+    if (e.target.closest("button")?.dataset.a === "done") {
+      claudeEl.remove();
+      claudeEl = null;
+    }
+  });
+  log.prepend(claudeEl);
+  renderClaude(await window.mercy.invoke("mercy:claudeState"));
+  expand();
+}
+
+$("claudeBtn").addEventListener("click", () => {
+  $("menu").hidden = true;
+  showClaude();
+});
+
 // ── wire up ────────────────────────────────────────────────────────────
 window.mercy.on("speech:realtime-frame:received", onFrame);
 window.mercy.on("mercy:state", (s) => setState(s));
@@ -757,6 +834,7 @@ window.mercy.on("mercy:audio", playChunk);
 window.mercy.on("mercy:audioStop", ({ gen }) => stopAudio(gen));
 window.mercy.on("mercy:wake", renderWake);
 window.mercy.on("mercy:speak", renderSpeak);
+window.mercy.on("mercy:claude", renderClaude);
 
 // A newer Mercy is on GitHub: offer the download (shown once per launch).
 let updateShown = false;

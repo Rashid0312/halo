@@ -22,6 +22,8 @@ import { loadKeys, keysState, registerKeys } from "./keys.js";
 import { loadChatgpt, registerChatgpt } from "./llm/chatgpt-auth.js";
 import { registerBrain } from "./llm/index.js";
 import { UpdateService } from "./updates.js";
+import { claude } from "./claude/index.js";
+import { registerSamples } from "./stt/samples.js";
 
 // Dev/test hook: MERCY_USER_DATA=/tmp/dir keeps test runs out of the real profile.
 if (process.env.MERCY_USER_DATA) app.setPath("userData", process.env.MERCY_USER_DATA);
@@ -76,6 +78,7 @@ app.whenReady().then(async () => {
   registerKeys(gateway);
   registerChatgpt(gateway);
   registerBrain(gateway);
+  registerSamples(gateway);
   const session = new SessionService(gateway, registry);
   session.register();
   const audio = new AudioService(gateway, registry);
@@ -91,6 +94,8 @@ app.whenReady().then(async () => {
   const voice = new VoiceService(gateway, realtime, brain, session, speech, permissions);
   voice.audio = audio; // end-of-speech detection for button / Touch Bar listening
   voice.register();
+  claude.init({ gateway, brain, voice, permissions });
+  claude.start().catch((err) => log.error(`[claude] ${err.message}`));
   const wake = new WakeService(gateway, audio, speech, voice);
   const tray = new TrayService(session, voice, wake, gateway, speech);
   tray.register();
@@ -120,6 +125,7 @@ app.whenReady().then(async () => {
     shuttingDown = true;
     voice.unregister();
     touchbar.stop();
+    claude.stop();
     Promise.resolve()
       .then(() => wake.stop())
       .then(() => session.end())

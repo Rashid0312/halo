@@ -3,6 +3,8 @@
 //
 //   npm run eval
 //   npm run eval -- stt     (speech-to-text only)
+//   npm run eval -- wake    (what's kept after "Hey Mercy"; offline)
+//   npm run eval -- mine    (speech-to-text on your own recorded requests, with/without word hints)
 //   npm run eval -- brain   (brains only: DeepSeek, and ChatGPT with CHATGPT_ACCESS_TOKEN)
 //
 // Calls DeepSeek, Deepgram (and ChatGPT with CHATGPT_ACCESS_TOKEN) with the keys in .env. Tools are NOT executed,
@@ -37,12 +39,15 @@ const ROUTING = [
   ["Turn the volume down to 20%", "run_applescript|run_shell"],
   ["Empty my trash", "run_applescript|run_shell"],
   ["Delete everything in my Downloads", "run_shell|run_applescript"],
+  ["Put my terminal and Chrome side by side", "window_layout"],
+  ["Move Chrome to my laptop screen", "window_layout"],
+  ["Make Spotify full screen on the big monitor", "window_layout"],
   ["What's the capital of Japan?", "none"],
   ["Explain what a closure is in JavaScript", "none"],
 ];
 
 // 4. Speech-to-text: see sttEval().
-async function sttEval() {
+async function sttEval({ mine = false } = {}) {
   // The same spoken phrases through each engine, streamed in
   // real time like the mic, then finalized like releasing push-to-talk.
   // Samples are macOS `say` voices: clean audio, so this compares engines, not
@@ -60,7 +65,7 @@ async function sttEval() {
     "How do I undo the last commit in git but keep my changes?",
   ];
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mercy-stt-"));
-  const samples = PHRASES.map((text, i) => {
+  const samples = mine ? mySamples() : PHRASES.map((text, i) => {
     const wav = path.join(tmp, `${i}.wav`);
     execFileSync("say", ["-o", wav, "--file-format=WAVE", "--data-format=LEI16@16000", text]);
     const buf = fs.readFileSync(wav);
@@ -83,12 +88,20 @@ async function sttEval() {
     return prev[h.length] / r.length;
   }
   const engines = [];
-  if (getKey("deepgram")) engines.push(["deepgram", (opts) => new DeepgramStream({ ...opts, apiKey: getKey("deepgram") })]);
-  else console.log("deepgram: skipped (no key)");
+  const { speechWords } = await import(`${H}/stt/words.js`);
+  const hints = () => speechWords();
+  if (getKey("deepgram")) {
+    engines.push(["deepgram", (opts) => new DeepgramStream({ ...opts, apiKey: getKey("deepgram") })]);
+    if (mine) engines.push(["deepgram + keyterms", (opts) => new DeepgramStream({ ...opts, apiKey: getKey("deepgram"), words: hints })]);
+  } else console.log("deepgram: skipped (no key)");
   if (appleSttSupported()) {
     try {
       const binary = await prepareAppleStt();
       engines.push(["apple", (opts) => new AppleStream({ ...opts, binary })]);
+      if (mine) {
+        engines.push(["apple dictation", (opts) => new AppleStream({ ...opts, binary, transcriber: "dictation" })]);
+        engines.push(["apple dictation + hints", (opts) => new AppleStream({ ...opts, binary, transcriber: "dictation", words: hints })]);
+      }
     } catch (err) {
       console.log(`apple: skipped (${err.message.split("\n")[0]})`);
     }
@@ -129,14 +142,72 @@ async function sttEval() {
     for (const sample of samples) rows.push(await transcribe(make, sample));
     const avg = (k) => rows.reduce((n, r) => n + (r[k] ?? 0), 0) / rows.length;
     console.log(`\n${name}: WER ${(avg("wer") * 100).toFixed(1)}%  first words ${avg("firstMs").toFixed(0)}ms  release→text ${avg("finalizeMs").toFixed(0)}ms`);
-    rows.forEach((r, i) => r.wer > 0 && console.log(`  ✗ ${(r.wer * 100).toFixed(0)}%  "${r.hyp}"  (said: "${PHRASES[i]}")`));
+    rows.forEach((r, i) => r.wer > 0 && console.log(`  ✗ ${(r.wer * 100).toFixed(0)}%  "${r.hyp}"  (said: "${samples[i].text}")`));
   }
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+/**
+ * Your recorded requests (panel ··· → Record my next 20 requests), with the
+ * words actually said filled in as "said". Unlabelled ones are listed, not scored.
+ */
+function mySamples() {
+  const dir = process.env.MERCY_SAMPLES ?? path.join(os.homedir(), "Library/Application Support/Mercy/stt-samples");
+  const out = [];
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+  } catch {}
+  for (const f of files) {
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+    if (!meta.said) {
+      console.log(`  unlabelled: ${f}  heard "${meta.heard}"`);
+      continue;
+    }
+    const wav = fs.readFileSync(path.join(dir, f.replace(/\.json$/, ".wav")));
+    out.push({ text: meta.said, pcm: wav.subarray(44) });
+  }
+  console.log(`${out.length} labelled samples from ${dir}`);
+  if (!out.length) process.exit(1);
+  return out;
+}
+
+// 5. "Hey Mercy" stripping: shapes of real transcripts where the room's talk
+// from before the wake word got in (mercy.log, 2026-10-13).
+async function wakeEval() {
+  console.log("\n=== 5. After \"Hey Mercy\" ===");
+  const { stripWake } = await import(`${H}/voice.js`);
+  const CASES = [
+    ["Hey Mercy, what's the time", "what's the time"],
+    ["Hello, what's the weather?", "what's the weather?"],
+    ["Another one? With me. Hey, Mercy. Um... can you check the time?", "can you check the time?"],
+    ["Why is it listening to you? Hey, Mercy, um, can you check what time it is right now?", "can you check what time it is right now?"],
+    ["Are you tired of this too? Is it like? Start with hey, mercy. Hey, Mercy.", ""],
+    ["Oh, are you tired of this too? Hey, mercy. Um, open visual studios for me.", "open visual studios for me."],
+    ["open Safari", "open Safari"],
+    [
+      "Hey Mercy, write a note saying one two three four five six seven eight nine ten eleven twelve thirteen mercy rocks",
+      "write a note saying one two three four five six seven eight nine ten eleven twelve thirteen mercy rocks",
+    ],
+  ];
+  let ok = 0;
+  for (const [heard, want] of CASES) {
+    const got = stripWake(heard);
+    if (got === want) ok++;
+    else console.log(`  ✗ "${heard}"\n      got:  "${got}"\n      want: "${want}"`);
+  }
+  console.log(`${ok}/${CASES.length} correct`);
+  return ok === CASES.length;
 }
 
 app.whenReady().then(async () => {
   const { initStore } = await import(`${H}/store.js`);
   initStore();
+  if (process.argv.includes("wake")) return app.exit((await wakeEval()) ? 0 : 1);
+  if (process.argv.includes("mine")) {
+    await sttEval({ mine: true });
+    return app.exit(0);
+  }
   // npm run eval -- stt: only the speech-to-text comparison.
   if (process.argv.includes("stt")) {
     await sttEval();
