@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import HaloCore
 
 @MainActor
@@ -6,6 +6,153 @@ enum NativeChecks {
     private struct Failure: LocalizedError {
         let errorDescription: String?
         init(_ message: String) { errorDescription = message }
+    }
+
+    static func chatGPT() async throws {
+        let listener = try OAuthLoopback()
+        let waiting = Task { try await listener.wait(state: "halo-test-state") }
+        func url(_ state: String) -> URL {
+            var parts = URLComponents(url: listener.redirect, resolvingAgainstBaseURL: false)!
+            parts.queryItems = [URLQueryItem(name: "state", value: state), URLQueryItem(name: "code", value: "test-only")]
+            return parts.url!
+        }
+        let (_, rejected) = try await URLSession.shared.data(from: url("wrong-state"))
+        guard (rejected as? HTTPURLResponse)?.statusCode == 400 else { throw Failure("OAuth callback accepted wrong state") }
+        let (_, accepted) = try await URLSession.shared.data(from: url("halo-test-state"))
+        let callback = try await waiting.value
+        guard (accepted as? HTTPURLResponse)?.statusCode == 200, callback.path == "/auth/callback" else { throw Failure("OAuth callback did not complete") }
+        let cancelled = try OAuthLoopback()
+        let pending = Task { try await cancelled.wait(state: "cancelled-state") }
+        pending.cancel()
+        do { _ = try await pending.value; throw Failure("OAuth callback cancellation ignored") }
+        catch is CancellationError {}
+        print("PASS: loopback-only OAuth callback, wrong-state rejection, valid callback, and cancellation; no real credentials used")
+    }
+
+    static func ui(_ tools: MacTools) async throws {
+        let definitions = try JSONSerialization.jsonObject(with: await tools.definitions()) as? [[String: Any]] ?? []
+        let names = Set(definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
+        guard ["inspect_ui", "ui_action", "type_text", "keypress", "window_layout", "screen_info"].allSatisfy(names.contains) else {
+            throw Failure("UI tool definitions missing")
+        }
+        guard ["open_url", "quit_app"].allSatisfy(names.contains),
+              MacTools.webURL("https://example.com/search?q=hello%20world") != nil,
+              MacTools.webURL("HTTP://example.com") != nil else { throw Failure("Native app/web tools or valid URLs missing") }
+        for invalid in ["file:///tmp/test", "javascript:alert(1)", "https://", "https://user:password@example.com", "https://example.com/a b", "example.com"] {
+            guard MacTools.webURL(invalid) == nil else { throw Failure("Unsafe or incomplete URL accepted") }
+        }
+        let rejectedQuit = try await tools.execute(name: "quit_app", arguments: "{}")
+        let quitObject = try JSONSerialization.jsonObject(with: Data(rejectedQuit.utf8)) as? [String: Any]
+        guard quitObject?["ok"] as? Bool == false else { throw Failure("Quit without app ID was accepted") }
+        print("PASS: app/web tool definitions, HTTP URL validation, unsafe scheme rejection, and missing quit target rejection")
+        let (_, flags) = try UIAutomation.shortcut("cmd+shift+s")
+        guard flags.contains(.maskCommand) && flags.contains(.maskShift) else { throw Failure("Shortcut modifiers missing") }
+        var rejected = false
+        do { _ = try UIAutomation.shortcut("unknown+q") } catch { rejected = true }
+        guard rejected else { throw Failure("Invalid shortcut was accepted") }
+        do { _ = try await tools.ui.describe(id: "stale-control"); throw Failure("Stale reference accepted") }
+        catch let failure as Failure { throw failure }
+        catch {}
+        tools.ui.refreshAccess()
+        if !tools.ui.trusted {
+            let result = try await tools.execute(name: "inspect_ui", arguments: "{}")
+            let object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any]
+            guard object?["ok"] as? Bool == false else { throw Failure("Inspection bypassed Accessibility permission") }
+        }
+        print("PASS: UI tools, shortcut validation, stale-control rejection, and Accessibility permission gate")
+        print(tools.ui.trusted ? "Accessibility status: enabled; live app inspection can be checked" : "Accessibility status: waiting for user to enable Halo in macOS settings")
+    }
+
+    static func appLifecycle(_ tools: MacTools) async throws {
+        // Dictionary has no editable documents. Do not quit an app already used by the user.
+        let appID = "com.apple.Dictionary"
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: appID).isEmpty else {
+            print("SKIP: Dictionary is already open; preserving the user's app")
+            return
+        }
+        let opened = try await tools.execute(name: "open_app", arguments: #"{"name":"Dictionary"}"#)
+        let openResult = try JSONSerialization.jsonObject(with: Data(opened.utf8)) as? [String: Any]
+        guard openResult?["ok"] as? Bool == true else { throw Failure("Native Dictionary opening failed") }
+        for _ in 0..<50 {
+            if !NSRunningApplication.runningApplications(withBundleIdentifier: appID).isEmpty { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let closed = try await tools.execute(name: "quit_app", arguments: #"{"app_id":"com.apple.Dictionary"}"#)
+        let closeResult = try JSONSerialization.jsonObject(with: Data(closed.utf8)) as? [String: Any]
+        guard closeResult?["ok"] as? Bool == true,
+              NSRunningApplication.runningApplications(withBundleIdentifier: appID).filter({ !$0.isTerminated }).isEmpty else {
+            throw Failure("Native normal quit did not close the test app")
+        }
+        print("PASS: native tool opened Dictionary and confirmed normal termination; no force quit")
+    }
+
+    static func commands(_ tools: MacTools) async throws {
+        let directory = FileManager.default.temporaryDirectory
+        let result = try await CommandRunner.run(executable: "/usr/bin/printf", arguments: ["native-command-check"], directory: directory)
+        guard result.status == 0, result.stdout == "native-command-check", !result.timedOut else { throw Failure("Command output missing") }
+        let script = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", #"return "HALO_SCRIPT_OK""#], directory: directory)
+        guard script.status == 0, script.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "HALO_SCRIPT_OK" else { throw Failure("AppleScript execution failed") }
+        let failure = try await CommandRunner.run(executable: "/bin/zsh", arguments: ["-c", "printf failure >&2; exit 7"], directory: directory)
+        guard failure.status == 7, failure.stderr == "failure" else { throw Failure("Command failure not preserved") }
+        let bounded = try await CommandRunner.run(executable: "/usr/bin/yes", arguments: [], directory: directory, timeout: 0.15)
+        guard bounded.timedOut, bounded.truncated, bounded.stdout.utf8.count <= 32768 else { throw Failure("Output or timeout was not bounded") }
+        let running = Task { try await CommandRunner.run(executable: "/bin/sleep", arguments: ["20"], directory: directory) }
+        try await Task.sleep(for: .milliseconds(100))
+        running.cancel()
+        do { _ = try await running.value; throw Failure("Command cancellation ignored") }
+        catch is CancellationError {}
+        let args = #"{"command":"printf approved-command-check","why":"Check command approval"}"#
+        let denied = Task { try await tools.execute(name: "run_shell", arguments: args) }
+        let preview = try await waitForApproval(tools)
+        guard preview.preview == "printf approved-command-check" else { throw Failure("Command preview differed from execution") }
+        tools.resolve(id: preview.id, allow: false)
+        let denial = try JSONSerialization.jsonObject(with: Data(try await denied.value.utf8)) as? [String: Any]
+        guard denial?["denied"] as? Bool == true else { throw Failure("Command denial ignored") }
+        let approved = Task { try await tools.execute(name: "run_shell", arguments: args) }
+        let approval = try await waitForApproval(tools)
+        tools.resolve(id: approval.id, allow: true)
+        let output = try JSONSerialization.jsonObject(with: Data(try await approved.value.utf8)) as? [String: Any]
+        guard output?["ok"] as? Bool == true, output?["stdout"] as? String == "approved-command-check" else { throw Failure("Approved command failed") }
+        let pending = Task { try await tools.execute(name: "run_applescript", arguments: #"{"script":"return 42","why":"Check pending cancellation"}"#) }
+        _ = try await waitForApproval(tools)
+        pending.cancel()
+        do { _ = try await pending.value; throw Failure("Pending script approval ignored cancellation") }
+        catch is CancellationError {}
+        guard tools.approval == nil else { throw Failure("Cancelled script left approval visible") }
+        print("PASS: command output, nonzero exit, output limits, timeout, running cancellation, exact approval, denial, and pending script cancellation")
+    }
+
+    private actor ScreenFixture: MacToolExecutor {
+        let result: String
+        private(set) var used = false
+        init(result: String) { self.result = result }
+        func definitions() async throws -> Data {
+            Data(#"[{"type":"function","function":{"name":"inspect_screen","description":"Get the test image to read.","parameters":{"type":"object","properties":{}}}}]"#.utf8)
+        }
+        func execute(name: String, arguments: String) async throws -> String {
+            guard name == "inspect_screen" else { throw Failure("Unexpected vision test tool") }
+            used = true
+            return result
+        }
+    }
+
+    static func screen(key: String) async throws {
+        guard let executable = Bundle.main.executableURL else { throw Failure("Test executable missing") }
+        let host = Process()
+        host.executableURL = executable
+        host.arguments = ["--ui-test-host"]
+        try host.run()
+        defer { if host.isRunning { host.terminate() } }
+        let capture = try await ScreenService().captureTestWindow(pid: host.processIdentifier)
+        let data = try JSONSerialization.data(withJSONObject: ["ok": true, "mime_type": "image/jpeg", "image_base64": capture.data.base64EncodedString(), "scope": capture.scope])
+        let result = String(decoding: data, as: UTF8.self)
+        guard let parts = DeepSeekProvider.screenAttachment(result: result), !parts.toolText.contains("image_base64"),
+              parts.imageContent.count == 1 else { throw Failure("Screenshot was not converted into an image attachment") }
+        let fixture = ScreenFixture(result: result)
+        var reply = ""
+        for try await delta in DeepSeekProvider(key: key, tools: fixture).reply(to: [Message(isUser: true, text: "Use inspect_screen to get the test image. Read the large HALO VISION line and reply with only its five-digit code. Do not guess it without inspecting the image.")]) { reply += delta }
+        guard await fixture.used, reply.contains("73914") else { throw Failure("Vision model did not read the captured fixture correctly") }
+        print("PASS: native window screenshot, JPEG encoding, image attachment, live DeepSeek tool call, and visual reading of disposable test window; no desktop image sent")
     }
 
     static func files(_ tools: MacTools) async throws {

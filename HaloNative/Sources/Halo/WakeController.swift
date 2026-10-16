@@ -5,9 +5,10 @@ import Observation
 import Synchronization
 
 enum WakeFailure: LocalizedError {
-    case models, microphone
+    case models, microphone, noRequest
     var errorDescription: String? {
         switch self {
+        case .noRequest: "The voice check produced no request transcript."
         case .models: "The local wake models could not be loaded. You can still use the talk button."
         case .microphone: "Enable Halo’s microphone access in System Settings to use hands-free mode."
         }
@@ -25,9 +26,7 @@ private final class WakeWorker: @unchecked Sendable {
     private var mode = Mode.paused
     private var preRoll: [Float] = []
     private var vadBuffer: [Float] = []
-    private var elapsed = 0
-    private var lastSpeech = 0
-    private var heardSpeech = false
+    private var endpoint = RequestEndpoint()
     // Bound queued work, too, rather than letting a slow device accumulate audio.
     private let queued = Mutex(0)
 
@@ -66,16 +65,20 @@ private final class WakeWorker: @unchecked Sendable {
         queue.async { [self] in begin(seed: [], wake: false) }
     }
 
+    func confirmRequest() {
+        queue.async { [self] in endpoint.confirmRequest() }
+    }
+
     private func begin(seed: [Float], wake: Bool) {
         halo_wake_reset(detector)
         mode = .capturing
         vadBuffer = []
-        elapsed = 0; lastSpeech = 0; heardSpeech = false
+        endpoint = RequestEndpoint()
         // Seed VAD with the same pre-roll used by transcription, so even a
         // short request already underway at detection can end promptly.
         for offset in stride(from: 0, to: seed.count - seed.count % 512, by: 512) {
             let frame = Array(seed[offset..<offset + 512])
-            if frame.withUnsafeBufferPointer({ halo_vad_accept(detector, $0.baseAddress, 512) }) != 0 { heardSpeech = true }
+            frame.withUnsafeBufferPointer { _ = halo_vad_accept(detector, $0.baseAddress, 512) }
         }
         continuation.yield(.trigger(seed, wake))
     }
@@ -97,15 +100,15 @@ private final class WakeWorker: @unchecked Sendable {
                 if hit != 0 { begin(seed: preRoll, wake: true); preRoll = [] }
             case .capturing:
                 continuation.yield(.audio(samples))
-                elapsed += samples.count
+                var speechDetected = false
                 vadBuffer += samples
                 while vadBuffer.count >= 512 {
                     let frame = Array(vadBuffer.prefix(512))
                     vadBuffer.removeFirst(512)
                     let speech = frame.withUnsafeBufferPointer { halo_vad_accept(detector, $0.baseAddress, 512) != 0 }
-                    if speech { heardSpeech = true; lastSpeech = elapsed }
+                    speechDetected = speechDetected || speech
                 }
-                if (heardSpeech && elapsed - lastSpeech > 8000) || elapsed > (heardSpeech ? 320000 : 96000) {
+                if endpoint.observe(sampleCount: samples.count, speechDetected: speechDetected) {
                     mode = .paused
                     continuation.yield(.end)
                 }
@@ -169,6 +172,10 @@ final class WakeController {
     @ObservationIgnored private var busy = false
     @ObservationIgnored private var resumeAfter = Date.distantPast
 
+    func ownsAudioEngine(_ id: ObjectIdentifier) -> Bool {
+        engine.map { ObjectIdentifier($0) == id } ?? false
+    }
+
     func setEnabled(_ enabled: Bool, voice: VoiceController, conversation: HaloCore.Conversation) {
         voice.cancel()
         stop()
@@ -222,6 +229,7 @@ final class WakeController {
                         rearmed = false
                         onWake?()
                         voice.startListening(externalAudio: true, seed: seed, stripWake: wake)
+                        voice.onRequestContent = { worker.confirmRequest() }
                     case .audio(let samples): voice.receiveExternalAudio(samples)
                     case .end: voice.finishWhenReady()
                     }
@@ -265,7 +273,9 @@ final class WakeController {
         let consumer = Task {
             for await event in worker.events {
                 switch event {
-                case .trigger(let seed, let wake): voice.startListening(externalAudio: true, seed: seed, stripWake: wake)
+                case .trigger(let seed, let wake):
+                    voice.startListening(externalAudio: true, seed: seed, stripWake: wake)
+                    voice.onRequestContent = { worker.confirmRequest() }
                 case .audio(let samples): voice.receiveExternalAudio(samples)
                 case .end: voice.finishWhenReady()
                 }
@@ -281,7 +291,7 @@ final class WakeController {
             if !result.isEmpty { return result }
             try await Task.sleep(for: .milliseconds(100))
         }
-        throw WakeFailure.models
+        throw WakeFailure.noRequest
     }
 
     static func checkFile(_ path: String) throws -> Bool {

@@ -40,12 +40,49 @@ public struct Message: Identifiable, Sendable {
     }
 }
 
+private actor StreamBuffer {
+    private let limit: Int
+    private var pending = ""
+    private var completion: Result<Void, Error>?
+    private var acceptedCharacters = 0
+    private var exceededLimit = false
+
+    init(limit: Int) { self.limit = limit }
+
+    func append(_ text: String) {
+        guard !exceededLimit else { return }
+        let remaining = limit - acceptedCharacters
+        if text.count > remaining {
+            pending += String(text.prefix(remaining))
+            acceptedCharacters += remaining
+            exceededLimit = true
+        } else {
+            pending += text
+            acceptedCharacters += text.count
+        }
+    }
+    func finish(_ result: Result<Void, Error>) { completion = result }
+
+    func drain() -> (text: String, completion: Result<Void, Error>?, exceededLimit: Bool) {
+        let text = pending
+        pending = ""
+        return (text, completion, exceededLimit)
+    }
+}
+
 @MainActor @Observable
 public final class Conversation {
+    public static let maximumMessages = 40
+    public static let maximumInputCharacters = 16_000
+    public static let maximumReplyCharacters = 64_000
+    public static let maximumRetainedCharacters = 160_000
+    public static let streamRenderInterval = Duration.milliseconds(50)
+
     public private(set) var messages: [Message] = []
     public private(set) var isResponding = false
     public private(set) var status: String
-    public let providerName: String
+    public private(set) var providerName: String
+    @ObservationIgnored public private(set) var streamUpdateCount = 0
     public let isDemo: Bool
     @ObservationIgnored public var onReply: ((String) -> Void)?
     @ObservationIgnored public var onStop: (() -> Void)?
@@ -58,6 +95,12 @@ public final class Conversation {
         self.providerName = providerName
         self.isDemo = providerName == "Demo mode"
         self.status = "Ready · \(providerName)"
+    }
+
+    public func changeProviderName(_ name: String) {
+        stop()
+        providerName = name
+        status = "Ready · \(name)"
     }
 
     public func send(_ input: String) {
@@ -79,25 +122,74 @@ public final class Conversation {
     private func begin(_ input: String, response: ([Message]) -> AsyncThrowingStream<String, Error>) {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
+        guard prompt.count <= Self.maximumInputCharacters else {
+            status = "Message is too long · maximum \(Self.maximumInputCharacters) characters"
+            return
+        }
         stop()
+        let retainedCount = Self.maximumMessages - 2
+        if messages.count > retainedCount { messages.removeFirst(messages.count - retainedCount) }
+        let historyBudget = max(0, Self.maximumRetainedCharacters - prompt.count - Self.maximumReplyCharacters)
+        var historyCharacters = messages.reduce(into: 0) { $0 += $1.text.count }
+        while historyCharacters > historyBudget, let first = messages.first {
+            historyCharacters -= first.text.count
+            messages.removeFirst()
+        }
         let id = UUID()
         turnID = id
         messages.append(Message(isUser: true, text: prompt))
         let stream = response(messages)
         messages.append(Message(isUser: false, text: ""))
         let replyIndex = messages.count - 1
+        streamUpdateCount = 0
         isResponding = true
         status = "Responding…"
         task = Task { [weak self] in
-            do {
-                for try await delta in stream {
-                    guard let self, self.turnID == id, !Task.isCancelled else { return }
-                    self.messages[replyIndex].text += delta
+            let buffer = StreamBuffer(limit: Self.maximumReplyCharacters)
+            let producer = Task.detached(priority: .userInitiated) {
+                do {
+                    for try await delta in stream {
+                        try Task.checkCancellation()
+                        await buffer.append(delta)
+                    }
+                    await buffer.finish(.success(()))
+                } catch {
+                    await buffer.finish(.failure(error))
                 }
-                guard let self, self.turnID == id else { return }
-                let answer = self.messages[replyIndex].text
-                self.finish(status: "Ready · \(self.providerName)")
-                self.onReply?(answer)
+            }
+            defer { producer.cancel() }
+            do {
+                while true {
+                    try await Task.sleep(for: Self.streamRenderInterval)
+                    try Task.checkCancellation()
+                    let batch = await buffer.drain()
+                    guard let self, self.turnID == id else { return }
+                    if !batch.text.isEmpty {
+                        let remaining = Self.maximumReplyCharacters - self.messages[replyIndex].text.count
+                        guard remaining > 0 else {
+                            producer.cancel()
+                            self.finish(status: "Reply stopped · maximum length reached")
+                            return
+                        }
+                        self.messages[replyIndex].text += String(batch.text.prefix(remaining))
+                        self.streamUpdateCount += 1
+                    }
+                    if batch.exceededLimit {
+                        producer.cancel()
+                        self.finish(status: "Reply stopped · maximum length reached")
+                        return
+                    }
+                    guard let completion = batch.completion else { continue }
+                    switch completion {
+                    case .success:
+                        let answer = self.messages[replyIndex].text
+                        self.finish(status: "Ready · \(self.providerName)")
+                        self.onReply?(answer)
+                    case .failure(let error):
+                        throw error
+                    }
+                    return
+                }
             } catch {
                 guard let self, self.turnID == id else { return }
                 self.finish(status: error is CancellationError ? "Stopped" : "Reply failed: \(error.localizedDescription)")

@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import AppKit
 import SwiftUI
 import HaloCore
@@ -6,7 +7,7 @@ import HaloCore
 struct HaloApp: App {
     @NSApplicationDelegateAdaptor(HaloDelegate.self) private var delegate
     var body: some Scene {
-        Settings { HaloSettings(voice: delegate.voice, wake: delegate.wake, setHandsFree: delegate.setHandsFree, catalog: delegate.catalog, macTools: delegate.macTools) }
+        Settings { HaloSettings(voice: delegate.voice, wake: delegate.wake, setHandsFree: delegate.setHandsFree, catalog: delegate.catalog, macTools: delegate.macTools, presentation: delegate.presentation, auth: delegate.auth) }
     }
 }
 
@@ -14,13 +15,78 @@ struct HaloApp: App {
 final class HaloDelegate: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem!
     private var panel: NSPanel!
+    let presentation = PanelPresentation()
+    private var panelTransition = UUID()
+    private var isRetracting = false
+    private var anchorScreen: NSScreen?
+    private var retractTask: Task<Void, Never>?
+    private var clickAwayMonitor: Any?
+    private var displayObserver: NSObjectProtocol?
+    private var retractWhenIdle = false
+    private var audioObservers: [NSObjectProtocol] = []
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var audioRecovery: Task<Void, Never>?
+    private var sleeping = false
     private var conversation = Conversation()
     let voice = VoiceController()
     let wake = WakeController()
     let catalog = AppCatalog()
+    let auth = ChatGPTAuth()
     lazy var macTools = MacTools(catalog: catalog)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--ui-test-host") {
+            Task { try? await Task.sleep(for: .milliseconds(100)); UIAutomation.launchTestHost() }
+            return
+        }
+        if CommandLine.arguments.contains("--check-chatgpt-auth") {
+            Task {
+                do { try await NativeChecks.chatGPT(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-ui-interaction") {
+            Task {
+                do { try await UIAutomation.checkInteraction(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-app-lifecycle") {
+            Task {
+                do { try await NativeChecks.appLifecycle(macTools); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-commands") {
+            Task {
+                do { try await NativeChecks.commands(macTools); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-ui-controls") {
+            Task {
+                do { try await NativeChecks.ui(macTools); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--check-ui-inspect"), index + 1 < CommandLine.arguments.count {
+            Task {
+                do {
+                    let snapshot = try await macTools.ui.inspect(appID: CommandLine.arguments[index + 1])
+                    let object = try JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any]
+                    let count = (object?["elements"] as? [[String: Any]])?.count ?? 0
+                    guard count > 1 else { throw ProviderError.invalidStream }
+                    print("PASS: native Accessibility inspection returned \(count) observed controls; UI contents not printed")
+                    exit(0)
+                } catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--check-native-files") {
             Task {
                 do { try await NativeChecks.files(macTools); exit(0) }
@@ -159,7 +225,20 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let key = Credentials.existingDeepSeekKey()
-        conversation = Conversation(provider: MacReplyProvider(fallback: DeepSeekProvider(key: key, tools: macTools), catalog: catalog), providerName: "DeepSeek")
+        conversation = Conversation(provider: MacReplyProvider(fallback: BrainRouter(auth: auth, tools: macTools, deepSeekKey: key), catalog: catalog), providerName: auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek")
+        auth.onProviderChange = { [weak self] in
+            guard let self else { return }
+            self.conversation.changeProviderName(self.auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek")
+            self.macTools.modelProviderName = self.auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek"
+        }
+        macTools.modelProviderName = auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek"
+        if CommandLine.arguments.contains("--check-screen") {
+            Task {
+                do { try await NativeChecks.screen(key: key); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--check-model-tools") {
             Task {
                 do {
@@ -190,7 +269,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        macTools.showApproval = { [weak self] in self?.showPanel() }
+        macTools.showApproval = { [weak self] in self?.showPanel(focusComposer: false) }
         catalog.onRefresh = { [weak self] words in self?.voice.contextualWords = words }
         Task { await catalog.refresh() }
         voice.onStart = { [weak self] in self?.conversation.stop() }
@@ -200,185 +279,239 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "circle.hexagongrid.fill", accessibilityDescription: "Halo")
+        item.button?.toolTip = "Mercy — open Halo"
+        item.button?.setAccessibilityLabel("Halo")
         item.button?.target = self
         item.button?.action = #selector(togglePanel)
-        panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 550),
-            styleMask: [.titled, .closable, .fullSizeContentView, .utilityWindow],
+        panel = HaloPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 190, height: 54),
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false
         )
         panel.title = "Halo"
-        panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.isMovable = false
         panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: ConversationView(conversation: conversation, voice: voice, wake: wake, setHandsFree: setHandsFree, catalog: catalog, macTools: macTools))
-        showPanel()
-        wake.onWake = { [weak self] in self?.showPanel() }
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        let content = NSHostingView(rootView: ConversationView(
+            conversation: conversation, voice: voice, wake: wake, setHandsFree: setHandsFree,
+            catalog: catalog, macTools: macTools, presentation: presentation, auth: auth,
+            expand: { [weak self] in self?.showPanel() },
+            retract: { [weak self] in self?.collapsePanel() },
+            activityChanged: { [weak self] in self?.panelActivityChanged() }
+        ))
+        content.sizingOptions = []
+        panel.contentView = content
+        presentation.onModeChange = { [weak self] in self?.panelModeChanged() }
+        if presentation.keepInCorner { showCornerCapsule() }
+        installPanelBehavior()
+        wake.onWake = { [weak self] in self?.showPanel(focusComposer: false) }
         setHandsFree(UserDefaults.standard.object(forKey: "wakeEnabled") as? Bool ?? true)
+        installAudioRecovery()
+        if CommandLine.arguments.contains("--request-mac-controls") { macTools.ui.requestAccess() }
     }
 
     func setHandsFree(_ enabled: Bool) {
+        audioRecovery?.cancel(); audioRecovery = nil
         wake.setEnabled(enabled, voice: voice, conversation: conversation)
     }
 
+    private func installAudioRecovery() {
+        audioObservers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] notification in
+            guard let object = notification.object else { return }
+            let id = ObjectIdentifier(object as AnyObject)
+            Task { @MainActor [weak self] in
+                guard let self, self.voice.ownsAudioEngine(id) || self.wake.ownsAudioEngine(id) else { return }
+                self.recoverAudio()
+            }
+        })
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspaceObservers.append(workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.sleeping = true
+                self.audioRecovery?.cancel(); self.audioRecovery = nil
+                self.wake.stop(); self.voice.cancel()
+            }
+        })
+        workspaceObservers.append(workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.sleeping = false
+                self?.recoverAudio()
+            }
+        })
+    }
+
+    private func recoverAudio() {
+        audioRecovery?.cancel()
+        wake.stop()
+        voice.audioDeviceChanged()
+        guard !sleeping else { return }
+        audioRecovery = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(750)) } catch { return }
+            guard let self, !Task.isCancelled, !self.sleeping else { return }
+            let enabled = UserDefaults.standard.object(forKey: "wakeEnabled") as? Bool ?? true
+            self.wake.setEnabled(enabled, voice: self.voice, conversation: self.conversation)
+        }
+    }
+
     @objc private func togglePanel() {
-        if panel.isVisible { panel.orderOut(nil) } else { showPanel() }
+        if presentation.isExpanded && !isRetracting { collapsePanel() } else { showPanel() }
     }
 
-    private func showPanel() {
-        let screen = item.button?.window?.screen ?? NSScreen.main
-        if let frame = screen?.visibleFrame {
-            panel.setFrameOrigin(NSPoint(x: frame.maxX - panel.frame.width - 16, y: frame.maxY - panel.frame.height - 12))
+    private func panelFrame(expanded: Bool) -> NSRect {
+        let screen = anchorScreen ?? item?.button?.window?.screen ?? panel?.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let width: CGFloat = expanded ? 360 : 190
+        let preferredHeight: CGFloat = macTools.approval != nil ? 610 : conversation.messages.isEmpty ? 292 : 470
+        let height = expanded ? min(preferredHeight, visible.height - 20) : 54
+        return NSRect(x: visible.maxX - width - 2, y: visible.maxY - height - 2, width: width, height: height)
+    }
+
+    private func animatePanel(to frame: NSRect) {
+        guard panel.frame != frame else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            panel.setFrame(frame, display: true)
+        } else {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                panel.animator().setFrame(frame, display: true)
+            }
         }
-        NSApp.activate()
-        panel.makeKeyAndOrderFront(nil)
     }
 
-    func applicationWillTerminate(_ notification: Notification) { wake.stop(); voice.cancel(); conversation.stop() }
-}
-
-struct ConversationView: View {
-    @Bindable var conversation: Conversation
-    @Bindable var voice: VoiceController
-    @Bindable var wake: WakeController
-    let setHandsFree: (Bool) -> Void
-    @Bindable var catalog: AppCatalog
-    @Bindable var macTools: MacTools
-    @State private var draft = ""
-    @FocusState private var composerFocused: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "circle.hexagongrid.fill")
-                    .font(.title).foregroundStyle(.mint)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Halo").font(.headline)
-                    Text(voice.phase != .idle ? voice.notice : voice.isSpeaking ? "Speaking…" : conversation.status).font(.caption).foregroundStyle(.secondary)
-                        .accessibilityLabel("Status: \(conversation.status)")
-                }
-                Spacer()
-                Menu {
-                    Button("Clear conversation", systemImage: "trash") { voice.cancel(); catalog.cancelSuggestion(); conversation.clear() }
-                    SettingsLink { Text("Settings…") }
-                    Divider()
-                    Button("Quit Halo", systemImage: "power") { NSApp.terminate(nil) }
-                        .keyboardShortcut("q")
-                } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton).fixedSize()
-                .accessibilityLabel("Halo menu")
-            }.padding(18)
-            Divider()
-            VStack(alignment: .leading, spacing: 5) {
-                Toggle("Mercy / Hey Mercy", isOn: Binding(get: { wake.enabled }, set: { value in setHandsFree(value) }))
-                    .toggleStyle(.switch)
-                Text(wake.status).font(.caption).foregroundStyle(.secondary)
-            }.padding(.horizontal, 18).padding(.vertical, 10)
-            Divider()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        if conversation.messages.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Hello. I’m Halo.").font(.title2.weight(.semibold))
-                                Text("Type a message or tap the microphone. Tap it again when you’re done speaking.")
-                                    .foregroundStyle(.secondary)
-                                Label("On-device speech · \(conversation.providerName) replies", systemImage: "waveform")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }.padding(.top, 38)
-                        }
-                        ForEach(conversation.messages) { message in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(message.isUser ? "YOU" : "HALO")
-                                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                                Text(message.text.isEmpty ? "…" : message.text)
-                                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .padding(12)
-                            .background(message.isUser ? Color.primary.opacity(0.06) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                    }.padding(18)
-                }
-                .onChange(of: conversation.messages.last?.text) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-            Divider()
-            if let approval = macTools.approval {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(approval.title).font(.headline)
-                    Text(approval.path).font(.caption).textSelection(.enabled)
-                    ScrollView { Text(approval.preview).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                        .frame(maxHeight: 160)
-                    HStack {
-                        Button("Cancel") { macTools.resolve(id: approval.id, allow: false) }
-                        Spacer()
-                        Button("Allow this change") { macTools.resolve(id: approval.id, allow: true) }.buttonStyle(.borderedProminent)
-                    }
-                }.padding(12)
-                Divider()
-            }
-            if !macTools.activity.isEmpty { Text(macTools.activity).font(.caption).foregroundStyle(.secondary).padding(8) }
-            if !catalog.suggestions.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Choose the installed app").font(.caption).foregroundStyle(.secondary)
-                    ForEach(catalog.suggestions) { app in
-                        Button { voice.cancel(); catalog.choose(app, conversation: conversation) } label: {
-                            HStack {
-                                Image(nsImage: NSWorkspace.shared.icon(forFile: app.path)).resizable().frame(width: 24, height: 24)
-                                Text(app.name)
-                                Spacer()
-                            }
-                        }.buttonStyle(.bordered)
-                    }
-                    Button("Cancel") { catalog.cancelSuggestion(); voice.cancel() }
-                }.padding(12)
-                Divider()
-            }
-            if !voice.notice.isEmpty || !voice.transcript.isEmpty && voice.phase != .idle {
-                VStack(alignment: .leading, spacing: 5) {
-                    if !voice.notice.isEmpty { Text(voice.notice).font(.caption).foregroundStyle(.secondary) }
-                    if !voice.transcript.isEmpty && voice.phase != .idle { Text(voice.transcript).font(.callout).textSelection(.enabled) }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                Divider()
-            }
-            HStack(alignment: .bottom, spacing: 10) {
-                Button(action: {
-                    if voice.phase == .idle { conversation.stop(); voice.stopSpeaking() }
-                    wake.manual(voice: voice)
-                }) {
-                    Image(systemName: voice.phase == .listening ? "checkmark" : voice.phase == .idle ? "mic.fill" : "xmark")
-                }
-                .tint(voice.phase == .listening ? .red : .accentColor)
-                .help(voice.phase == .listening ? "Finish speaking and send" : voice.phase == .idle ? "Talk to Halo" : "Cancel speech setup")
-                .accessibilityLabel(voice.phase == .listening ? "Finish speaking and send" : "Microphone")
-                TextField("Ask Halo…", text: $draft, axis: .vertical)
-                    .lineLimit(1...5).textFieldStyle(.plain).focused($composerFocused)
-                    .onSubmit(send)
-                    .accessibilityLabel("Message to Halo")
-                if conversation.isResponding || voice.isSpeaking || voice.phase != .idle {
-                    Button(action: { voice.cancel(); catalog.cancelSuggestion(); conversation.stop() }) { Image(systemName: "stop.fill") }
-                        .help("Stop reply").accessibilityLabel("Stop reply")
-                }
-                Button(action: send) { Image(systemName: "arrow.up") }
-                    .buttonStyle(.borderedProminent).tint(.mint)
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel("Send message")
-            }.padding(16)
+    private func showPanel(focusComposer: Bool = true) {
+        retractTask?.cancel()
+        panelTransition = UUID()
+        isRetracting = false
+        retractWhenIdle = !focusComposer
+        macTools.ui.rememberFrontmost()
+        if focusComposer || anchorScreen == nil { anchorScreen = item?.button?.window?.screen ?? NSScreen.main }
+        let wasVisible = panel.isVisible
+        presentation.isExpanded = true
+        let target = panelFrame(expanded: true)
+        if !wasVisible {
+            // Enter from the right edge, directly beneath the menu bar.
+            panel.setFrame(target.offsetBy(dx: target.width + 16, dy: 0), display: false)
+            panel.alphaValue = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 1 : 0
         }
-        .background(.regularMaterial)
-        .frame(minWidth: 400, minHeight: 550)
-        .onAppear { composerFocused = true }
-        .onExitCommand { voice.cancel(); catalog.cancelSuggestion(); conversation.stop() }
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.28
+            panel.animator().alphaValue = 1
+            panel.animator().setFrame(target, display: true)
+        }
+        if focusComposer {
+            NSApp.activate()
+            panel.makeKeyAndOrderFront(nil)
+            presentation.focusRequest += 1
+        }
     }
 
-    private func send() {
-        voice.cancel()
-        conversation.send(draft)
-        draft = ""
-        composerFocused = true
+    private func showCornerCapsule() {
+        panelTransition = UUID()
+        isRetracting = false
+        presentation.isExpanded = false
+        panel.alphaValue = 1
+        panel.setFrame(panelFrame(expanded: false), display: true)
+        panel.orderFrontRegardless()
+    }
+
+    private func collapsePanel() {
+        guard macTools.approval == nil else { return }
+        retractTask?.cancel()
+        panel.resignKey()
+        if presentation.keepInCorner {
+            panelTransition = UUID()
+            isRetracting = false
+            withAnimation(.easeInOut(duration: 0.24)) { presentation.isExpanded = false }
+            animatePanel(to: panelFrame(expanded: false))
+            return
+        }
+        guard panel.isVisible else { presentation.isExpanded = false; return }
+        let transition = UUID()
+        panelTransition = transition
+        isRetracting = true
+        let target = panel.frame.offsetBy(dx: panel.frame.width + 16, dy: 0)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.25
+            panel.animator().alphaValue = 0
+            panel.animator().setFrame(target, display: true)
+        } completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.panelTransition == transition else { return }
+                self.panel.orderOut(nil)
+                self.presentation.isExpanded = false
+                self.isRetracting = false
+                self.panel.alphaValue = 1
+            }
+        }
+    }
+
+    private func panelModeChanged() {
+        retractTask?.cancel()
+        if presentation.keepInCorner {
+            if !presentation.isExpanded || !panel.isVisible || isRetracting { showCornerCapsule() }
+        } else if !presentation.isExpanded {
+            collapsePanel()
+        } else {
+            panelActivityChanged()
+        }
+    }
+
+    private func panelActivityChanged() {
+        guard panel != nil else { return }
+        if presentation.isExpanded && !isRetracting { animatePanel(to: panelFrame(expanded: true)) }
+        retractTask?.cancel()
+        guard !presentation.keepInCorner, retractWhenIdle, presentation.isExpanded, !presentation.hovered, !presentation.hasDraft,
+              !conversation.isResponding, !voice.isSpeaking, voice.phase == .idle,
+              macTools.approval == nil, catalog.suggestions.isEmpty else { return }
+        retractTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(6)) } catch { return }
+            guard let self, !Task.isCancelled, !self.presentation.keepInCorner, !self.presentation.hovered, !self.presentation.hasDraft,
+                  !self.conversation.isResponding, !self.voice.isSpeaking, self.voice.phase == .idle,
+                  self.macTools.approval == nil else { return }
+            self.collapsePanel()
+        }
+    }
+
+    private func installPanelBehavior() {
+        clickAwayMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.presentation.isExpanded, !self.presentation.keepInCorner,
+                      !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+                self.collapsePanel()
+            }
+        }
+        displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.anchorScreen = nil
+                if self.panel.isVisible && !self.isRetracting {
+                    self.animatePanel(to: self.panelFrame(expanded: self.presentation.isExpanded))
+                }
+            }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showPanel()
+        return false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        audioRecovery?.cancel()
+        retractTask?.cancel()
+        if let clickAwayMonitor { NSEvent.removeMonitor(clickAwayMonitor) }
+        if let displayObserver { NotificationCenter.default.removeObserver(displayObserver) }
+        for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        wake.stop(); voice.cancel(); conversation.stop()
     }
 }
 
@@ -388,9 +521,16 @@ struct HaloSettings: View {
     let setHandsFree: (Bool) -> Void
     @Bindable var catalog: AppCatalog
     @Bindable var macTools: MacTools
+    @Bindable var presentation: PanelPresentation
+    @Bindable var auth: ChatGPTAuth
     var body: some View {
         ScrollView { Form {
-            LabeledContent("Provider", value: "DeepSeek · deepseek-flash")
+            Section("Appearance") {
+                Toggle("Keep in corner", isOn: $presentation.keepInCorner)
+                Text("Off: open from the menu bar and retract to the side. On: stay visible in the corner; retract to a small capsule.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ChatGPTSettings(auth: auth)
             LabeledContent("Speech recognition", value: "Apple · On this Mac · English")
             Toggle("Speak replies", isOn: $voice.speakReplies)
             Toggle("Listen for Mercy or Hey Mercy", isOn: Binding(get: { wake.enabled }, set: { value in setHandsFree(value) }))
@@ -400,11 +540,20 @@ struct HaloSettings: View {
                 Text("Mercy can open installed apps, inspect folders and text files, and prepare file changes. Allow access to protected folders in macOS settings when needed.").font(.caption).foregroundStyle(.secondary)
                 Text("Add Halo.app to Full Disk Access to allow protected-file reads. macOS requires you to enable this yourself.").font(.caption).foregroundStyle(.secondary)
                 Button("Show Halo in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
+                Text(macTools.ui.trusted ? "Mac interface controls: enabled" : "Mac interface controls: permission needed").font(.caption)
+                Button("Enable Mac controls…") { macTools.ui.requestAccess() }
+                Text(macTools.screen.allowed ? "Screen capture: enabled" : "Screen capture: permission needed").font(.caption)
+                Button("Check access") { macTools.ui.refreshAccess(); macTools.screen.refreshAccess() }
+                Button("Open Screen Recording settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
+                }
+                Text(Bundle.main.bundleURL.path).font(.caption2).textSelection(.enabled)
+                if !macTools.lastFailure.isEmpty { Text(macTools.lastFailure).font(.caption).textSelection(.enabled) }
                 Button("Open Full Disk Access settings") {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
                 }
             }
-            Text("Halo reuses your existing DeepSeek development key and stores its own copy in Keychain. Tap the microphone to talk, then tap again to send. Replies use the Mac’s system voice. When hands-free is on, wake detection stays on this Mac and your request sends automatically after a pause. Background audio is not sent to DeepSeek. Apps and files use native Mac tools; file changes require approval. ChatGPT sign-in and other Mac controls are still being added.")
+            Text("Halo reuses your existing DeepSeek development key and stores its own copy in Keychain. Tap the microphone to talk, then tap again to send. Replies use the Mac’s system voice. When hands-free is on, wake detection stays on this Mac and your request sends automatically after a pause. Background audio is not sent to DeepSeek. Apps and files use native Mac tools; file changes require approval. Native UI inspection, button actions, text entry, shortcuts, and window layout are available with Accessibility permission. Generic UI actions show an approval preview. Screen understanding uses a screenshot preview before sharing with DeepSeek. Continue with ChatGPT in Brain settings to connect your ChatGPT account.")
                 .font(.callout).foregroundStyle(.secondary)
         }.padding(24) }.frame(width: 460, height: 650)
     }

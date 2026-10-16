@@ -1,6 +1,24 @@
 # Native Halo migration plan
 
-Status: implementation started. Native shell, DeepSeek streaming, structured recent conversation, existing development-key import into separate Keychain storage, and offline cancellation/parser checks are implemented in `HaloNative/`. Tap-to-talk AVAudioEngine capture, Apple SpeechAnalyzer transcription, system-voice replies, and synthetic-file speech validation are also implemented. Native sherpa-onnx wake detection for “Mercy” and “Hey Mercy”, local VAD endpointing, shared capture with pre-roll, a hands-free toggle, and full synthetic voice-path checks are implemented. Installed-app indexing, speech vocabulary, spoken-name aliases, native app launching, model tool calls, and native folder/text-file access with write approval are implemented. Other Mac integrations, speaker enrollment, and ChatGPT sign-in remain pending; extended microphone-route and recovery checks are not yet complete.
+Status: implementation started. Native shell, DeepSeek streaming, structured recent conversation, existing development-key import into separate Keychain storage, and offline cancellation/parser checks are implemented in `HaloNative/`. Tap-to-talk AVAudioEngine capture, Apple SpeechAnalyzer transcription, system-voice replies, and synthetic-file speech validation are also implemented. Native sherpa-onnx wake detection for “Mercy” and “Hey Mercy”, local VAD endpointing, shared capture with pre-roll, a hands-free toggle, and full synthetic voice-path checks are implemented. Installed-app indexing, speech vocabulary, spoken-name aliases, native app launching, model tool calls, and native folder/text-file access with write approval are implemented. Generic Accessibility UI inspection/actions, targeted Unicode typing/shortcuts, and native window placement are implemented and pass a cross-process disposable-app interaction check. Screenshot understanding through ScreenCaptureKit and DeepSeek, exact-image sharing previews, stable local signing, and audio device/sleep recovery handlers are now implemented. Additional Mac integrations, speaker enrollment, and ChatGPT sign-in remain pending; extended microphone-route and recovery checks are not yet complete.
+
+## Legacy feature parity tracker
+
+Use the existing implementation as the behavior reference before porting a feature.
+
+| Capability | Swift status | Remaining validation/work |
+| --- | --- | --- |
+| Installed apps, spoken aliases, opening apps | Implemented | Real-voice corpus and ambiguity checks |
+| Website opening and normal app quit | Implemented | Verify browser handoff and unsaved-work prompts manually; no force quit |
+| Window arrangement | Implemented; full-screen exit restored and tested | Cross-process disposable full-screen exit and placement pass; physical multi-display checks remain |
+| File browsing, text reads/writes | Implemented with write approval | Broader protected-folder recovery |
+| Calendar, Reminders, Contacts | Pending | Native EventKit/Contacts adapters and permissions |
+| Notes, Messages, Shortcuts | Pending | Preserve legacy tool behavior and previews |
+| General shell/AppleScript tools | Implemented | Exact approval previews, 60-second timeout, 32 KB per output stream, cancellation checks pass; detached subprocesses can outlive the parent |
+| Screen understanding | Implemented with exact screenshot preview | Disposable window capture → DeepSeek visual code reading passes; app permission must be verified separately from CLI checks |
+| Voice follow-ups, speaker enrollment | Pending | Preserve legacy behavior; validate using real speech |
+
+Native app/web tools use NSWorkspace and NSRunningApplication, require no Accessibility permission, and report browser handoff or pending quit honestly.
 
 ## Goal and boundaries
 
@@ -129,3 +147,7 @@ Complete milestone 0 and build the milestone 1 native shell: isolated Halo ident
 - Apple Accessibility: https://developer.apple.com/documentation/applicationservices/axuielement_h
 - Apple EventKit: https://developer.apple.com/documentation/eventkit/creating-events-and-reminders
 - sherpa-onnx Swift examples: https://k2-fsa.github.io/sherpa/onnx/swift-api/examples.html
+
+## Verification update — 2026-10-16
+
+See `HaloNative/VERIFICATION.md` for the latest evidence and remaining physical-device/permission checks. The Swift build now reuses the existing Mercy Local Signing certificate when available, or accepts `HALO_SIGN_IDENTITY`; it does not weaken the designated requirement. Ad-hoc signing remains a warned fallback on machines without a configured identity.

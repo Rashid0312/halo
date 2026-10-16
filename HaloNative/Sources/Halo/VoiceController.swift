@@ -3,6 +3,7 @@ import AppKit
 import Observation
 import Speech
 import Synchronization
+import HaloCore
 
 private enum VoiceError: LocalizedError {
     case unavailable, microphone, format
@@ -90,6 +91,8 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
     }
     var onTranscript: ((String) -> Void)?
     var onStart: (() -> Void)?
+    var onRequestContent: (() -> Void)?
+    @ObservationIgnored private var reportedRequest = false
     var contextualWords: [String] = ["Mercy", "Hey Mercy"]
     @ObservationIgnored private var externalAudioFeed: AudioFeed?
     @ObservationIgnored private var pendingSamples: [Float] = []
@@ -161,6 +164,15 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
         return try await results.value
     }
 
+    func ownsAudioEngine(_ id: ObjectIdentifier) -> Bool {
+        engine.map { ObjectIdentifier($0) == id } ?? false
+    }
+
+    func audioDeviceChanged() {
+        cancel()
+        notice = "Audio device changed. Tap the microphone to start a new request."
+    }
+
     func toggleListening() {
         if phase == .listening { finishListening() }
         else if phase == .idle { startListening() }
@@ -215,6 +227,11 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
                             if result.isFinal { finalSegments.append(text); partial = "" }
                             else { partial = text }
                             transcript = (finalSegments + [partial]).filter { !$0.isEmpty }.joined(separator: " ")
+                            let request = removeWake ? WakeTranscript.request(from: transcript) ?? "" : transcript
+                            if !request.isEmpty && !reportedRequest {
+                                reportedRequest = true
+                                onRequestContent?()
+                            }
                         }
                     } catch {
                         guard generation == id else { return }
@@ -303,12 +320,8 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
                 await resultsTask?.value
                 guard generation == id else { return }
                 var text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                if removeWake {
-                    // Confirm a wake phrase in local transcription before sending anything to the model.
-                    if let match = text.range(of: #"\b(?:hey[\s,]+)?mercy\b[\s,.!?]*"#, options: [.regularExpression, .caseInsensitive]) {
-                        text = String(text[match.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                    } else { text = "" }
-                }
+                let wakeConfirmed = !removeWake || WakeTranscript.request(from: text) != nil
+                if removeWake { text = WakeTranscript.request(from: text) ?? "" }
                 timeoutTask?.cancel()
                 phase = .idle
                 analyzer = nil
@@ -317,7 +330,9 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
                 pendingSamples = []
                 externalMode = false
                 resultsTask = nil
-                notice = text.isEmpty ? "I didn’t catch that. Tap the microphone to try again." : ""
+                if !wakeConfirmed { notice = "The wake detector heard Mercy, but transcription couldn’t confirm the phrase. Try again or use the microphone button." }
+                else if text.isEmpty { notice = removeWake ? "I heard the wake phrase but didn’t catch the request after it. Try again or use the microphone button." : "I didn’t catch that. Tap the microphone to try again." }
+                else { notice = "" }
                 if !text.isEmpty { onTranscript?(text) }
             } catch {
                 guard generation == id else { return }
@@ -329,6 +344,8 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
 
     func cancel() {
         generation = UUID()
+        onRequestContent = nil
+        reportedRequest = false
         externalAudioFeed = nil
         pendingSamples = []
         externalMode = false

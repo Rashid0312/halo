@@ -4,6 +4,32 @@ import Security
 enum Credentials {
     private static let service = "app.halo.native.dev.providers"
 
+    static func read(account: String) throws -> Data? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                   kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw ChatGPTFailure("Keychain access failed (\(status)).") }
+        return result as? Data
+    }
+
+    static func write(account: String, data: Data?) throws {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+        guard let data else {
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw ChatGPTFailure("Could not delete saved credentials.") }
+            return
+        }
+        let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if update == errSecSuccess { return }
+        guard update == errSecItemNotFound else { throw ChatGPTFailure("Could not update saved credentials.") }
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw ChatGPTFailure("Could not save credentials to Keychain.") }
+    }
+
     /// Imports only the requested existing development key, never logging its value.
     static func existingDeepSeekKey() -> String {
         let query: [String: Any] = [

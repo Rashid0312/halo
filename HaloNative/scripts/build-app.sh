@@ -4,6 +4,19 @@ cd "$(dirname "$0")/.."
 # Reuse the pinned native binaries already installed for the legacy app.
 # They are bundled into Halo; neither Node nor its addon runs in the native app.
 mkdir -p .native
+SIGN_IDENTITY="${HALO_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ] && [ -f .native/signing-identity.txt ]; then
+    SIGN_IDENTITY="$(cat .native/signing-identity.txt)"
+fi
+if [ -z "$SIGN_IDENTITY" ]; then
+    case "$(security find-identity -v -p codesigning 2>/dev/null)" in
+        *'"Mercy Local Signing"'*) SIGN_IDENTITY="Mercy Local Signing" ;;
+    esac
+fi
+if [ -z "$SIGN_IDENTITY" ]; then
+    SIGN_IDENTITY="-"
+    printf 'Ad-hoc development signing: privacy grants can expire after code changes. Configure a stable signing identity for daily use.\n' >&2
+fi
 cp ../node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib .native/
 cp ../node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib .native/
 swift build -c release
@@ -36,10 +49,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 /usr/libexec/PlistBuddy -c "Add :HaloDevelopmentEnvFile string $PWD/../.env" "$APP/Contents/Info.plist"
 xattr -cr "$APP"
-codesign --force --sign - "$APP/Contents/Frameworks/libonnxruntime.dylib"
-codesign --force --sign - "$APP/Contents/Frameworks/libsherpa-onnx-c-api.dylib"
+codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP/Contents/Frameworks/libonnxruntime.dylib"
+codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP/Contents/Frameworks/libsherpa-onnx-c-api.dylib"
 xattr -cr "$APP"
-codesign --force --sign - "$APP"
+codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP"
+codesign --verify --deep --strict "$APP"
 mkdir -p "$PWD/build"
 ditto --norsrc --noextattr "$APP" "$PWD/build/Halo.app"
 printf 'Built %s\n' "$PWD/build/Halo.app"

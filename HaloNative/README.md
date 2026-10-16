@@ -1,6 +1,6 @@
 # Halo Native
 
-Native SwiftUI/AppKit shell for macOS 26+ on Apple Silicon. Includes live DeepSeek conversation, tap-to-talk on-device Apple speech recognition, system-voice replies, and cancellation. Hands-free activation supports “Mercy” and “Hey Mercy”. Native app and file actions are available. ChatGPT sign-in, general window/UI control, and Calendar/Reminders integrations are not connected yet.
+Native SwiftUI/AppKit shell for macOS 26+ on Apple Silicon. Includes live DeepSeek conversation, tap-to-talk on-device Apple speech recognition, system-voice replies, and cancellation. Hands-free activation supports “Mercy” and “Hey Mercy”. Native app and file actions are available. Native Accessibility-based UI and window controls are available. ChatGPT sign-in, screenshot understanding, and Calendar/Reminders-specific integrations are not connected yet.
 
 Build with the installed Command Line Tools (full Xcode is not required). The build currently reuses the pinned sherpa-onnx 1.13.8 native libraries under the legacy `node_modules` and the existing `models` directory. It copies them into the app bundle; no Node/Electron runtime is used:
 
@@ -40,3 +40,29 @@ App-aware speech and native access:
 - Protected locations may need macOS Full Disk Access. Settings provides a button to that pane and a button revealing the running Halo.app. The user must grant the OS permission. Granting a permission does not add unsupported features or bypass macOS protection.
 
 Checks: `--check-app-catalog` verifies the real installed Stremio alias; `--check-open-app streamio` actually launches it; `--check-app-voice-file sample.wav` verifies local wake/transcription/app resolution; `--check-native-files` uses disposable temporary fixtures to verify reads and write approval/denial/cancellation. `--check-model-tools` makes a small live DeepSeek request and verifies that it actually calls the native app-list tool.
+
+General Mac interface controls:
+
+- `inspect_ui` reads a running app’s real Accessibility tree on a separate actor, with bounded depth, node count, text size, and messaging timeouts. `root_id` drills into an observed subtree. Every inspection invalidates the previous control IDs. UI contents are untrusted data; protected text-field values are omitted.
+- `ui_action` performs an action actually exposed by the observed control. `type_text` focuses a specific observed text field and checks that focus before posting Unicode input to that process. `keypress` sends a validated shortcut to a named running app. These generic actions require a preview/approval and check cancellation before execution. Results distinguish accepted input from verified outcomes; the model is instructed to inspect again afterward.
+- `window_layout` arranges or minimizes an app’s focused window, including placement on another connected display. It accounts for the menu bar/Dock work area and the Accessibility coordinate system. Full-screen Spaces and app-enforced minimum sizes remain limitations. `screen_info` lists connected displays without capturing pixels.
+- Enable native interface access with Settings → Mac access → Enable Mac controls. macOS must authorize Halo. The app remembers the external app used before its panel activated, so “this app” does not accidentally target Halo. Some apps expose incomplete Accessibility trees; screenshot/pointer fallbacks have not been added yet. Secure authentication and protected OS dialogs may require the user.
+- The model can perform up to twelve tool rounds per request. Stop cancels pending actions/approvals; it cannot undo input or external actions that already completed.
+
+Validation: `--check-ui-controls` checks definitions, shortcuts, stale-reference rejection and reports OS access; `--check-ui-inspect com.apple.finder` reads real controls without printing contents. `--check-ui-interaction` starts a separate disposable host app and verifies cross-process inspection, button action, multi-chunk Unicode typing, a keyboard shortcut, window movement and stale-ID invalidation. It does not edit user documents. The host is separate because self-targeted AX calls can directly invoke AppKit on the caller’s thread, which is unsafe for Swift MainActor UI callbacks.
+
+Native app/web tools: `open_url` hands HTTP(S) links to the default browser; `quit_app` requests normal termination by a running app’s bundle ID, preserves unsaved-work prompts, and reports pending termination without force quitting. Neither requires Accessibility access.
+
+General execution: `run_shell` executes zsh commands and `run_applescript` controls scriptable apps after the exact source and explanation are approved. Both run off the UI actor with a 60-second deadline, capped stdout/stderr (32 KB each), no interactive stdin, and cancellation of the launched process. Credentials from Halo’s environment are not inherited. Completed actions cannot be undone, and independently detached subprocesses may survive cancellation. `--check-commands` verifies output, failure, output limits, timeout, running cancellation, approval denial/acceptance, and cancellation before script approval. Screen understanding is provided separately by inspect_screen; command execution itself does not add visual perception.
+
+`inspect_screen` captures a chosen app window or display (excluding Halo for display capture), shows the exact image, and only shares it with DeepSeek after approval. Images remain in memory for the current tool loop, not in chat history or screenshot files. `--check-screen` verifies a disposable window containing a synthetic visual code; it does not share your desktop.
+
+Build signing: the script uses `HALO_SIGN_IDENTITY`, an ignored `.native/signing-identity.txt` override, or the existing trusted `Mercy Local Signing` identity. Otherwise it warns and signs ad-hoc. `bash scripts/check-signing.sh` checks that two different executables satisfy Halo's certificate-based designated requirement. Stable signing addresses rebuild identity changes; switching from an old ad-hoc build can still require a one-time permission refresh.
+
+### Panel appearance
+
+Halo now opens from its menu-bar icon as a slim native Liquid Glass panel that slides in from the right edge below the menu bar. In the default mode, retracting, Escape, or clicking another app slides it out completely. The header pin or Settings → Appearance → Keep in corner saves a persistent corner mode: click-away leaves the panel visible, and retracting shrinks it to a small glass capsule. Drafts survive retraction. Approval previews stay open until resolved. macOS controls menu-bar item ordering; Command-drag Halo's icon to place it beside Siri. Reduced Motion disables the window slide.
+
+### ChatGPT connection
+
+Settings → Brain → Continue with ChatGPT ports Mercy's documented browser/PKCE sign-in to native Swift. Tokens are validated against OpenAI's JWKS and stored in Halo's Keychain entry; refreshes are serialized. Halo obtains the account's model catalog and streams Responses API requests (`store: false`, low reasoning), including native tools and approved screenshots. Successful sign-in selects ChatGPT automatically; DeepSeek remains selectable. The Electron-encrypted Mercy session is not imported; complete one new Halo browser authorization. Source: https://developers.openai.com/siwc/token-sharing-open-source/sign-in
