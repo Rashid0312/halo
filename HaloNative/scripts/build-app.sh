@@ -1,9 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Reuse the pinned native binaries already installed for the legacy app.
+# They are bundled into Halo; neither Node nor its addon runs in the native app.
+mkdir -p .native
+cp ../node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib .native/
+cp ../node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib .native/
 swift build -c release
-APP="$PWD/build/Halo.app"
-mkdir -p "$APP/Contents/MacOS"
+# Sign outside the Desktop file-provider directory: Finder metadata can be
+# reattached there between xattr cleanup and codesign.
+STAGING="$(mktemp -d "${TMPDIR:-/tmp}/halo-native.XXXXXX")"
+APP="$STAGING/Halo.app"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources/models"
+cp .native/*.dylib "$APP/Contents/Frameworks/"
+cp Resources/* "$APP/Contents/Resources/"
+cp -R ../models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 "$APP/Contents/Resources/models/"
+cp ../models/silero_vad.onnx "$APP/Contents/Resources/models/"
 cp .build/release/Halo "$APP/Contents/MacOS/Halo"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -17,10 +29,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>LSUIElement</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>Halo listens locally for Mercy or Hey Mercy when hands-free is enabled, and when you tap the microphone.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Halo transcribes what you say on this Mac.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
 /usr/libexec/PlistBuddy -c "Add :HaloDevelopmentEnvFile string $PWD/../.env" "$APP/Contents/Info.plist"
 xattr -cr "$APP"
+codesign --force --sign - "$APP/Contents/Frameworks/libonnxruntime.dylib"
+codesign --force --sign - "$APP/Contents/Frameworks/libsherpa-onnx-c-api.dylib"
+xattr -cr "$APP"
 codesign --force --sign - "$APP"
-printf 'Built %s\n' "$APP"
+mkdir -p "$PWD/build"
+ditto --norsrc --noextattr "$APP" "$PWD/build/Halo.app"
+printf 'Built %s\n' "$PWD/build/Halo.app"

@@ -1,6 +1,6 @@
 # Native Halo migration plan
 
-Status: implementation started. Native shell, DeepSeek streaming, structured recent conversation, existing development-key import into separate Keychain storage, and offline cancellation/parser checks are implemented in `HaloNative/`. Audio, actions, and ChatGPT sign-in remain pending.
+Status: implementation started. Native shell, DeepSeek streaming, structured recent conversation, existing development-key import into separate Keychain storage, and offline cancellation/parser checks are implemented in `HaloNative/`. Tap-to-talk AVAudioEngine capture, Apple SpeechAnalyzer transcription, system-voice replies, and synthetic-file speech validation are also implemented. Native sherpa-onnx wake detection for “Mercy” and “Hey Mercy”, local VAD endpointing, shared capture with pre-roll, a hands-free toggle, and full synthetic voice-path checks are implemented. Installed-app indexing, speech vocabulary, spoken-name aliases, native app launching, model tool calls, and native folder/text-file access with write approval are implemented. Other Mac integrations, speaker enrollment, and ChatGPT sign-in remain pending; extended microphone-route and recovery checks are not yet complete.
 
 ## Goal and boundaries
 

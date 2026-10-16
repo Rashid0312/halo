@@ -47,6 +47,8 @@ public final class Conversation {
     public private(set) var status: String
     public let providerName: String
     public let isDemo: Bool
+    @ObservationIgnored public var onReply: ((String) -> Void)?
+    @ObservationIgnored public var onStop: (() -> Void)?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var turnID: UUID?
     private let provider: any ReplyProvider
@@ -59,25 +61,43 @@ public final class Conversation {
     }
 
     public func send(_ input: String) {
+        begin(input) { [provider] history in provider.reply(to: history) }
+    }
+
+    public func performAction(_ input: String, action: @escaping @MainActor @Sendable () async throws -> String) {
+        begin(input) { _ in
+            AsyncThrowingStream { continuation in
+                let task = Task {
+                    do { continuation.yield(try await action()); continuation.finish() }
+                    catch { continuation.finish(throwing: error) }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+    }
+
+    private func begin(_ input: String, response: ([Message]) -> AsyncThrowingStream<String, Error>) {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         stop()
         let id = UUID()
         turnID = id
         messages.append(Message(isUser: true, text: prompt))
-        let history = messages
+        let stream = response(messages)
         messages.append(Message(isUser: false, text: ""))
         let replyIndex = messages.count - 1
         isResponding = true
         status = "Responding…"
-        task = Task { [weak self, provider] in
+        task = Task { [weak self] in
             do {
-                for try await delta in provider.reply(to: history) {
+                for try await delta in stream {
                     guard let self, self.turnID == id, !Task.isCancelled else { return }
                     self.messages[replyIndex].text += delta
                 }
                 guard let self, self.turnID == id else { return }
+                let answer = self.messages[replyIndex].text
                 self.finish(status: "Ready · \(self.providerName)")
+                self.onReply?(answer)
             } catch {
                 guard let self, self.turnID == id else { return }
                 self.finish(status: error is CancellationError ? "Stopped" : "Reply failed: \(error.localizedDescription)")
@@ -86,6 +106,7 @@ public final class Conversation {
     }
 
     public func stop() {
+        onStop?()
         turnID = nil
         task?.cancel()
         task = nil

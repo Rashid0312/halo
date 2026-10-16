@@ -46,3 +46,4 @@ native/speech/mercy-speech
 # Native Halo build output
 HaloNative/.build/
 HaloNative/build/
+HaloNative/.native/
