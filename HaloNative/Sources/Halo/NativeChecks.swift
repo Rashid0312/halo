@@ -174,6 +174,53 @@ enum NativeChecks {
         print("PASS: native window screenshot, JPEG encoding, image attachment, live DeepSeek tool call, and visual reading of disposable test window; no desktop image sent")
     }
 
+    static func peekabooCapture(_ tools: MacTools) async throws {
+        let appID = "com.apple.Dictionary"
+        let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: appID).isEmpty
+        if !wasRunning {
+            let opened = try await tools.execute(name: "open_app", arguments: #"{"name":"Dictionary"}"#)
+            let object = try JSONSerialization.jsonObject(with: Data(opened.utf8)) as? [String: Any]
+            guard object?["ok"] as? Bool == true else { throw Failure("Could not open the capture fixture") }
+            for _ in 0..<50 {
+                if !NSRunningApplication.runningApplications(withBundleIdentifier: appID).isEmpty { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        defer {
+            if !wasRunning {
+                for app in NSRunningApplication.runningApplications(withBundleIdentifier: appID) { app.terminate() }
+            }
+        }
+
+        let pending = Task {
+            try await tools.execute(name: "inspect_screen", arguments: #"{"app_id":"com.apple.Dictionary"}"#)
+        }
+        let approval: MacTools.Approval
+        do {
+            approval = try await waitForApproval(tools, attempts: 1000)
+        } catch {
+            // If capture failed before creating an approval, surface that cause.
+            let result = try await pending.value
+            let object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any]
+            throw Failure(object?["error"] as? String ?? error.localizedDescription)
+        }
+        guard approval.title.hasPrefix("Share this image"),
+              approval.path.contains(appID),
+              let image = approval.imageData,
+              image.starts(with: [0xFF, 0xD8]),
+              NSImage(data: image) != nil else {
+            tools.resolve(id: approval.id, allow: false)
+            throw Failure("Peekaboo capture was not presented as a valid in-memory JPEG approval")
+        }
+        tools.resolve(id: approval.id, allow: false)
+        let denied = try JSONSerialization.jsonObject(with: Data(try await pending.value.utf8)) as? [String: Any]
+        guard denied?["denied"] as? Bool == true,
+              denied?["image_base64"] == nil else {
+            throw Failure("Denied Peekaboo capture leaked image payload")
+        }
+        print("PASS: Peekaboo window capture reached Halo's exact image approval and denial prevented model sharing; pixels not printed or persisted by Halo")
+    }
+
     static func files(_ tools: MacTools) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("halo-tools-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -220,8 +267,8 @@ enum NativeChecks {
         print("PASS: native folder/text reads, exact write preview, denial, approval, cancellation, and special-file rejection")
     }
 
-    private static func waitForApproval(_ tools: MacTools) async throws -> MacTools.Approval {
-        for _ in 0..<100 {
+    private static func waitForApproval(_ tools: MacTools, attempts: Int = 100) async throws -> MacTools.Approval {
+        for _ in 0..<attempts {
             if let approval = tools.approval { return approval }
             try await Task.sleep(for: .milliseconds(10))
         }

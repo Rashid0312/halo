@@ -82,8 +82,8 @@ No Phase 0 repository blocker remains. Representative signed-GUI workflow latenc
 - [x] Add a `MacInteractionDriver` protocol owned by Halo.
 - [x] Keep the existing Halo implementation as `LegacyMacInteractionDriver` during migration.
 - [x] Add a `PeekabooMacInteractionDriver` behind a development feature flag.
-- [ ] Implement read-only permission status, application/window listing, UI inspection, and one app-window capture.
-- [x] Prove that Halo's signed GUI process owns Accessibility permission on this development Mac. Screen Recording remains to be proven through the new driver.
+- [ ] Implement read-only permission status, application/window listing, UI inspection, and one app-window capture. Permission status, UI inspection, and window capture are complete; Peekaboo-backed application/window listing remains.
+- [x] Prove that Halo's signed GUI process owns Accessibility and Screen Recording permissions on this development Mac.
 - [ ] Measure dependency size, build time, launch impact, and idle resource cost.
 
 Current dependency measurements: first cold release build after adding `PeekabooAutomationKit` completed in 108.70 seconds; the incremental release build containing the driver completed in 22.76 seconds. The signed bundle is now 55,856 KiB and its executable is 17,973,184 bytes, increases of 14,104 KiB and 14,444,576 bytes from baseline. Launch and idle-resource measurements remain pending.
@@ -228,4 +228,7 @@ The broader `PeekabooAutomation` target imports Tachikoma, TachikomaAudio, MCP, 
 - Updated the existing `--check-ui-inspect` executable check to exercise the selected driver rather than bypassing the new boundary.
 - The driver release build passed. `HaloCoreChecks`, signed app packaging, stable-signing validation, and `git diff --check` also passed. The packaged bundle grew from 41,752 KiB to 55,856 KiB; the executable grew from 3,528,608 to 17,973,184 bytes. This material size cost is recorded for the Phase 1 decision gate.
 - Ran the signed bundle directly with `HALO_MAC_DRIVER=peekaboo --check-ui-inspect com.apple.finder`. Peekaboo returned four observed controls and the check printed only the count, proving the feature selector, linked service, and signed process's Accessibility grant work end to end. Screen Recording and a disposable fixture remain pending, so Phase 1 stays in progress.
+- Added a `--check-peekaboo-capture` harness that uses Dictionary as a disposable window only when it was not already running, verifies an in-memory JPEG reaches Halo's exact screenshot approval, denies the approval, confirms no image payload is returned for model sharing, and closes only the test-opened app.
+- The first capture-harness run timed out waiting for approval at its inherited one-second deadline. No screenshot was approved or shared. The harness deadline was expanded to ten seconds to accommodate cold ScreenCaptureKit startup before repeating the test.
+- After improving the harness to surface pre-approval failures, the signed Peekaboo capture test passed: Dictionary was captured, a valid in-memory JPEG reached Halo's existing approval object, denial returned no base64 image to the model path, and the fixture was closed only when the test had opened it. No pixels or sensitive UI text were printed.
 - Phase 0 remains in progress only because the signed-GUI workflow latency baseline is pending. Phase 1 interface work may proceed without importing third-party source.
