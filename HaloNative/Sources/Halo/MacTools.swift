@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import HaloCore
 import Observation
 
@@ -53,7 +54,8 @@ final class MacTools: MacToolExecutor {
           {"type":"function","function":{"name":"type_text","description":"Type Unicode text into a specific observed field after showing the exact text for approval. Focus is checked; this inserts at the selection, not a replacement of all content. Text including newline may submit forms or execute commands. Inspect afterward to verify.","parameters":{"type":"object","properties":{"element_id":{"type":"string"},"text":{"type":"string"}},"required":["element_id","text"]}}},
           {"type":"function","function":{"name":"keypress","description":"Send a keyboard shortcut to a named running app after approval. Example cmd+l, cmd+shift+s, return, tab, escape. App ID must be observed. Inspect afterward to verify.","parameters":{"type":"object","properties":{"app_id":{"type":"string"},"shortcut":{"type":"string"}},"required":["app_id","shortcut"]}}},
           {"type":"function","function":{"name":"window_layout","description":"Natively arrange the focused window of a running app. Use screen_info for display indices. Automatically exits full screen and waits for the transition before arranging. Do not ask for a separate fullscreen toggle. Reversible layouts do not need an action preview.","parameters":{"type":"object","properties":{"app_id":{"type":"string"},"position":{"type":"string","enum":["left","right","top","bottom","maximize","center","keep","minimize"]},"display_index":{"type":"integer"}},"required":["position"]}}},
-          {"type":"function","function":{"name":"screen_info","description":"List connected display names, sizes and indices for window arrangement; does not capture screen pixels.","parameters":{"type":"object","properties":{}}}}
+          {"type":"function","function":{"name":"screen_info","description":"List connected display names, sizes and indices for window arrangement; does not capture screen pixels.","parameters":{"type":"object","properties":{}}}},
+          {"type":"function","function":{"name":"list_windows","description":"List the open windows for a running app by its bundle ID. Returns title, bounds, minimized and screen placement. Use running_apps first to get the bundle ID. Requires Accessibility permission.","parameters":{"type":"object","properties":{"app_id":{"type":"string"}},"required":["app_id"]}}}
         ]
         """#.utf8)
     }
@@ -69,6 +71,7 @@ final class MacTools: MacToolExecutor {
                     "open_app": "Opening app…", "list_files": "Reading folder…", "read_file": "Reading file…",
                     "run_shell": "Preparing command…", "run_applescript": "Preparing AppleScript…", "open_path": "Opening file or folder…", "open_url": "Opening website…", "search_web": "Searching the web…", "read_web_page": "Reading a web page…", "quit_app": "Quitting app…", "write_file": "Preparing file preview…",
                     "inspect_screen": "Capturing screen…", "inspect_ui": "Inspecting the app interface…", "ui_action": "Preparing app action…",
+                    "list_windows": "Listing app windows…",
                     "type_text": "Preparing text entry…", "keypress": "Preparing keyboard shortcut…", "window_layout": "Arranging window…"][name] ?? ""
         onActivity?(activity)
         defer {
@@ -81,9 +84,34 @@ final class MacTools: MacToolExecutor {
                 if catalog.apps.isEmpty { await catalog.refresh() }
                 return Self.json(["ok": true, "apps": catalog.apps.map { ["name": $0.name, "bundle_id": $0.id] }])
             case "running_apps":
-                return Self.json(["ok": true, "apps": NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.map {
-                    ["name": $0.localizedName ?? "", "bundle_id": $0.bundleIdentifier ?? ""]
-                }])
+                let start = Date()
+                let apps = try await interaction.runningApps()
+                let elapsed = Int((Date().timeIntervalSince(start) * 1000).rounded())
+                return Self.json(["ok": true, "apps": apps, "driver_ms": elapsed])
+            case "list_windows":
+                guard let appID = args["app_id"] as? String, !appID.isEmpty else {
+                    return Self.json(["ok": false, "error": "Need an app_id from running_apps."])
+                }
+                if let windows = try await interaction.listWindows(appID: appID) {
+                    return Self.json(["ok": true, "app_id": appID, "windows": windows])
+                }
+                // Legacy driver returns nil; fall back to a lightweight CG-based listing.
+                let cgApps = NSRunningApplication.runningApplications(withBundleIdentifier: appID)
+                let pids = Set(cgApps.map { $0.processIdentifier })
+                let cgOptions: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+                var cgWindows: [[String: Any]] = []
+                if let list = CGWindowListCopyWindowInfo(cgOptions, kCGNullWindowID) as? [[String: Any]] {
+                    cgWindows = list.compactMap { info -> [String: Any]? in
+                        guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pids.contains(pid),
+                              let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { return nil }
+                        var entry: [String: Any] = ["title": info[kCGWindowName as String] ?? ""]
+                        if let bounds = info[kCGWindowBounds as String] as? [String: Any] {
+                            entry["bounds"] = bounds
+                        }
+                        return entry
+                    }
+                }
+                return Self.json(["ok": true, "app_id": appID, "windows": cgWindows, "driver": "cg_fallback"])
             case "open_app":
                 guard let appName = args["name"] as? String else { return Self.json(["ok": false, "error": "Need an app name"] ) }
                 if !catalog.suggestions.isEmpty {

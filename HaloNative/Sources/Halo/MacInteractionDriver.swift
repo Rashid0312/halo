@@ -23,6 +23,12 @@ protocol MacInteractionDriver: AnyObject {
     func rememberFrontmostApplication()
     func inspect(appID: String?, rootID: String?) async throws -> String
     func capture(appID: String?, displayIndex: Int?) async throws -> MacInteractionCapture
+
+    /// List running user-facing applications with basic window counts.
+    func runningApps() async throws -> [[String: Any]]
+
+    /// List windows for a running app. Returns nil if the driver cannot enumerate windows for this app.
+    func listWindows(appID: String) async throws -> [[String: Any]]?
 }
 
 /// Compatibility driver retained until the pinned Peekaboo implementation
@@ -64,6 +70,36 @@ final class LegacyMacInteractionDriver: MacInteractionDriver {
             frame: capture.frame
         )
     }
+
+    func runningApps() async throws -> [[String: Any]] {
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        // Count on-screen windows per PID using CGWindowList so legacy path gains window_count too.
+        var windowCounts: [pid_t: Int] = [:]
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        if let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] {
+            for info in list {
+                guard let pid = (info[kCGWindowOwnerPID as String] as? pid_t),
+                      let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+                windowCounts[pid, default: 0] += 1
+            }
+        }
+        return apps.compactMap { app -> [String: Any]? in
+            guard !app.isTerminated else { return nil }
+            let item: [String: Any] = [
+                "name": app.localizedName ?? "",
+                "bundle_id": app.bundleIdentifier ?? "",
+                "is_active": app.isActive,
+                "window_count": windowCounts[app.processIdentifier] ?? 0,
+                "driver": "legacy",
+            ]
+            return item
+        }
+    }
+
+    func listWindows(appID: String) async throws -> [[String: Any]]? {
+        // Legacy driver cannot enumerate per-app windows beyond CG capture; return nil so callers fall back.
+        return nil
+    }
 }
 
 /// Opt-in compatibility driver backed by the pinned Peekaboo automation kit.
@@ -75,6 +111,7 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
     private let permissions = PermissionsService()
     private let automation: UIAutomationService
     private let captureService: PeekabooAutomationKit.ScreenCaptureService
+    private let appService: ApplicationService
     private var rememberedApplicationID: String?
 
     init(ui: UIAutomation, screen: ScreenService) {
@@ -92,6 +129,7 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             loggingService: LoggingService(),
             feedbackClient: NoopAutomationFeedbackClient()
         )
+        self.appService = ApplicationService(feedbackClient: NoopAutomationFeedbackClient())
     }
 
     let name = "peekaboo"
@@ -182,6 +220,48 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             scope: scope,
             frame: frame
         )
+    }
+
+    func runningApps() async throws -> [[String: Any]] {
+        let start = Date()
+        let output = try await appService.listApplications()
+        let elapsed = Date().timeIntervalSince(start)
+        let apps = output.data.applications.filter { $0.activationPolicy == .regular }
+        return apps.map { app -> [String: Any] in
+            var item: [String: Any] = [
+                "name": app.name,
+                "bundle_id": app.bundleIdentifier ?? "",
+                "is_active": app.isActive,
+                "window_count": app.windowCount,
+                "driver": name,
+                "driver_ms": Int((elapsed * 1000).rounded()),
+            ]
+            if let policy = app.activationPolicy { item["activation_policy"] = policy.rawValue }
+            return item
+        }
+    }
+
+    func listWindows(appID: String) async throws -> [[String: Any]]? {
+        let output = try await appService.listWindows(for: appID, timeout: 4)
+        return output.data.windows.map { w -> [String: Any] in
+            var item: [String: Any] = [
+                "title": w.title,
+                "index": w.index,
+                "is_minimized": w.isMinimized,
+                "is_main": w.isMainWindow,
+                "bounds": [
+                    "x": w.bounds.origin.x,
+                    "y": w.bounds.origin.y,
+                    "width": w.bounds.width,
+                    "height": w.bounds.height,
+                ],
+            ]
+            if let frontmost = w.isFrontmost { item["is_frontmost"] = frontmost }
+            if let key = w.isKeyWindow { item["is_key"] = key }
+            if let screenIdx = w.screenIndex { item["screen_index"] = screenIdx }
+            if let screenName = w.screenName { item["screen_name"] = screenName }
+            return item
+        }
     }
 
     private static func jpegData(from data: Data) -> Data? {
