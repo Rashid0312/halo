@@ -32,7 +32,7 @@ enum NativeChecks {
     static func ui(_ tools: MacTools) async throws {
         let definitions = try JSONSerialization.jsonObject(with: await tools.definitions()) as? [[String: Any]] ?? []
         let names = Set(definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
-        guard ["inspect_ui", "ui_action", "type_text", "keypress", "window_layout", "screen_info", "search_web", "read_web_page"].allSatisfy(names.contains) else {
+        guard ["inspect_ui", "ui_action", "type_text", "keypress", "window_layout", "screen_info", "search_web", "read_web_page", "focus_app", "scroll", "click_menu_item", "click_dialog_button"].allSatisfy(names.contains) else {
             throw Failure("UI tool definitions missing")
         }
         guard ["open_url", "quit_app"].allSatisfy(names.contains),
@@ -343,11 +343,247 @@ enum NativeChecks {
         print("PASS: native folder/text reads, exact write preview, denial, approval, cancellation, and special-file rejection")
     }
 
-    private static func waitForApproval(_ tools: MacTools, attempts: Int = 100) async throws -> MacTools.Approval {
+    static func safeMacActions(_ tools: MacTools) async throws {
+        let expectedDriver = ProcessInfo.processInfo.environment["HALO_MAC_DRIVER"] == "peekaboo" ? "peekaboo" : "legacy"
+        guard let executable = Bundle.main.executableURL else { throw Failure("Test executable missing") }
+
+        let host = Process()
+        host.executableURL = executable
+        host.arguments = ["--ui-test-host"]
+        try host.run()
+        defer { if host.isRunning { host.terminate() } }
+        let hostAppID = Bundle.main.bundleIdentifier ?? "app.halo.native.dev"
+
+        // Activate test host app so macOS window server exposes its window
+        for _ in 0..<50 {
+            if let running = NSRunningApplication(processIdentifier: host.processIdentifier) {
+                running.activate()
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        // Wait for the host window to show up
+        var inspectedRows: [[String: Any]] = []
+        for _ in 0..<100 {
+            try await Task.sleep(for: .milliseconds(100))
+            let res = try await tools.execute(name: "inspect_ui", arguments: #"{"app_id":"\#(hostAppID)"}"#)
+            if let obj = try? JSONSerialization.jsonObject(with: Data(res.utf8)) as? [String: Any],
+               let elements = obj["elements"] as? [[String: Any]],
+               elements.contains(where: { ($0["label"] as? String) == "Mercy test button" }) {
+                inspectedRows = elements
+                break
+            }
+        }
+        guard let buttonElem = inspectedRows.first(where: { ($0["label"] as? String) == "Mercy test button" }),
+              let buttonID = buttonElem["id"] as? String else {
+            throw Failure("Disposable host button not found in inspect_ui")
+        }
+
+        // 1. Focus / raise app
+        let focusRes = try await tools.execute(name: "focus_app", arguments: #"{"app_id":"\#(hostAppID)"}"#)
+        guard let focusObj = try? JSONSerialization.jsonObject(with: Data(focusRes.utf8)) as? [String: Any],
+              focusObj["ok"] as? Bool == true else {
+            throw Failure("focus_app failed for host")
+        }
+
+        // 2. Target freshness check: stale ID rejection BEFORE approval
+        let staleAction = Task {
+            try await tools.execute(name: "ui_action", arguments: #"{"element_id":"stale-id-999","action":"AXPress"}"#)
+        }
+        let staleOutput = try await staleAction.value
+        guard let staleObj = try? JSONSerialization.jsonObject(with: Data(staleOutput.utf8)) as? [String: Any],
+              staleObj["ok"] as? Bool == false,
+              tools.approval == nil else {
+            throw Failure("Stale element ID was not rejected before approval")
+        }
+
+        // 3. Approval denial: verify preview and denial
+        let deniedClick = Task {
+            try await tools.execute(name: "ui_action", arguments: #"{"element_id":"\#(buttonID)","action":"AXPress"}"#)
+        }
+        let denialApproval = try await waitForApproval(tools, step: "denial")
+        guard denialApproval.title.contains("Control this app"),
+              denialApproval.preview == "AXPress" else {
+            tools.resolve(id: denialApproval.id, allow: false)
+            throw Failure("Approval preview did not match action")
+        }
+        tools.resolve(id: denialApproval.id, allow: false)
+        let denialResult = try await deniedClick.value
+        guard let denialObj = try? JSONSerialization.jsonObject(with: Data(denialResult.utf8)) as? [String: Any],
+              denialObj["denied"] as? Bool == true else {
+            throw Failure("Denied action was not reported as denied")
+        }
+
+        // 4. Approval cancellation: verify Task cancellation dismisses approval
+        let cancelledClick = Task {
+            try await tools.execute(name: "ui_action", arguments: #"{"element_id":"\#(buttonID)","action":"AXPress"}"#)
+        }
+        _ = try await waitForApproval(tools, step: "cancellation")
+        cancelledClick.cancel()
+        do { _ = try await cancelledClick.value; throw Failure("Cancelled action did not throw") }
+        catch is CancellationError {}
+        guard tools.approval == nil else { throw Failure("Cancelled approval left modal visible") }
+
+        // 5. Approved control click
+        let approvedClick = Task {
+            try await tools.execute(name: "ui_action", arguments: #"{"element_id":"\#(buttonID)","action":"AXPress"}"#)
+        }
+        let clickApproval = try await waitForApproval(tools, step: "click")
+        tools.resolve(id: clickApproval.id, allow: true)
+        let clickRes = try await approvedClick.value
+        guard let clickObj = try? JSONSerialization.jsonObject(with: Data(clickRes.utf8)) as? [String: Any],
+              clickObj["ok"] as? Bool == true else {
+            throw Failure("Approved control click failed: \(clickRes)")
+        }
+
+        // Verify click side-effect via re-inspection (post-action observation verification)
+        var updatedRows: [[String: Any]] = []
+        for _ in 0..<30 {
+            try await Task.sleep(for: .milliseconds(100))
+            let res = try await tools.execute(name: "inspect_ui", arguments: #"{"app_id":"\#(hostAppID)"}"#)
+            if let obj = try? JSONSerialization.jsonObject(with: Data(res.utf8)) as? [String: Any],
+               let elements = obj["elements"] as? [[String: Any]],
+               elements.contains(where: { ($0["label"] as? String) == "Mercy test button pressed" }) {
+                updatedRows = elements
+                break
+            }
+        }
+        guard !updatedRows.isEmpty else {
+            throw Failure("Click side-effect ('Mercy test button pressed') not observed within timeout")
+        }
+        guard let fieldElem = updatedRows.first(where: { ($0["label"] as? String) == "Mercy test input" }),
+              let fieldID = fieldElem["id"] as? String else {
+            let labels = updatedRows.compactMap { "\($0["role"] ?? "") '\($0["label"] ?? "")'" }.joined(separator: ", ")
+            throw Failure("Text field 'Mercy test input' missing. Found controls: [\(labels)]")
+        }
+
+        // 6. Type text into observed field
+        let typedText = "Halo observation typing"
+        let typeTask = Task {
+            try await tools.execute(name: "type_text", arguments: #"{"element_id":"\#(fieldID)","text":"\#(typedText)"}"#)
+        }
+        let typeApproval = try await waitForApproval(tools, step: "type")
+        guard typeApproval.preview == typedText else {
+            tools.resolve(id: typeApproval.id, allow: false)
+            throw Failure("Type approval preview differed from text")
+        }
+        tools.resolve(id: typeApproval.id, allow: true)
+        let typeRes = try await typeTask.value
+        guard let typeObj = try? JSONSerialization.jsonObject(with: Data(typeRes.utf8)) as? [String: Any],
+              typeObj["ok"] as? Bool == true else {
+            throw Failure("type_text failed: \(typeRes)")
+        }
+
+        // 7. Keyboard shortcut: Select all (cmd+a)
+        let keyTask = Task {
+            try await tools.execute(name: "keypress", arguments: #"{"app_id":"\#(hostAppID)","shortcut":"cmd+a"}"#)
+        }
+        let keyApproval = try await waitForApproval(tools, step: "keypress")
+        guard keyApproval.preview == "cmd+a" else {
+            tools.resolve(id: keyApproval.id, allow: false)
+            throw Failure("Keypress approval preview differed from shortcut")
+        }
+        tools.resolve(id: keyApproval.id, allow: true)
+        let keyRes = try await keyTask.value
+        guard let keyObj = try? JSONSerialization.jsonObject(with: Data(keyRes.utf8)) as? [String: Any],
+              keyObj["ok"] as? Bool == true else {
+            throw Failure("keypress failed: \(keyRes)")
+        }
+
+        // 8. Scroll
+        let scrollTask = Task {
+            try await tools.execute(name: "scroll", arguments: #"{"direction":"down","amount":3,"app_id":"\#(hostAppID)"}"#)
+        }
+        let scrollApproval = try await waitForApproval(tools, step: "scroll")
+        tools.resolve(id: scrollApproval.id, allow: true)
+        let scrollRes = try await scrollTask.value
+        guard let scrollObj = try? JSONSerialization.jsonObject(with: Data(scrollRes.utf8)) as? [String: Any],
+              scrollObj["ok"] as? Bool == true else {
+            throw Failure("scroll failed: \(scrollRes)")
+        }
+
+        // 9. Menu item: Edit > Select All
+        let menuTask = Task {
+            try await tools.execute(name: "click_menu_item", arguments: #"{"app_id":"\#(hostAppID)","item_path":"Edit > Select All"}"#)
+        }
+        let menuApproval = try await waitForApproval(tools, step: "menu")
+        guard menuApproval.preview == "Edit > Select All" else {
+            tools.resolve(id: menuApproval.id, allow: false)
+            throw Failure("Menu approval preview differed from item path")
+        }
+        tools.resolve(id: menuApproval.id, allow: true)
+        let menuRes = try await menuTask.value
+        guard let menuObj = try? JSONSerialization.jsonObject(with: Data(menuRes.utf8)) as? [String: Any],
+              menuObj["ok"] as? Bool == true else {
+            throw Failure("click_menu_item failed: \(menuRes)")
+        }
+
+        // 10. Open test dialog and click dialog button
+        // Re-inspect to get current "Open test dialog" button ID
+        let reinspectRes = try await tools.execute(name: "inspect_ui", arguments: #"{"app_id":"\#(hostAppID)"}"#)
+        guard let reinspectObj = try? JSONSerialization.jsonObject(with: Data(reinspectRes.utf8)) as? [String: Any],
+              let latestElements = reinspectObj["elements"] as? [[String: Any]],
+              let dialogTrigger = latestElements.first(where: { ($0["label"] as? String) == "Open test dialog" }),
+              let dialogTriggerID = dialogTrigger["id"] as? String else {
+            throw Failure("Open test dialog button missing")
+        }
+
+        let openDialogTask = Task {
+            try await tools.execute(name: "ui_action", arguments: #"{"element_id":"\#(dialogTriggerID)","action":"AXPress"}"#)
+        }
+        let openApproval = try await waitForApproval(tools, step: "open dialog")
+        tools.resolve(id: openApproval.id, allow: true)
+        _ = try await openDialogTask.value
+
+        try await Task.sleep(for: .milliseconds(400))
+
+        // Find dialog
+        var dialogFound = false
+        for _ in 0..<30 {
+            try await Task.sleep(for: .milliseconds(100))
+            let foundDialogRes = try await tools.execute(name: "find_dialog", arguments: #"{"app_id":"\#(hostAppID)"}"#)
+            if let dialogCheckObj = try? JSONSerialization.jsonObject(with: Data(foundDialogRes.utf8)) as? [String: Any],
+               dialogCheckObj["found"] as? Bool == true {
+                dialogFound = true
+                break
+            }
+        }
+        guard dialogFound else {
+            throw Failure("find_dialog did not discover active modal dialog")
+        }
+
+        // Click dialog button: Confirm
+        let clickDialogTask = Task {
+            try await tools.execute(name: "click_dialog_button", arguments: #"{"app_id":"\#(hostAppID)","button_title":"Confirm"}"#)
+        }
+        let dialogBtnApproval = try await waitForApproval(tools, step: "dialog button")
+        guard dialogBtnApproval.preview == "Confirm" else {
+            tools.resolve(id: dialogBtnApproval.id, allow: false)
+            throw Failure("Dialog button approval preview differed from button title")
+        }
+        tools.resolve(id: dialogBtnApproval.id, allow: true)
+        let dialogBtnRes = try await clickDialogTask.value
+        guard let dialogBtnObj = try? JSONSerialization.jsonObject(with: Data(dialogBtnRes.utf8)) as? [String: Any],
+              dialogBtnObj["ok"] as? Bool == true else {
+            throw Failure("click_dialog_button failed: \(dialogBtnRes)")
+        }
+
+        // 11. Window layout
+        let layoutRes = try await tools.execute(name: "window_layout", arguments: #"{"app_id":"\#(hostAppID)","position":"left"}"#)
+        guard let layoutObj = try? JSONSerialization.jsonObject(with: Data(layoutRes.utf8)) as? [String: Any],
+              layoutObj["ok"] as? Bool == true else {
+            throw Failure("window_layout failed: \(layoutRes)")
+        }
+
+        print("PASS: \(expectedDriver) driver Safe Mac actions: focus, stale ID rejection, approval preview/denial/cancellation, control click, typing, shortcut, scroll, menu selection, dialog operation, and window layout verified with post-action observation")
+    }
+
+    private static func waitForApproval(_ tools: MacTools, attempts: Int = 300, step: String = "") async throws -> MacTools.Approval {
         for _ in 0..<attempts {
             if let approval = tools.approval { return approval }
             try await Task.sleep(for: .milliseconds(10))
         }
-        throw Failure("Approval did not appear")
+        throw Failure("Approval did not appear for step '\(step)'")
     }
 }

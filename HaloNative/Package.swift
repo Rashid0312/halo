@@ -10,6 +10,7 @@ let package = Package(
     products: [.executable(name: "Halo", targets: ["Halo"])],
     dependencies: [
         .package(path: "../Vendor/Peekaboo/Core/PeekabooAutomationKit"),
+        .package(path: "../Vendor/Peekaboo/Core/PeekabooFoundation"),
     ],
     targets: [
         .target(name: "HaloCore"),
@@ -21,6 +22,7 @@ let package = Package(
             "HaloCore",
             "CWake",
             .product(name: "PeekabooAutomationKit", package: "PeekabooAutomationKit"),
+            .product(name: "PeekabooFoundation", package: "PeekabooFoundation"),
         ]),
         .executableTarget(name: "HaloCoreChecks", dependencies: ["HaloCore"], path: "Checks"),
     ]

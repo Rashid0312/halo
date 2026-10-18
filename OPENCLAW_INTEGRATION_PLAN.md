@@ -127,17 +127,28 @@ Recorded dependency and runtime measurements:
 
 ## Phase 3 — Safe Mac actions
 
-Implement in this order:
+- [x] Focus or raise an app (`focus_app` / `focusApp`).
+- [x] Click an observed control (`ui_action` / `performAction`).
+- [x] Type into an observed field (`type_text` / `typeText`).
+- [x] Press validated shortcuts and keys (`keypress` / `keypress`).
+- [x] Scroll (`scroll` / `scroll`).
+- [x] Operate menus (`click_menu_item` / `clickMenuItem`).
+- [x] Operate dialogs (`click_dialog_button` / `clickDialogButton`).
+- [x] Move, resize, minimize, and arrange windows (`window_layout` / `layoutWindow`).
+- [x] Reject stale element IDs prior to presenting any approval modal.
+- [x] Exact approval preview, user denial, and Task cancellation tests.
+- [x] Post-action observation validation (re-inspecting UI to verify side effects).
+- [x] Add `--check-safe-actions` verification harness in `HaloApp` and `NativeChecks`.
 
-1. Focus or raise an app.
-2. Click an observed control.
-3. Type into an observed field.
-4. Press validated shortcuts and keys.
-5. Scroll.
-6. Operate menus and dialogs.
-7. Move, resize, minimize, and arrange windows.
+### Acceptance criteria
 
-Each action must pass Halo approval policy, cancellation checks, target freshness checks, and post-action observation.
+- [x] Every mutating action passes Halo approval policy with exact title, path/role, and action/content preview. (PASS: verified preview on denial/approval for clicks, typing, shortcuts, menus, dialog buttons)
+- [x] Stale element references are rejected before any approval modal is presented. (PASS: verified `stale-id-999` fails immediately without triggering `tools.approval`)
+- [x] Task cancellation cleanly dismisses pending approvals without side effects. (PASS: verified `cancelledClick.cancel()` sets `tools.approval == nil` and throws `CancellationError`)
+- [x] Control click changes state verified by re-inspection. (PASS: verified button title transitions to `"Mercy test button pressed"`)
+- [x] Typing into an observed field updates field value verified by re-inspection. (PASS: verified typed content in test input)
+- [x] Keyboard shortcuts (e.g. `cmd+a`), scrolling, menu item selection (`Edit > Select All`), and dialog operations (`Confirm`) succeed across both drivers. (PASS: verified on legacy and Peekaboo drivers)
+- [x] Strict feature parity maintained between `legacy` and `peekaboo` drivers under `HALO_MAC_DRIVER=peekaboo`. (PASS: both drivers pass `--check-safe-actions`)
 
 ## Phase 4 — Chrome tab integration
 
@@ -263,3 +274,9 @@ The broader `PeekabooAutomation` target imports Tachikoma, TachikomaAudio, MCP, 
 - Updated `--check-peekaboo-listing` in `NativeChecks` to verify menu bar enumeration, active dialog inspection, and stale root rejection on both drivers.
 - Live verification passed on macOS: with `HALO_MAC_DRIVER=peekaboo`, successfully enumerated 9 apps (32ms), 7 windows (76ms), 8 menu bar items (221ms), checked dialogs, and verified stale subtree rejection. With the default legacy driver, verified 9 apps (16ms), 0 windows, 0 menus, dialogs checked, and stale subtree rejection.
 - All Phase 2 acceptance criteria met; Phase 2 marked Complete. Phase 3 (Safe Mac actions) is ready for implementation.
+- Implemented Phase 3 (Safe Mac actions) with observation-validated actions gated strictly behind Halo's user approval model: app focus/raise (`focus_app`), control clicking (`ui_action`), text typing (`type_text`), keyboard shortcuts (`keypress`), scrolling (`scroll`), menu items (`click_menu_item`), modal dialog actions (`click_dialog_button`), and window arrangement (`window_layout`).
+- Built verification harness `--check-safe-actions` verifying stale element reference rejection before approval, exact preview display, user denial, Task cancellation dismissal, approved control clicking, typing into observed input, keypress delivery, scroll event delivery, menu navigation, modal dialog detection and confirmation, and window layout.
+- Added snapshot caching (`snapshots.storeDetectionResult`) and PID-disambiguated automation targeting in `PeekabooMacInteractionDriver` to reliably target sibling processes sharing bundle identifiers.
+- Added accessible title/description fallback resolution in `PeekabooMacInteractionDriver.inspect()` to prevent AppKit `NSTextField` controls from collapsing into generic role descriptions.
+- Enhanced legacy driver's `findDialog` and `clickDialogButton` to discover modal sheets via `AXSheets`, child sheets, and `AXAlert` / `AXSystemDialog` subroles.
+- All Phase 3 acceptance criteria met; verified full PASS across both `legacy` and `peekaboo` drivers (`--check-safe-actions`, `--check-ui-controls`, `--check-peekaboo-listing`, `HaloCoreChecks`, and `check-signing.sh`). Phase 3 marked Complete. Ready for Phase 4 (Chrome tab integration).

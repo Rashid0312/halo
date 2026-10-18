@@ -58,15 +58,21 @@ private actor AccessibilityTree {
             elements[id] = element
             targets[id] = UITarget(id: id, pid: pid, label: title.isEmpty ? description : title, role: role)
             rows.append(row)
+            if role == "AXMenuBar" || role == "AXMenu" {
+                if depth > 2 { return }
+            }
             if let children = value(element, kAXChildrenAttribute) as? [AXUIElement] {
-                for child in children { visit(child, depth: depth + 1, parent: id) }
+                let sorted = children.sorted { a, _ in
+                    (value(a, kAXRoleAttribute) as? String) == "AXWindow"
+                }
+                for child in sorted { visit(child, depth: depth + 1, parent: id) }
             }
         }
-        visit(root, depth: 0, parent: nil)
-        // Some apps expose windows/menu bars as attributes but not in AXChildren.
+        // Visit windows first so interactive app controls are never starved by menus.
         if rootID == nil, let windows = value(app, kAXWindowsAttribute) as? [AXUIElement] {
             for window in windows { visit(window, depth: 1, parent: nil) }
         }
+        visit(root, depth: 0, parent: nil)
         if rootID == nil, let menu = value(app, kAXMenuBarAttribute), CFGetTypeID(menu) == AXUIElementGetTypeID() {
             visit(unsafeDowncast(menu, to: AXUIElement.self), depth: 1, parent: nil)
         }
@@ -167,6 +173,15 @@ private final class TestButtonTarget: NSObject {
     weak var window: NSWindow?
     @objc func toggleFullScreen() { window?.toggleFullScreen(nil) }
     @objc func press() { button?.title = "Mercy test button pressed" }
+    @objc func showDialog() {
+        guard let win = window ?? NSApp.keyWindow else { return }
+        let alert = NSAlert()
+        alert.messageText = "Mercy test dialog"
+        alert.informativeText = "Confirm disposable action."
+        alert.addButton(withTitle: "Confirm")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: win) { _ in }
+    }
 }
 
 @MainActor @Observable
@@ -196,8 +211,13 @@ final class UIAutomation {
     func runningApp(_ id: String?) throws -> NSRunningApplication {
         let front = NSWorkspace.shared.frontmostApplication
         let wanted = id ?? (front?.bundleIdentifier != Bundle.main.bundleIdentifier ? front?.bundleIdentifier : previousAppID)
-        guard let wanted, wanted != Bundle.main.bundleIdentifier,
-              let app = NSRunningApplication.runningApplications(withBundleIdentifier: wanted).first else {
+        guard let wanted else {
+            throw UIControlError("Choose a running app using its real bundle ID, or open the app first.")
+        }
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: wanted)
+        let app = apps.first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier })
+            ?? (wanted != Bundle.main.bundleIdentifier ? apps.first : nil)
+        guard let app else {
             throw UIControlError("Choose a running app using its real bundle ID, or open the app first.")
         }
         return app
@@ -296,15 +316,17 @@ final class UIAutomation {
         down.postToPid(pid); up.postToPid(pid)
     }
 
-    private static var testWindow: NSWindow?
-    private static var testHandler: TestButtonTarget?
+    @MainActor private static var testWindow: NSWindow?
+    @MainActor private static var testHandler: TestButtonTarget?
 
-    static func launchTestHost() {
+    @MainActor static func launchTestHost() {
         NSApp.setActivationPolicy(.regular)
-        let window = NSWindow(contentRect: NSRect(x: 180, y: 180, width: 460, height: 320), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 180, y: 180, width: 460, height: 350), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Mercy disposable controls check"
         window.isReleasedWhenClosed = false
-        let field = NSTextField(frame: NSRect(x: 30, y: 130, width: 340, height: 28))
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let field = NSTextField(frame: NSRect(x: 30, y: 150, width: 340, height: 28))
+        field.setAccessibilityTitle("Mercy test input")
         field.setAccessibilityLabel("Mercy test input")
         let handler = TestButtonTarget()
         let button = NSButton(title: "Mercy test button", target: handler, action: #selector(TestButtonTarget.press))
@@ -313,17 +335,27 @@ final class UIAutomation {
         handler.window = window
         let fullScreen = NSButton(title: "Toggle test full screen", target: handler, action: #selector(TestButtonTarget.toggleFullScreen))
         fullScreen.frame = NSRect(x: 220, y: 60, width: 210, height: 32)
+        let dialogBtn = NSButton(title: "Open test dialog", target: handler, action: #selector(TestButtonTarget.showDialog))
+        dialogBtn.frame = NSRect(x: 30, y: 105, width: 180, height: 32)
         let marker = NSTextField(labelWithString: "HALO VISION 73914")
         marker.font = .systemFont(ofSize: 27, weight: .bold)
-        marker.frame = NSRect(x: 30, y: 225, width: 400, height: 45)
+        marker.frame = NSRect(x: 30, y: 245, width: 400, height: 45)
         window.contentView?.addSubview(marker)
         window.contentView?.addSubview(fullScreen)
+        window.contentView?.addSubview(dialogBtn)
         window.contentView?.addSubview(field)
         window.contentView?.addSubview(button)
         let menu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        menu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+        appMenu.addItem(withTitle: "About Halo", action: nil, keyEquivalent: "")
+
         let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
-        edit.submenu = NSMenu(title: "Edit")
-        edit.submenu?.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.submenu = editMenu
         menu.addItem(edit)
         NSApp.mainMenu = menu
         testWindow = window; testHandler = handler
@@ -356,7 +388,8 @@ final class UIAutomation {
             rows = try await inspectHost()
             if rows.contains(where: { $0["label"] as? String == "Mercy test button" }) { break }
         }
-        guard let buttonID = rows.first(where: { $0["label"] as? String == "Mercy test button" })?["id"] as? String else { throw UIControlError("The disposable host did not expose its button (running: \(host.isRunning), controls: \(rows.count)).") }
+        let labels = rows.map { "\($0["role"] ?? "") '\($0["label"] ?? "")'" }.joined(separator: ", ")
+        guard let buttonID = rows.first(where: { $0["label"] as? String == "Mercy test button" })?["id"] as? String else { throw UIControlError("The disposable host did not expose its button (running: \(host.isRunning), controls: \(rows.count), elements: [\(labels)]).") }
         try await service.press(id: buttonID, action: kAXPressAction)
         rows = try await inspectHost()
         guard rows.contains(where: { $0["label"] as? String == "Mercy test button pressed" }),

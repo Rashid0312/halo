@@ -37,7 +37,10 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--ui-test-host") {
-            Task { try? await Task.sleep(for: .milliseconds(100)); UIAutomation.launchTestHost() }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(200))
+                UIAutomation.launchTestHost()
+            }
             return
         }
         if CommandLine.arguments.contains("--check-chatgpt-auth") {
@@ -64,6 +67,13 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--check-peekaboo-listing") {
             Task {
                 do { try await NativeChecks.peekabooListing(macTools); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-safe-actions") {
+            Task {
+                do { try await NativeChecks.safeMacActions(macTools); exit(0) }
                 catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
             }
             return
