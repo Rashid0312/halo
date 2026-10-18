@@ -61,6 +61,13 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if CommandLine.arguments.contains("--check-peekaboo-listing") {
+            Task {
+                do { try await NativeChecks.peekabooListing(macTools); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--check-web-research") {
             Task {
                 do { try await NativeChecks.webResearch(macTools); exit(0) }

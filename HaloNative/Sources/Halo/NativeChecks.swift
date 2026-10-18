@@ -221,6 +221,43 @@ enum NativeChecks {
         print("PASS: Peekaboo window capture reached Halo's exact image approval and denial prevented model sharing; pixels not printed or persisted by Halo")
     }
 
+    static func peekabooListing(_ tools: MacTools) async throws {
+        let expectedDriver = ProcessInfo.processInfo.environment["HALO_MAC_DRIVER"] == "peekaboo" ? "peekaboo" : "legacy"
+        let runningStart = Date()
+        let runningResult = try await tools.execute(name: "running_apps", arguments: "{}")
+        let runningLatencyMs = Int((Date().timeIntervalSince(runningStart) * 1000).rounded())
+        guard let runningObj = try JSONSerialization.jsonObject(with: Data(runningResult.utf8)) as? [String: Any],
+              runningObj["ok"] as? Bool == true,
+              let apps = runningObj["apps"] as? [[String: Any]],
+              !apps.isEmpty else {
+            throw Failure("running_apps returned empty or invalid response")
+        }
+
+        guard let firstApp = apps.first,
+              let name = firstApp["name"] as? String, !name.isEmpty,
+              firstApp["bundle_id"] is String,
+              firstApp["window_count"] is Int else {
+            throw Failure("running_apps entries missing required fields")
+        }
+
+        let driverFound = firstApp["driver"] as? String ?? "unknown"
+        guard driverFound == expectedDriver else {
+            throw Failure("Expected driver \(expectedDriver) but found \(driverFound)")
+        }
+
+        // Test list_windows on Finder (always running on macOS)
+        let windowsStart = Date()
+        let windowsResult = try await tools.execute(name: "list_windows", arguments: #"{"app_id":"com.apple.finder"}"#)
+        let windowsLatencyMs = Int((Date().timeIntervalSince(windowsStart) * 1000).rounded())
+        guard let windowsObj = try JSONSerialization.jsonObject(with: Data(windowsResult.utf8)) as? [String: Any],
+              windowsObj["ok"] as? Bool == true,
+              let windows = windowsObj["windows"] as? [[String: Any]] else {
+            throw Failure("list_windows failed for Finder")
+        }
+
+        print("PASS: \(expectedDriver) driver app listing (\(apps.count) apps, \(runningLatencyMs)ms) and window listing (\(windows.count) windows, \(windowsLatencyMs)ms)")
+    }
+
     static func files(_ tools: MacTools) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("halo-tools-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])

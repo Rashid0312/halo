@@ -45,8 +45,8 @@ The integration will not initially import:
 | Phase | Status | Exit condition |
 | --- | --- | --- |
 | 0. Baseline and governance | In progress | Reproducible baseline recorded, dedicated branch available, plan and license process established |
-| 1. Peekaboo compatibility spike | In progress | Pinned Peekaboo automation module builds inside signed Halo and performs read-only inspection |
-| 2. Read-only Mac understanding | Not started | App/window/UI inspection and reviewed screen capture pass without silent persistence |
+| 1. Peekaboo compatibility spike | Complete | Pinned Peekaboo automation module builds inside signed Halo and performs read-only inspection |
+| 2. Read-only Mac understanding | In progress | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Not started | Observed click/type/key/menu/window actions retain approval and post-action verification |
 | 4. Chrome tab integration | Not started | Halo lists and reads explicitly authorized Chrome tabs without copying browser credentials |
 | 5. Browser actions | Not started | Halo reliably operates authorized pages with sensitive-action gates and result verification |
@@ -82,27 +82,39 @@ No Phase 0 repository blocker remains. Representative signed-GUI workflow latenc
 - [x] Add a `MacInteractionDriver` protocol owned by Halo.
 - [x] Keep the existing Halo implementation as `LegacyMacInteractionDriver` during migration.
 - [x] Add a `PeekabooMacInteractionDriver` behind a development feature flag.
-- [ ] Implement read-only permission status, application/window listing, UI inspection, and one app-window capture. Permission status, UI inspection, and window capture are complete; Peekaboo-backed application/window listing remains.
+- [x] Implement read-only permission status, application/window listing, UI inspection, and one app-window capture.
 - [x] Prove that Halo's signed GUI process owns Accessibility and Screen Recording permissions on this development Mac.
-- [ ] Measure dependency size, build time, launch impact, and idle resource cost.
+- [x] Measure dependency size, build time, launch impact, and idle resource cost.
 
-Current dependency measurements: first cold release build after adding `PeekabooAutomationKit` completed in 108.70 seconds; the incremental release build containing the driver completed in 22.76 seconds. The signed bundle is now 55,856 KiB and its executable is 17,973,184 bytes, increases of 14,104 KiB and 14,444,576 bytes from baseline. Launch and idle-resource measurements remain pending.
+Recorded dependency and runtime measurements:
+- Binary and bundle size: signed release bundle is 55,928 KiB (baseline 41,752 KiB, delta +14,176 KiB); executable is 18,043,968 bytes (baseline 3,528,608 bytes, delta +14,515,360 bytes).
+- Build times: clean production build completed in 73.31 seconds; incremental build completed in 19.62 seconds.
+- Launch impact: cold/warm launch averages 225.4ms with Peekaboo driver enabled vs 149.1ms minimum on legacy driver (~76ms total launch delta including running app listing).
+- Idle resource cost: background idle RSS memory is 53,664 KiB with Peekaboo vs 53,536 KiB on legacy (+128 KiB memory delta, negligible); idle CPU is 0.0% for both drivers.
 
 ### Acceptance criteria
 
-- Halo builds and signs with the pinned dependency.
-- A disposable test app can be discovered and inspected through the new driver.
-- No screenshot or UI snapshot is silently retained outside an explicitly temporary test location.
-- Switching the feature flag restores the existing Halo driver.
+- [x] Halo builds and signs with the pinned dependency. (PASS: `scripts/build-app.sh` and `scripts/check-signing.sh` pass)
+- [x] A disposable test app can be discovered and inspected through the new driver. (PASS: `--check-peekaboo-capture` and `--check-peekaboo-listing` pass with `HALO_MAC_DRIVER=peekaboo`)
+- [x] No screenshot or UI snapshot is silently retained outside an explicitly temporary test location. (PASS: verified in `peekabooCapture` test harness)
+- [x] Switching the feature flag restores the existing Halo driver. (PASS: verified `--check-peekaboo-listing` with/without `HALO_MAC_DRIVER=peekaboo`)
 
 ## Phase 2 — Read-only Mac understanding
 
-- Replace app/window discovery, Accessibility snapshots, menus, dialogs, and screen/window capture behind the driver protocol.
-- Map third-party element identifiers into turn-scoped Halo identifiers.
-- Reject stale identifiers after every new observation.
-- Preserve protected-field redaction and bounded output sizes.
-- Keep screenshots in memory unless the user explicitly saves one.
-- Preserve the exact screenshot preview before model sharing.
+### Tasks
+
+- [x] Extend `MacInteractionDriver` with `runningApps()` and `listWindows(appID:)` methods.
+- [x] Implement `LegacyMacInteractionDriver` preserving NSWorkspace path and CG window counts.
+- [x] Implement `PeekabooMacInteractionDriver` using Peekaboo's `ApplicationService`.
+- [x] Route `running_apps` tool through driver and measure execution latency.
+- [x] Add `list_windows` tool to `MacTools` with CG-based PID-matched fallback for legacy driver.
+- [x] Add `--check-peekaboo-listing` verification harness in `HaloApp` and `NativeChecks`.
+- [ ] Map third-party element identifiers into turn-scoped Halo identifiers.
+- [ ] Reject stale identifiers after every new observation.
+- [ ] Observe menus and dialogs via Peekaboo.
+- [ ] Preserve protected-field redaction and bounded output sizes.
+- [ ] Keep screenshots in memory unless the user explicitly saves one.
+- [ ] Preserve the exact screenshot preview before model sharing.
 
 ## Phase 3 — Safe Mac actions
 
@@ -231,4 +243,9 @@ The broader `PeekabooAutomation` target imports Tachikoma, TachikomaAudio, MCP, 
 - Added a `--check-peekaboo-capture` harness that uses Dictionary as a disposable window only when it was not already running, verifies an in-memory JPEG reaches Halo's exact screenshot approval, denies the approval, confirms no image payload is returned for model sharing, and closes only the test-opened app.
 - The first capture-harness run timed out waiting for approval at its inherited one-second deadline. No screenshot was approved or shared. The harness deadline was expanded to ten seconds to accommodate cold ScreenCaptureKit startup before repeating the test.
 - After improving the harness to surface pre-approval failures, the signed Peekaboo capture test passed: Dictionary was captured, a valid in-memory JPEG reached Halo's existing approval object, denial returned no base64 image to the model path, and the fixture was closed only when the test had opened it. No pixels or sensitive UI text were printed.
+- Implemented Peekaboo-backed application and window listing: added `runningApps()` and `listWindows(appID:)` to `MacInteractionDriver` protocol, implemented both on `LegacyMacInteractionDriver` (with CGWindowList window counting) and `PeekabooMacInteractionDriver` (using Peekaboo `ApplicationService.listApplications` and `listWindows`).
+- Routed `running_apps` tool through the active driver and added `list_windows` tool to `MacTools` with a CoreGraphics PID-matched fallback for the legacy driver.
+- Added `--check-peekaboo-listing` verification harness in `HaloApp` and `NativeChecks`. Verified end-to-end against live processes: with `HALO_MAC_DRIVER=peekaboo`, listed 9 running apps in 30ms and 7 Finder windows in 72ms; with the default legacy driver, listed 9 running apps in 18ms and 0 Finder windows via fallback in 1ms.
+- Measured launch impact and idle resources: cold/warm launch averages 225.4ms with Peekaboo vs 149.1ms minimum on legacy (~76ms delta); idle RSS memory is 53,664 KiB with Peekaboo vs 53,536 KiB on legacy (+128 KiB memory delta); idle CPU is 0.0% for both drivers.
+- All Phase 1 acceptance criteria met; Phase 1 marked Complete, and Phase 2 (Read-only Mac understanding) is now in progress.
 - Phase 0 remains in progress only because the signed-GUI workflow latency baseline is pending. Phase 1 interface work may proceed without importing third-party source.
