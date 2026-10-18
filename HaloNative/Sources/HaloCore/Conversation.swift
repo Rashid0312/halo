@@ -40,6 +40,19 @@ public struct Message: Identifiable, Sendable {
     }
 }
 
+public struct ActivityStep: Identifiable, Sendable, Equatable {
+    public enum State: Sendable { case active, complete, failed }
+    public let id: UUID
+    public var title: String
+    public let startedAt: Date
+    public var finishedAt: Date?
+    public var state: State
+
+    public init(title: String, startedAt: Date = Date(), state: State = .active) {
+        id = UUID(); self.title = title; self.startedAt = startedAt; self.state = state
+    }
+}
+
 private actor StreamBuffer {
     private let limit: Int
     private var pending = ""
@@ -78,16 +91,28 @@ public final class Conversation {
     public static let maximumRetainedCharacters = 160_000
     public static let streamRenderInterval = Duration.milliseconds(50)
 
+    public nonisolated static func looksLikeWebResearch(_ input: String) -> Bool {
+        let text = input.lowercased()
+        return ["search", "look up", "check if", "find out", "latest", "today", "news", "release date", "out yet", "is out", "current web"].contains { text.contains($0) }
+    }
+
     public private(set) var messages: [Message] = []
     public private(set) var isResponding = false
     public private(set) var status: String
+    public private(set) var activity = ""
+    public private(set) var activitySteps: [ActivityStep] = []
     public private(set) var providerName: String
+    public private(set) var lastPrompt = ""
     @ObservationIgnored public private(set) var streamUpdateCount = 0
     public let isDemo: Bool
     @ObservationIgnored public var onReply: ((String) -> Void)?
+    @ObservationIgnored public var onReplyStart: (() -> Void)?
+    @ObservationIgnored public var onReplyDelta: ((String) -> Void)?
     @ObservationIgnored public var onStop: (() -> Void)?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var turnID: UUID?
+    @ObservationIgnored private var watchdog: Task<Void, Never>?
+    @ObservationIgnored private var lastProgressAt = Date()
     private let provider: any ReplyProvider
 
     public init(provider: any ReplyProvider = DemoProvider(), providerName: String = "Demo mode") {
@@ -105,6 +130,20 @@ public final class Conversation {
 
     public func send(_ input: String) {
         begin(input) { [provider] history in provider.reply(to: history) }
+    }
+
+    public func retry() {
+        guard !lastPrompt.isEmpty else { return }
+        send(lastPrompt)
+    }
+
+    public func reportActivity(_ title: String) {
+        guard isResponding, !title.isEmpty else { return }
+        completeActiveStep()
+        activity = title
+        activitySteps.append(ActivityStep(title: title))
+        if activitySteps.count > 8 { activitySteps.removeFirst(activitySteps.count - 8) }
+        lastProgressAt = Date()
     }
 
     public func performAction(_ input: String, action: @escaping @MainActor @Sendable () async throws -> String) {
@@ -127,6 +166,7 @@ public final class Conversation {
             return
         }
         stop()
+        lastPrompt = prompt
         let retainedCount = Self.maximumMessages - 2
         if messages.count > retainedCount { messages.removeFirst(messages.count - retainedCount) }
         let historyBudget = max(0, Self.maximumRetainedCharacters - prompt.count - Self.maximumReplyCharacters)
@@ -144,6 +184,10 @@ public final class Conversation {
         streamUpdateCount = 0
         isResponding = true
         status = "Responding…"
+        activitySteps = []
+        reportActivity(Self.looksLikeWebResearch(prompt) ? "Searching and reading sources…" : "Contacting \(providerName)…")
+        startWatchdog(turnID: id)
+        onReplyStart?()
         task = Task { [weak self] in
             let buffer = StreamBuffer(limit: Self.maximumReplyCharacters)
             let producer = Task.detached(priority: .userInitiated) {
@@ -165,14 +209,17 @@ public final class Conversation {
                     let batch = await buffer.drain()
                     guard let self, self.turnID == id else { return }
                     if !batch.text.isEmpty {
+                        if self.messages[replyIndex].text.isEmpty { self.reportActivity("Writing the answer…") }
                         let remaining = Self.maximumReplyCharacters - self.messages[replyIndex].text.count
                         guard remaining > 0 else {
                             producer.cancel()
                             self.finish(status: "Reply stopped · maximum length reached")
                             return
                         }
-                        self.messages[replyIndex].text += String(batch.text.prefix(remaining))
+                        let accepted = String(batch.text.prefix(remaining))
+                        self.messages[replyIndex].text += accepted
                         self.streamUpdateCount += 1
+                        self.onReplyDelta?(accepted)
                     }
                     if batch.exceededLimit {
                         producer.cancel()
@@ -201,6 +248,8 @@ public final class Conversation {
         onStop?()
         turnID = nil
         task?.cancel()
+        watchdog?.cancel()
+        watchdog = nil
         task = nil
         if isResponding { status = "Stopped" }
         isResponding = false
@@ -213,9 +262,36 @@ public final class Conversation {
     }
 
     private func finish(status: String) {
+        completeActiveStep()
+        activity = ""
+        watchdog?.cancel()
+        watchdog = nil
         self.status = status
         isResponding = false
         turnID = nil
         task = nil
+    }
+
+    private func completeActiveStep() {
+        guard let index = activitySteps.indices.last, activitySteps[index].state == .active else { return }
+        activitySteps[index].state = .complete
+        activitySteps[index].finishedAt = Date()
+    }
+
+    private func startWatchdog(turnID id: UUID) {
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, self.turnID == id, self.isResponding else { return }
+                let idle = Date().timeIntervalSince(self.lastProgressAt)
+                if idle >= 20, !self.activity.contains("taking longer") {
+                    self.activity = "Still waiting — this is taking longer than expected…"
+                    if let index = self.activitySteps.indices.last, self.activitySteps[index].state == .active {
+                        self.activitySteps[index].title = self.activity
+                    }
+                }
+            }
+        }
     }
 }

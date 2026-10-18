@@ -32,7 +32,7 @@ enum NativeChecks {
     static func ui(_ tools: MacTools) async throws {
         let definitions = try JSONSerialization.jsonObject(with: await tools.definitions()) as? [[String: Any]] ?? []
         let names = Set(definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
-        guard ["inspect_ui", "ui_action", "type_text", "keypress", "window_layout", "screen_info"].allSatisfy(names.contains) else {
+        guard ["inspect_ui", "ui_action", "type_text", "keypress", "window_layout", "screen_info", "search_web", "read_web_page"].allSatisfy(names.contains) else {
             throw Failure("UI tool definitions missing")
         }
         guard ["open_url", "quit_app"].allSatisfy(names.contains),
@@ -61,6 +61,25 @@ enum NativeChecks {
         }
         print("PASS: UI tools, shortcut validation, stale-control rejection, and Accessibility permission gate")
         print(tools.ui.trusted ? "Accessibility status: enabled; live app inspection can be checked" : "Accessibility status: waiting for user to enable Halo in macOS settings")
+    }
+
+    static func webResearch(_ tools: MacTools) async throws {
+        guard WebResearch.publicURL("http://127.0.0.1/private") == nil,
+              WebResearch.publicURL("http://localhost/private") == nil,
+              WebResearch.publicURL("file:///etc/passwd") == nil,
+              WebResearch.publicURL("https://example.com/") != nil else { throw Failure("Public URL boundary failed") }
+        let searched = try await tools.execute(name: "search_web", arguments: #"{"query":"Apple macOS latest release official"}"#)
+        guard let search = try JSONSerialization.jsonObject(with: Data(searched.utf8)) as? [String: Any],
+              search["ok"] as? Bool == true,
+              let results = search["results"] as? [[String: Any]],
+              let first = results.first, let url = first["url"] as? String else { throw Failure("Live web search returned no results") }
+        let arguments = try JSONSerialization.data(withJSONObject: ["url": url])
+        let read = try await tools.execute(name: "read_web_page", arguments: String(decoding: arguments, as: UTF8.self))
+        guard let page = try JSONSerialization.jsonObject(with: Data(read.utf8)) as? [String: Any],
+              page["ok"] as? Bool == true, (page["content"] as? String)?.count ?? 0 >= 80 else {
+            throw Failure("A live search result could not be read")
+        }
+        print("PASS: public web search returned \(results.count) sources and a result page was read; contents not printed; private-address access rejected")
     }
 
     static func appLifecycle(_ tools: MacTools) async throws {

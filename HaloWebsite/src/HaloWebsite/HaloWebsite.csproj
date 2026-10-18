@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>HaloWebsite</RootNamespace>
+    <AssemblyName>HaloWebsite</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Cloudflare R2 is S3-compatible — use the official AWS SDK, no custom client -->
+    <PackageReference Include="AWSSDK.S3" Version="3.7.*" />
+  </ItemGroup>
+
+</Project>

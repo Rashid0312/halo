@@ -15,6 +15,10 @@ for (const [dir, source, binary] of [
   ["touchbar", "MercyTouchBar.swift", "mercy-touchbar"],
   ["speech", "MercySpeech.swift", "mercy-speech"],
 ]) {
-  execFileSync("swiftc", ["-O", path.join(NATIVE, dir, source), "-o", path.join(NATIVE, dir, binary)], { stdio: "inherit" });
+  const swiftCache = path.join(process.cwd(), ".swift-modulecache");
+  execFileSync("swiftc", ["-O", path.join(NATIVE, dir, source), "-o", path.join(NATIVE, dir, binary)], {
+    stdio: "inherit",
+    env: { ...process.env, SWIFT_MODULECACHE_PATH: swiftCache, TMPDIR: swiftCache }
+  });
   console.log(`built native/${dir}/${binary}`);
 }

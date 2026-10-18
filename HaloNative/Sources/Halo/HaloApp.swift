@@ -8,6 +8,7 @@ struct HaloApp: App {
     @NSApplicationDelegateAdaptor(HaloDelegate.self) private var delegate
     var body: some Scene {
         Settings { HaloSettings(voice: delegate.voice, wake: delegate.wake, setHandsFree: delegate.setHandsFree, catalog: delegate.catalog, macTools: delegate.macTools, presentation: delegate.presentation, auth: delegate.auth) }
+            .defaultSize(width: 820, height: 620)
     }
 }
 
@@ -49,6 +50,13 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--check-ui-interaction") {
             Task {
                 do { try await UIAutomation.checkInteraction(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-web-research") {
+            Task {
+                do { try await NativeChecks.webResearch(macTools); exit(0) }
                 catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
             }
             return
@@ -225,7 +233,12 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let key = Credentials.existingDeepSeekKey()
-        conversation = Conversation(provider: MacReplyProvider(fallback: BrainRouter(auth: auth, tools: macTools, deepSeekKey: key), catalog: catalog), providerName: auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek")
+        voice.configureDeepgram(key: Credentials.existingDeepgramKey())
+        conversation = Conversation(provider: MacReplyProvider(
+            fallback: BrainRouter(auth: auth, tools: macTools, deepSeekKey: key),
+            researchFallback: BrainRouter(auth: auth, tools: nil, deepSeekKey: key),
+            catalog: catalog
+        ), providerName: auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek")
         auth.onProviderChange = { [weak self] in
             guard let self else { return }
             self.conversation.changeProviderName(self.auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek")
@@ -254,6 +267,23 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if CommandLine.arguments.contains("--check-web-answer") {
+            Task {
+                do {
+                    var called: Set<String> = []
+                    macTools.onExecution = { called.insert($0) }
+                    var answer = ""
+                    let provider = MacReplyProvider(fallback: DeepSeekProvider(key: key, tools: macTools), researchFallback: DeepSeekProvider(key: key), catalog: catalog)
+                    let started = Date()
+                    for try await delta in provider.reply(to: [Message(isUser: true, text: "Check whether a new Bleach: Thousand-Year Blood War anime episode is out. Research the current web now and answer directly with source links.")]) { answer += delta }
+                    guard !answer.isEmpty, Date().timeIntervalSince(started) < 45,
+                          !answer.lowercased().contains("can't read the page") else { throw ProviderError.invalidStream }
+                    print("PASS: deterministic research plus one live answer completed in under 45 seconds; answer and credentials hidden; extra model tool calls: \(called.count)")
+                    exit(0)
+                } catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--check-provider") {
             Task {
                 do {
@@ -270,11 +300,14 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             return
         }
         macTools.showApproval = { [weak self] in self?.showPanel(focusComposer: false) }
+        macTools.onActivity = { [weak self] title in self?.conversation.reportActivity(title) }
         catalog.onRefresh = { [weak self] words in self?.voice.contextualWords = words }
         Task { await catalog.refresh() }
         voice.onStart = { [weak self] in self?.conversation.stop() }
         voice.onTranscript = { [weak self] text in self?.conversation.send(text) }
-        conversation.onReply = { [weak self] text in self?.voice.speak(text) }
+        conversation.onReplyStart = { [weak self] in self?.voice.beginReply() }
+        conversation.onReplyDelta = { [weak self] text in self?.voice.appendReply(text) }
+        conversation.onReply = { [weak self] text in self?.voice.finishReply(text) }
         conversation.onStop = { [weak self] in self?.voice.stopSpeaking(); self?.macTools.cancelApproval() }
         NSApp.setActivationPolicy(.accessory)
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -523,38 +556,148 @@ struct HaloSettings: View {
     @Bindable var macTools: MacTools
     @Bindable var presentation: PanelPresentation
     @Bindable var auth: ChatGPTAuth
-    var body: some View {
-        ScrollView { Form {
-            Section("Appearance") {
-                Toggle("Keep in corner", isOn: $presentation.keepInCorner)
-                Text("Off: open from the menu bar and retract to the side. On: stay visible in the corner; retract to a small capsule.")
-                    .font(.caption).foregroundStyle(.secondary)
+
+    private enum Page: String, CaseIterable, Identifiable {
+        case general = "General"
+        case voice = "Voice"
+        case brain = "Brain"
+        case apps = "Apps"
+        case privacy = "Mac Access"
+
+        var id: Self { self }
+        var icon: String {
+            switch self {
+            case .general: "slider.horizontal.3"
+            case .voice: "waveform"
+            case .brain: "sparkles"
+            case .apps: "square.grid.2x2"
+            case .privacy: "hand.raised"
             }
-            ChatGPTSettings(auth: auth)
-            LabeledContent("Speech recognition", value: "Apple · On this Mac · English")
-            Toggle("Speak replies", isOn: $voice.speakReplies)
-            Toggle("Listen for Mercy or Hey Mercy", isOn: Binding(get: { wake.enabled }, set: { value in setHandsFree(value) }))
-            Text(wake.status).font(.caption).foregroundStyle(.secondary)
-            AppCatalogSettings(catalog: catalog)
-            Section("Mac access") {
-                Text("Mercy can open installed apps, inspect folders and text files, and prepare file changes. Allow access to protected folders in macOS settings when needed.").font(.caption).foregroundStyle(.secondary)
-                Text("Add Halo.app to Full Disk Access to allow protected-file reads. macOS requires you to enable this yourself.").font(.caption).foregroundStyle(.secondary)
-                Button("Show Halo in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
-                Text(macTools.ui.trusted ? "Mac interface controls: enabled" : "Mac interface controls: permission needed").font(.caption)
-                Button("Enable Mac controls…") { macTools.ui.requestAccess() }
-                Text(macTools.screen.allowed ? "Screen capture: enabled" : "Screen capture: permission needed").font(.caption)
-                Button("Check access") { macTools.ui.refreshAccess(); macTools.screen.refreshAccess() }
-                Button("Open Screen Recording settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
-                }
-                Text(Bundle.main.bundleURL.path).font(.caption2).textSelection(.enabled)
-                if !macTools.lastFailure.isEmpty { Text(macTools.lastFailure).font(.caption).textSelection(.enabled) }
-                Button("Open Full Disk Access settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
-                }
-            }
-            Text("Halo reuses your existing DeepSeek development key and stores its own copy in Keychain. Tap the microphone to talk, then tap again to send. Replies use the Mac’s system voice. When hands-free is on, wake detection stays on this Mac and your request sends automatically after a pause. Background audio is not sent to DeepSeek. Apps and files use native Mac tools; file changes require approval. Native UI inspection, button actions, text entry, shortcuts, and window layout are available with Accessibility permission. Generic UI actions show an approval preview. Screen understanding uses a screenshot preview before sharing with DeepSeek. Continue with ChatGPT in Brain settings to connect your ChatGPT account.")
-                .font(.callout).foregroundStyle(.secondary)
-        }.padding(24) }.frame(width: 460, height: 650)
+        }
     }
+
+    @State private var page: Page = .general
+
+    var body: some View {
+        ZStack {
+            FluidGradient(configuration: .init(
+                colors: FluidGradientConfiguration.halo.colors,
+                speed: 0.07,
+                intensity: 0.55,
+                opacity: 0.25
+            ))
+            Rectangle().fill(.regularMaterial.opacity(0.88))
+            NavigationSplitView {
+                List(Page.allCases, selection: $page) { item in
+                    Label(item.rawValue, systemImage: item.icon).tag(item)
+                }
+                .navigationSplitViewColumnWidth(min: 170, ideal: 185)
+                .safeAreaInset(edge: .bottom) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("HALO").font(.caption.weight(.semibold)).tracking(1.8)
+                        Text("Private by design").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                }
+            } detail: {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(page.rawValue).font(.system(size: 28, weight: .semibold, design: .rounded))
+                        pageContent
+                    }
+                    .frame(maxWidth: 580, alignment: .leading)
+                    .padding(30)
+                }
+            }
+            .navigationSplitViewStyle(.balanced)
+        }
+        .frame(minWidth: 720, idealWidth: 820, minHeight: 520, idealHeight: 620)
+    }
+
+    @ViewBuilder private var pageContent: some View {
+        switch page {
+        case .general:
+            settingsCard("Halo bar", icon: "macwindow") {
+                Toggle("Keep Halo in the corner", isOn: $presentation.keepInCorner)
+                Text("When disabled, Halo lives in the menu bar and retracts to the side. When enabled, it remains as a compact capsule.")
+                    .settingsNote()
+            }
+            settingsCard("Visuals", icon: "paintpalette") {
+                LabeledContent("Fluid gradient", value: "Metal · 60 FPS")
+                Text("The atmospheric background automatically becomes still when Reduce Motion is enabled in macOS.")
+                    .settingsNote()
+            }
+        case .voice:
+            settingsCard("Listening", icon: "mic") {
+                Toggle("Listen for Mercy or Hey Mercy", isOn: Binding(get: { wake.enabled }, set: { setHandsFree($0) }))
+                LabeledContent("Recognition", value: "Apple · On this Mac")
+                Text(wake.status).settingsNote()
+            }
+            settingsCard("Spoken replies", icon: "speaker.wave.2") {
+                Toggle("Speak replies", isOn: $voice.speakReplies)
+                LabeledContent("Voice", value: "Deepgram Aura 2")
+                Text("Microphone audio stays with Apple speech recognition. Only Halo's generated reply text is sent to Deepgram for speech.")
+                    .settingsNote()
+            }
+        case .brain:
+            settingsCard("Response provider", icon: "sparkles") {
+                Form { ChatGPTSettings(auth: auth) }.formStyle(.grouped).scrollDisabled(true)
+            }
+        case .apps:
+            settingsCard("Apps on this Mac", icon: "square.grid.2x2") {
+                Form { AppCatalogSettings(catalog: catalog) }.formStyle(.grouped).scrollDisabled(true)
+            }
+        case .privacy:
+            settingsCard("Action authorization", icon: "bolt.shield") {
+                Text("Halo shows the exact command, script, file contents, screenshot, or interface action before carrying out a sensitive step. macOS permission prompts can still appear separately.")
+                    .settingsNote()
+            }
+            settingsCard("Permissions", icon: "lock.shield") {
+                permissionRow("Mac interface controls", enabled: macTools.ui.trusted)
+                permissionRow("Screen capture", enabled: macTools.screen.allowed)
+                HStack {
+                    Button("Enable Mac controls…") { macTools.ui.requestAccess() }
+                    Button("Check access") { macTools.ui.refreshAccess(); macTools.screen.refreshAccess() }
+                }
+                HStack {
+                    Button("Screen Recording…") { openPrivacy("Privacy_ScreenCapture") }
+                    Button("Full Disk Access…") { openPrivacy("Privacy_AllFiles") }
+                }
+                if !macTools.lastFailure.isEmpty { Text(macTools.lastFailure).settingsNote().textSelection(.enabled) }
+            }
+            settingsCard("Halo application", icon: "app.badge") {
+                Button("Show Halo in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
+                Text(Bundle.main.bundleURL.path).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }
+    }
+
+    private func settingsCard<Content: View>(_ title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(title, systemImage: icon).font(.headline)
+            Divider().opacity(0.45)
+            content()
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+    }
+
+    private func permissionRow(_ title: String, enabled: Bool) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Label(enabled ? "Enabled" : "Permission needed", systemImage: enabled ? "checkmark.circle.fill" : "exclamationmark.circle")
+                .font(.caption).foregroundStyle(enabled ? .green : .secondary)
+        }
+    }
+
+    private func openPrivacy(_ pane: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
+    }
+}
+
+private extension View {
+    func settingsNote() -> some View { font(.caption).foregroundStyle(.secondary) }
 }

@@ -1,0 +1,33 @@
+{
+  "Files": [
+    {
+      "Id": "/Users/abdirashiidsammantar/Desktop/halo/HaloWebsite/src/HaloWebsite/wwwroot/css/site.css",
+      "PackagePath": "staticwebassets/css/site.css"
+    },
+    {
+      "Id": "/Users/abdirashiidsammantar/Desktop/halo/HaloWebsite/src/HaloWebsite/wwwroot/img/favicon.svg",
+      "PackagePath": "staticwebassets/img/favicon.svg"
+    },
+    {
+      "Id": "/Users/abdirashiidsammantar/Desktop/halo/HaloWebsite/src/HaloWebsite/wwwroot/js/site.js",
+      "PackagePath": "staticwebassets/js/site.js"
+    },
+    {
+      "Id": "obj/Debug/net8.0/staticwebassets/msbuild.HaloWebsite.Microsoft.AspNetCore.StaticWebAssets.props",
+      "PackagePath": "build\\Microsoft.AspNetCore.StaticWebAssets.props"
+    },
+    {
+      "Id": "obj/Debug/net8.0/staticwebassets/msbuild.build.HaloWebsite.props",
+      "PackagePath": "build\\HaloWebsite.props"
+    },
+    {
+      "Id": "obj/Debug/net8.0/staticwebassets/msbuild.buildMultiTargeting.HaloWebsite.props",
+      "PackagePath": "buildMultiTargeting\\HaloWebsite.props"
+    },
+    {
+      "Id": "obj/Debug/net8.0/staticwebassets/msbuild.buildTransitive.HaloWebsite.props",
+      "PackagePath": "buildTransitive\\HaloWebsite.props"
+    }
+  ],
+  "ElementsToRemove": []
+}

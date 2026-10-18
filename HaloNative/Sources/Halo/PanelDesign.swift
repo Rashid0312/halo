@@ -38,6 +38,7 @@ struct ConversationView: View {
     let retract: () -> Void
     let activityChanged: () -> Void
     @State private var draft = ""
+    @State private var showActivity = false
     @FocusState private var composerFocused: Bool
 
     private let ice = Color(red: 0.64, green: 0.86, blue: 0.91)
@@ -47,7 +48,7 @@ struct ConversationView: View {
         if voice.phase == .listening { return "Listening" }
         if voice.phase != .idle { return "Hearing you" }
         if voice.isSpeaking { return "Speaking" }
-        if conversation.isResponding { return macTools.activity.isEmpty ? "Thinking" : "Working" }
+        if conversation.isResponding { return conversation.activity.isEmpty ? "Working" : conversation.activity.replacingOccurrences(of: "…", with: "") }
         return "Mercy"
     }
     private var activityKey: String {
@@ -88,19 +89,23 @@ struct ConversationView: View {
     }
 
     private var capsule: some View {
-        Button(action: expand) {
-            HStack(spacing: 10) {
-                mark
-                Text(status).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                Spacer(minLength: 0)
-                Circle().fill(wake.enabled ? ice : Color.secondary.opacity(0.6)).frame(width: 4, height: 4)
+        ZStack {
+            FluidGradient(configuration: .bar)
+            Capsule().fill(.ultraThinMaterial.opacity(0.62))
+            Button(action: expand) {
+                HStack(spacing: 10) {
+                    mark
+                    Text(status).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Circle().fill(wake.enabled ? ice : Color.secondary.opacity(0.6)).frame(width: 4, height: 4)
+                }
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .contentShape(Capsule())
             }
-            .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 38)
-            .contentShape(Capsule())
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .clipShape(Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
         .accessibilityLabel("Open Halo")
@@ -108,28 +113,73 @@ struct ConversationView: View {
     }
 
     private var expanded: some View {
-        VStack(spacing: 0) {
-            header
-            conversationBody
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if let approval = macTools.approval { approvalCard(approval) }
-            if !catalog.suggestions.isEmpty { appChoices }
-            if !voice.notice.isEmpty || voice.phase != .idle && !voice.transcript.isEmpty { speechStatus }
-            if !macTools.activity.isEmpty {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
-                    Text(macTools.activity).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer()
-                }.padding(.horizontal, 18).padding(.bottom, 8)
+        ZStack {
+            FluidGradient(configuration: .halo)
+            Rectangle().fill(.ultraThinMaterial.opacity(0.70))
+            VStack(spacing: 0) {
+                header
+                conversationBody
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let approval = macTools.approval { approvalCard(approval) }
+                if !catalog.suggestions.isEmpty { appChoices }
+                if !voice.notice.isEmpty || voice.phase != .idle && !voice.transcript.isEmpty { speechStatus }
+                if conversation.isResponding || !conversation.activitySteps.isEmpty { activityCard }
+                composer
             }
-            composer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(
             LinearGradient(colors: [.white.opacity(0.32), .white.opacity(0.06), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.7))
         .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
         .transition(.opacity)
+    }
+
+    private var activityCard: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 7) {
+                Button { withAnimation(.easeInOut(duration: 0.18)) { showActivity.toggle() } } label: {
+                    HStack(spacing: 7) {
+                        if conversation.isResponding { ProgressView().controlSize(.mini) }
+                        Text(conversation.activity.isEmpty ? conversation.status : conversation.activity)
+                            .font(.system(size: 11, weight: .medium)).lineLimit(1)
+                        Spacer()
+                        if let step = conversation.activitySteps.last {
+                            Text(elapsed(step, at: context.date)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+                        }
+                        Image(systemName: showActivity ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .semibold))
+                    }
+                }.buttonStyle(.plain)
+                if showActivity {
+                    ForEach(conversation.activitySteps) { step in
+                        HStack(spacing: 7) {
+                            Image(systemName: step.state == .active ? "circle.dotted" : step.state == .failed ? "xmark.circle" : "checkmark.circle.fill")
+                                .foregroundStyle(step.state == .failed ? .red : step.state == .active ? ice : .secondary)
+                            Text(step.title).lineLimit(2)
+                            Spacer(minLength: 4)
+                            Text(elapsed(step, at: context.date)).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                        }.font(.system(size: 10)).foregroundStyle(step.state == .active ? .primary : .secondary)
+                    }
+                    if conversation.isResponding {
+                        HStack {
+                            Button("Stop") { voice.cancel(); catalog.cancelSuggestion(); conversation.stop() }
+                            if conversation.activity.contains("taking longer") {
+                                Button("Retry") { voice.cancel(); conversation.retry() }
+                            }
+                            Spacer()
+                        }.controlSize(.small)
+                    }
+                }
+            }
+            .padding(10)
+            .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 12).padding(.bottom, 8)
+        }
+    }
+
+    private func elapsed(_ step: ActivityStep, at now: Date) -> String {
+        let seconds = max(0, Int((step.finishedAt ?? now).timeIntervalSince(step.startedAt)))
+        return seconds < 60 ? "\(seconds)s" : "\(seconds / 60)m \(seconds % 60)s"
     }
 
     private var header: some View {

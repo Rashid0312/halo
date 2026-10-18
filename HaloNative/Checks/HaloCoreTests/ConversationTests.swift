@@ -107,6 +107,25 @@ func conversationHistoryIsBounded() async throws {
     precondition(retainedCharacters <= Conversation.maximumRetainedCharacters)
 }
 
+@MainActor
+func activityTimelineTracksProgress() async throws {
+    let (stream, continuation) = AsyncThrowingStream<String, Error>.makeStream()
+    let conversation = Conversation(provider: ControlledProvider(stream: stream), providerName: "Test brain")
+    conversation.send("research this")
+    precondition(conversation.activity == "Searching and reading sources…")
+    precondition(conversation.activitySteps.count == 1)
+    conversation.reportActivity("Searching the web…")
+    precondition(conversation.activitySteps.count == 2)
+    precondition(conversation.activitySteps.first?.state == .complete)
+    continuation.yield("answer")
+    continuation.finish()
+    try await Task.sleep(for: .milliseconds(120))
+    precondition(!conversation.isResponding)
+    precondition(conversation.activity.isEmpty)
+    precondition(conversation.activitySteps.last?.state == .complete)
+    precondition(conversation.lastPrompt == "research this")
+}
+
 @main
 struct CoreChecks {
     @MainActor static func main() async throws {
@@ -139,6 +158,10 @@ struct CoreChecks {
         precondition(responseKeepalive == nil)
         let responseDone = try ChatGPTProvider.event("data: [DONE]")
         precondition(responseDone == nil)
+        let completedMessage = try ChatGPTProvider.event(#"data: {"type":"response.output_item.done","item":{"type":"message","status":"completed"}}"#)
+        precondition(ChatGPTProvider.completesVisibleAnswer(completedMessage))
+        let completedTool = try ChatGPTProvider.event(#"data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"list_apps","arguments":"{}"}}"#)
+        precondition(!ChatGPTProvider.completesVisibleAnswer(completedTool))
         let limit = ChatGPTProvider.apiError(Data(#"{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}"#.utf8), status: 429)
         precondition(limit.localizedDescription.contains("usage limit"))
         print("PASS: ChatGPT Responses text parsing, keepalive/completion handling, and plan-limit errors")
@@ -180,5 +203,7 @@ struct CoreChecks {
         print("PASS: streamed output is rendered in bounded batches and input/reply sizes are capped")
         try await conversationHistoryIsBounded()
         print("PASS: rendered conversation rows and total retained text are bounded")
+        try await activityTimelineTracksProgress()
+        print("PASS: response activity stages are timed, retained, and completed")
     }
 }

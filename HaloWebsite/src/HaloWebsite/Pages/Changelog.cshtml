@@ -1,0 +1,85 @@
+@page
+@model ChangelogModel
+@{
+    ViewData["Title"] = "Changelog";
+    Layout = "~/Pages/Shared/_Layout.cshtml";
+}
+
+<section class="changelog-page section-padded">
+    <div class="section-header">
+        <h1>Changelog</h1>
+        <p>All notable changes to Halo AI, newest first.</p>
+    </div>
+
+    <div class="changelog-entries">
+
+        <article class="changelog-entry">
+            <time class="entry-date" datetime="2026-10-17">Oct 17, 2026</time>
+            <h2 class="entry-version">Halo AI — Initial Release</h2>
+            <ul class="entry-changes">
+                <li>
+                    <strong>Native macOS app</strong> — SwiftUI/AppKit shell for macOS 26+ on Apple Silicon.
+                    No Electron, no Node runtime. Pure Swift, instant cold start.
+                </li>
+                <li>
+                    <strong>DeepSeek AI streaming</strong> — Live token-by-token streaming replies with conversation
+                    memory for follow-up questions. Activity timeline shows model, search, and tool progress.
+                </li>
+                <li>
+                    <strong>ChatGPT sign-in</strong> — PKCE browser authorization connects your existing ChatGPT
+                    account. Tokens validated against OpenAI's JWKS, stored securely in Keychain.
+                    DeepSeek and ChatGPT are both selectable.
+                </li>
+                <li>
+                    <strong>Wake word activation</strong> — "Mercy" and "Hey Mercy" trigger hands-free mode.
+                    On-device sherpa-onnx keyword detection; Silero VAD for automatic speech endpoint.
+                    Apple SpeechAnalyzer transcribes on this Mac; audio never leaves the device.
+                </li>
+                <li>
+                    <strong>Deepgram Aura 2 voice</strong> — Sentence-by-sentence streaming spoken replies
+                    with the Mac system voice as fallback.
+                </li>
+                <li>
+                    <strong>Liquid Glass panel</strong> — Slim panel slides in from the right edge of the
+                    menu bar. Pin mode shrinks to a glass capsule when retracted. Respects Reduce Motion.
+                </li>
+                <li>
+                    <strong>App control</strong> — Indexes all installed apps by name, bundle ID, and path.
+                    Fuzzy spoken-name matching (e.g. "Streamo" → Stremio). Simple launches skip the AI
+                    entirely via NSWorkspace. DeepSeek tool loop handles compound requests.
+                </li>
+                <li>
+                    <strong>File tools</strong> — List folders (up to 200 entries), read UTF-8 files (32 KB),
+                    write files (64 KB) with mandatory approval before each write. Atomic writes.
+                    Respects macOS permissions; Full Disk Access unlocks protected paths.
+                </li>
+                <li>
+                    <strong>UI Automation</strong> — Real Accessibility tree inspection, button actions,
+                    Unicode text input to focused fields, keyboard shortcuts, window layout and
+                    multi-display placement. Incomplete trees fall back to an approved screenshot.
+                </li>
+                <li>
+                    <strong>Web research</strong> — Searches first, reads up to three sources concurrently,
+                    and grounds the answer in real evidence. Private/local addresses and oversized
+                    pages are rejected.
+                </li>
+                <li>
+                    <strong>Shell &amp; AppleScript execution</strong> — zsh commands and AppleScript run
+                    with a 60-second deadline, 32 KB output cap, and a mandatory approval step.
+                    Completed actions cannot be undone.
+                </li>
+                <li>
+                    <strong>Screen understanding</strong> — Captures a chosen window or display (excluding
+                    Halo itself) and shares with the AI only after user approval. Images live in memory
+                    only; no screenshot files are written.
+                </li>
+                <li>
+                    <strong>Security</strong> — API keys never bundled; imported from <code>.env</code> on
+                    first launch only, then stored in Keychain. All destructive actions require
+                    approval; Stop cancels pending operations.
+                </li>
+            </ul>
+        </article>
+
+    </div>
+</section>

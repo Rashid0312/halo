@@ -1,0 +1,844 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Halo AI — The Smarter Mac Assistant";
+    Layout = "~/Pages/Shared/_Layout.cshtml";
+}
+
+<!-- ══════════════════════════════════════════════
+     SECTION 1 · HERO WITH FLUID AURORA MESH
+════════════════════════════════════════════════ -->
+<section class="hero" id="hero">
+    <!-- GPU-Accelerated WebGL Mesh Gradient Canvas -->
+    <div class="hero-canvas-container" id="heroCanvasContainer">
+        <canvas id="gradient-canvas" class="gradient-canvas"></canvas>
+        <div class="hero-frosted-overlay"></div>
+    </div>
+
+    <div class="hero-inner">
+        <div class="hero-badge">
+            <span class="badge-sparkle">✦</span>
+            <span>Built natively for macOS 26+</span>
+            <span class="badge-tag">Apple Silicon</span>
+        </div>
+
+        <h1 class="hero-headline">
+            The Mac assistant<br>
+            <span class="hero-gradient-text">Siri always should have been.</span>
+        </h1>
+
+        <p class="hero-sub">
+            Voice-activated. AI-powered. Runs natively on your Mac.<br>
+            Control apps, manage files, search the web — all hands-free.
+        </p>
+
+        <div class="hero-actions">
+            <a href="/download" class="btn btn-primary btn-lg">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" class="btn-icon">
+                    <path d="M8 1a.5.5 0 0 1 .5.5v9.793l2.646-2.647a.5.5 0 0 1 .708.708l-3.5 3.5a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L7.5 11.293V1.5A.5.5 0 0 1 8 1z"/>
+                </svg>
+                Download for Mac
+            </a>
+            <a href="#how-it-works" class="btn btn-glass btn-lg">See how it works</a>
+        </div>
+
+        <p class="hero-note">Free · No account required · Zero setup</p>
+
+        <!-- ══════════════════════════════════════════════
+             LIVING MACOS DESKTOP SHOWCASE (Authentic macOS 26)
+        ════════════════════════════════════════════════ -->
+        <div class="living-desktop-wrapper" id="livingDesktop">
+            
+            <!-- Authentic macOS Menu Bar -->
+            <header class="mac-desktop-menubar" aria-label="macOS Menu Bar">
+                <div class="menubar-left">
+                    <span class="apple-logo"></span>
+                    <span class="menubar-app-name" id="menubarActiveApp">Notes</span>
+                    <span class="menubar-item hide-mobile">File</span>
+                    <span class="menubar-item hide-mobile">Edit</span>
+                    <span class="menubar-item hide-mobile">Format</span>
+                    <span class="menubar-item hide-mobile">View</span>
+                    <span class="menubar-item hide-mobile">Window</span>
+                    <span class="menubar-item hide-mobile">Help</span>
+                </div>
+                <div class="menubar-right">
+                    <!-- Mic in-use indicator -->
+                    <span class="menubar-mic-indicator" title="Microphone Active">
+                        <span class="mic-dot-pulse"></span>
+                    </span>
+                    <!-- System Icons -->
+                    <svg class="menubar-sys-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" title="Wi-Fi">
+                        <path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/>
+                    </svg>
+                    <svg class="menubar-sys-icon" viewBox="0 0 24 24" fill="currentColor" title="Battery 100%">
+                        <rect x="2" y="7" width="16" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+                        <rect x="4" y="9" width="10" height="6" rx="1"/>
+                        <path d="M20 11v2"/>
+                    </svg>
+                    <svg class="menubar-sys-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" title="Spotlight">
+                        <circle cx="11" cy="11" r="7"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <span class="menubar-clock" id="menubarClock">Sun 18 Oct 00:11</span>
+
+                    <!-- Menu Bar Halo Capsule (PanelDesign.swift) -->
+                    <button type="button" class="menubar-halo-pill pill-active" id="menuBarHaloPill" aria-label="Toggle Halo AI Panel" title="Toggle Mercy">
+                        <span class="pill-mesh-icon">❄</span>
+                        <span class="pill-title" id="pillStatusText">"Mercy"</span>
+                        <span class="pill-status-dot"></span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Desktop Staging Surface with macOS Sonoma Graphic Blue Wallpaper -->
+            <div class="mac-desktop-surface" id="macDesktopSurface">
+                
+                <!-- macOS Sonoma Graphic Waveform Wallpaper Layer -->
+                <div class="sonoma-wallpaper-layer" aria-hidden="true">
+                    <div class="wave-glow wg-top"></div>
+                    <div class="wave-glow wg-mid"></div>
+                    <div class="wave-glow wg-accent"></div>
+                    <svg class="wave-lines-svg" viewBox="0 0 1000 500" preserveAspectRatio="none">
+                        <path d="M-50,260 C200,180 350,340 600,220 C850,100 950,280 1050,200 L1050,550 L-50,550 Z" fill="rgba(56, 189, 248, 0.22)" />
+                        <path d="M-50,300 C150,220 400,380 650,260 C850,160 980,310 1050,270 L1050,550 L-50,550 Z" fill="rgba(14, 165, 233, 0.28)" />
+                        <path d="M-50,340 C250,270 450,420 750,300 C920,220 990,340 1050,320 L1050,550 L-50,550 Z" fill="rgba(2, 132, 199, 0.35)" />
+                    </svg>
+                </div>
+
+                <!-- Desktop Folder Icons (Visible on the right side) -->
+                <div class="desktop-cloud-icons" aria-hidden="true">
+                    <div class="desk-icon-item">
+                        <div class="desk-folder-graphic">
+                            <svg class="mac-folder-svg" viewBox="0 0 40 32" fill="none">
+                                <path d="M2 7C2 4.79 3.79 3 6 3H14.5L18 7H34C36.21 7 38 8.79 38 11V25C38 27.21 36.21 29 34 29H6C3.79 29 2 27.21 2 25V7Z" fill="url(#fGrad1)"/>
+                                <path d="M2 13C2 10.79 3.79 9 6 9H34C36.21 9 38 10.79 38 13V25C38 27.21 36.21 29 34 29H6C3.79 29 2 27.21 2 25V13Z" fill="url(#fFront1)"/>
+                                <defs>
+                                    <linearGradient id="fGrad1" x1="2" y1="3" x2="38" y2="29" gradientUnits="userSpaceOnUse">
+                                        <stop stop-color="#0284c7"/>
+                                        <stop offset="1" stop-color="#0369a1"/>
+                                    </linearGradient>
+                                    <linearGradient id="fFront1" x1="2" y1="9" x2="38" y2="29" gradientUnits="userSpaceOnUse">
+                                        <stop stop-color="#38bdf8"/>
+                                        <stop offset="1" stop-color="#0284c7"/>
+                                    </linearGradient>
+                                </defs>
+                            </svg>
+                            <span class="cloud-badge">☁</span>
+                        </div>
+                        <span class="desk-icon-label">halo</span>
+                    </div>
+                    <div class="desk-icon-item">
+                        <div class="desk-folder-graphic">
+                            <svg class="mac-folder-svg" viewBox="0 0 40 32" fill="none">
+                                <path d="M2 7C2 4.79 3.79 3 6 3H14.5L18 7H34C36.21 7 38 8.79 38 11V25C38 27.21 36.21 29 34 29H6C3.79 29 2 27.21 2 25V7Z" fill="url(#fGrad2)"/>
+                                <path d="M2 13C2 10.79 3.79 9 6 9H34C36.21 9 38 10.79 38 13V25C38 27.21 36.21 29 34 29H6C3.79 29 2 27.21 2 25V13Z" fill="url(#fFront2)"/>
+                                <defs>
+                                    <linearGradient id="fGrad2" x1="2" y1="3" x2="38" y2="29" gradientUnits="userSpaceOnUse">
+                                        <stop stop-color="#0284c7"/>
+                                        <stop offset="1" stop-color="#0369a1"/>
+                                    </linearGradient>
+                                    <linearGradient id="fFront2" x1="2" y1="9" x2="38" y2="29" gradientUnits="userSpaceOnUse">
+                                        <stop stop-color="#38bdf8"/>
+                                        <stop offset="1" stop-color="#0284c7"/>
+                                    </linearGradient>
+                                </defs>
+                            </svg>
+                            <span class="cloud-badge">☁</span>
+                        </div>
+                        <span class="desk-icon-label">Desktop</span>
+                    </div>
+                </div>
+
+                <!-- Window: macOS Apple Notes.app (Rich Native Proportions) -->
+                <div class="desktop-window win-notes" id="winNotes">
+                    <div class="dwin-titlebar notes-titlebar">
+                        <div class="traffic-lights">
+                            <span class="light close" title="Close"></span>
+                            <span class="light min" title="Minimize"></span>
+                            <span class="light zoom" title="Zoom"></span>
+                        </div>
+                        <div class="notes-toolbar-tools">
+                            <span class="notes-tool-ico" title="Sidebar toggle">⊞</span>
+                            <span class="notes-tool-ico" title="Grid view">▦</span>
+                            <span class="notes-tool-ico" title="Delete">🗑</span>
+                            <span class="notes-tool-ico" title="New Note">✎</span>
+                        </div>
+                        <div class="notes-title-group">
+                            <span class="notes-app-icon">📝</span>
+                            <span class="dwin-title" id="notesTitle">Notes — Q4 Launch Strategy</span>
+                        </div>
+                        <span class="notes-icloud-badge">iCloud</span>
+                    </div>
+
+                    <div class="notes-split-view">
+                        <!-- Folders & Note Cards Column -->
+                        <div class="notes-sidebar-pane">
+                            <div class="notes-folders-section">
+                                <div class="notes-folder-item active">📁 Quick Notes <span class="folder-count">8</span></div>
+                                <div class="notes-folder-item">📁 Architecture <span class="folder-count">5</span></div>
+                                <div class="notes-folder-item">📁 Product Eng <span class="folder-count">12</span></div>
+                            </div>
+                            <div class="notes-card-list">
+                                <div class="note-card-item active">
+                                    <span class="nc-title">Q4 Launch Strategy</span>
+                                    <span class="nc-date">Today at 9:41 AM</span>
+                                    <span class="nc-snippet">Architecture targets for macOS 26+ native release...</span>
+                                </div>
+                                <div class="note-card-item">
+                                    <span class="nc-title">DeepSeek V3 Inference</span>
+                                    <span class="nc-date">Yesterday</span>
+                                    <span class="nc-snippet">Local streaming engine with 184ms TTFT latency...</span>
+                                </div>
+                                <div class="note-card-item">
+                                    <span class="nc-title">M4 Neural Engine</span>
+                                    <span class="nc-date">Oct 16</span>
+                                    <span class="nc-snippet">38 TOPS NPU acceleration for on-device voice model...</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Main Note Canvas -->
+                        <div class="notes-canvas-pane">
+                            <div class="notes-header-meta">
+                                <h3 class="note-main-heading" id="notesMainHeading">Q4 Milestones &amp; Launch Checklist</h3>
+                                <span class="note-timestamp" id="notesTimestamp">Edited today at 9:41 AM</span>
+                            </div>
+                            <p class="notes-lead">Native macOS release targets (Apple Silicon M-Series):</p>
+                            
+                            <ul class="notes-interactive-checklist" id="notesChecklist">
+                                <li class="checklist-item done" id="checkItem1">
+                                    <span class="chk-box">✓</span>
+                                    <span class="chk-label">On-device speech analyzer &amp; Silero VAD tuned</span>
+                                    <span class="chk-badge success">Ready</span>
+                                </li>
+                                <li class="checklist-item target" id="checkItem2">
+                                    <span class="chk-box">○</span>
+                                    <span class="chk-label">Architecture signoff &amp; security review: Oct 24</span>
+                                    <span class="chk-badge warning">Oct 24</span>
+                                </li>
+                                <li class="checklist-item target" id="checkItem3">
+                                    <span class="chk-box">○</span>
+                                    <span class="chk-label">Internal dogfooding release: Nov 2nd</span>
+                                    <span class="chk-badge info">Nov 2</span>
+                                </li>
+                                <li class="checklist-item target" id="checkItem4">
+                                    <span class="chk-box">○</span>
+                                    <span class="chk-label">Public Release (Apple Silicon): Nov 15th</span>
+                                    <span class="chk-badge primary">Nov 15</span>
+                                </li>
+                            </ul>
+
+                            <div class="notes-dynamic-append" id="notesDynamicAppend"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ══════════════════════════════════════════════
+                     CLOSED STATE: Floating Mercy Capsule Widget (PanelDesign.swift)
+                ════════════════════════════════════════════════ -->
+                <button type="button" class="mercy-desktop-capsule" id="mercyDesktopCapsule" aria-label="Open Mercy Panel" title="Click to open Mercy">
+                    <div class="capsule-icon-wrap">
+                        <svg class="capsule-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
+                            <path d="M8 8l8 8M16 8l-8 8"/>
+                        </svg>
+                    </div>
+                    <span class="capsule-name">Mercy</span>
+                    <span class="capsule-status-dot"></span>
+                </button>
+
+                <!-- ══════════════════════════════════════════════
+                     OPEN STATE: Authentic Halo Native Panel (PanelDesign.swift)
+                ════════════════════════════════════════════════ -->
+                <div class="desktop-window halo-native-panel" id="haloLivingPanel">
+                    
+                    <!-- Panel Header: MERCY · Status · Menu · Pin · Retract -->
+                    <div class="panel-native-header">
+                        <div class="panel-header-left">
+                            <span class="panel-glyph">⬡</span>
+                            <span class="panel-logo-text">MERCY</span>
+                        </div>
+                        <div class="panel-header-right">
+                            <button type="button" class="panel-tool-btn" id="panelMenuBtn" title="Menu">•••</button>
+                            <button type="button" class="panel-tool-btn" id="panelPinBtn" title="Keep in corner">📌</button>
+                            <button type="button" class="panel-tool-btn retract-btn" id="panelRetractBtn" title="Close into Capsule">›</button>
+                        </div>
+                    </div>
+
+                    <!-- Panel Scrollable Body -->
+                    <div class="panel-native-body">
+                        
+                        <!-- Live User Query Bubble -->
+                        <div class="chat-row user-row">
+                            <div class="chat-speech-bubble" id="haloUserText">
+                                "Hey Mercy, summarize Notes and send confirmed dates to Alex on Slack."
+                            </div>
+                        </div>
+
+                        <!-- Halo Assistant Reply Text -->
+                        <div class="chat-row assistant-row">
+                            <div class="assistant-speech-bubble" id="haloAssistantText">
+                                <p class="assistant-p">Found <strong>Q4 Launch Strategy</strong> in Notes. Milestones are confirmed: Architecture review Oct 24, beta Nov 2nd, public launch Nov 15th.</p>
+                                <p class="assistant-p muted">Drafted confirmation message for Slack. Approval required below:</p>
+                            </div>
+                        </div>
+
+                        <!-- Activity Status Steps Card (Collapsible Accordion from PanelDesign.swift) -->
+                        <div class="native-activity-card" id="nativeActivityCard">
+                            <div class="activity-header" id="activityHeaderToggle" role="button" tabindex="0" title="Toggle steps">
+                                <span class="activity-title" id="activityTitleText">Reading Notes.app &amp; preparing Slack draft</span>
+                                <span class="activity-timer" id="activityTimerText">0.4s</span>
+                                <span class="activity-chevron" id="activityChevron">⌃</span>
+                            </div>
+                            <div class="activity-steps-list" id="activityStepsList">
+                                <div class="act-step done">
+                                    <span class="step-icon">✓</span>
+                                    <span>Read Notes.app: Q4 Launch Strategy</span>
+                                    <span class="step-time">0.2s</span>
+                                </div>
+                                <div class="act-step done">
+                                    <span class="step-icon">✓</span>
+                                    <span>Extracted 3 launch milestones</span>
+                                    <span class="step-time">0.3s</span>
+                                </div>
+                                <div class="act-step done">
+                                    <span class="step-icon">✓</span>
+                                    <span>Verified thread in Slack #product-eng</span>
+                                    <span class="step-time">0.4s</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tool Approval Card (Native Mac Security Model) -->
+                        <div class="native-approval-card" id="haloApprovalCard">
+                            <div class="approval-title">
+                                <span class="approval-icon">🛡️</span>
+                                <span>Approval Required: Send Slack Message</span>
+                            </div>
+                            <p class="approval-desc">
+                                Send update to <strong>Alex Chen</strong> in <strong>#product-eng</strong>: "Milestones confirmed: Beta on Nov 2nd, Public Release Nov 15th."
+                            </p>
+                            <div class="approval-actions">
+                                <button type="button" class="btn-approval-primary" id="btnApproveSend">Confirm &amp; Send</button>
+                                <button type="button" class="btn-approval-secondary" id="btnCancelSend">Cancel</button>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Bottom Glass Composer Bar -->
+                    <div class="panel-native-composer">
+                        <button type="button" class="composer-mic-icon-btn" aria-label="Voice input">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
+                            </svg>
+                        </button>
+                        <input type="text" id="panelInputComposer" class="composer-input" placeholder="Ask Mercy anything..." />
+                        <button type="button" class="composer-send-btn" id="composerSendBtn" aria-label="Send message">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <line x1="12" y1="19" x2="12" y2="5"/>
+                                <polyline points="5 12 12 5 19 12"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                </div>
+
+                <!-- ══════════════════════════════════════════════
+                     macOS DOCK (Authentic Floating Frosted Glass Dock)
+                ════════════════════════════════════════════════ -->
+                <div class="macos-dock" aria-label="macOS Dock">
+                    <div class="dock-app-item" title="Finder"><span class="dock-ico dock-finder">🙂</span></div>
+                    <div class="dock-app-item" title="Messages"><span class="dock-ico dock-messages">💬</span><span class="dock-badge">4</span></div>
+                    <div class="dock-app-item" title="Photos"><span class="dock-ico dock-photos">🌸</span></div>
+                    <div class="dock-app-item" title="FaceTime"><span class="dock-ico dock-facetime">📹</span><span class="dock-badge">16</span></div>
+                    <div class="dock-app-item dock-calendar-item" title="Calendar">
+                        <div class="dock-cal">
+                            <span class="cal-month">SUN</span>
+                            <span class="cal-day">18</span>
+                        </div>
+                    </div>
+                    <div class="dock-app-item is-running" title="Notes">
+                        <span class="dock-ico dock-notes">📝</span>
+                        <span class="dock-running-dot"></span>
+                    </div>
+                    <div class="dock-app-item" title="Chrome"><span class="dock-ico dock-chrome">🌐</span></div>
+                    <div class="dock-app-item" title="Settings"><span class="dock-ico dock-settings">⚙️</span></div>
+                    <div class="dock-app-item" title="Activity Monitor"><span class="dock-ico dock-activity">📈</span></div>
+                    <div class="dock-app-item" title="Spotify"><span class="dock-ico dock-spotify">🎧</span></div>
+                    <div class="dock-app-item" title="Mail"><span class="dock-ico dock-mail">✉️</span></div>
+                    <div class="dock-app-item" title="Terminal"><span class="dock-ico dock-terminal">&gt;_</span></div>
+                    <div class="dock-app-item" title="Safari"><span class="dock-ico dock-safari">🧭</span></div>
+                    <div class="dock-app-item" title="VS Code"><span class="dock-ico dock-vscode">💻</span></div>
+                    <div class="dock-app-item" title="Docker"><span class="dock-ico dock-docker">🐳</span></div>
+                    <div class="dock-divider"></div>
+                    <div class="dock-app-item" title="Trash"><span class="dock-ico dock-trash">🗑️</span></div>
+                </div>
+
+            </div>
+
+            <!-- Interactive Voice Sandbox Controller Shelf -->
+            <footer class="desktop-controls-shelf" aria-label="Interactive Controls">
+                <div class="shelf-header">
+                    <div class="shelf-title-group">
+                        <span class="shelf-badge">Interactive Live Demo</span>
+                        <span class="shelf-title">Click a voice instruction to see Mercy control macOS apps:</span>
+                    </div>
+                    <div class="shelf-view-toggle">
+                        <button type="button" class="mode-toggle-btn active" id="btnToggleOpen" title="View with Mercy Panel Expanded">
+                            <span>⬡ Panel Open</span>
+                        </button>
+                        <button type="button" class="mode-toggle-btn" id="btnToggleClosed" title="View with Mercy Retracted into Pill">
+                            <span>⬭ Closed (Pill)</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="shelf-chips">
+                    <button type="button" class="desktop-prompt-chip active" data-scenario="notesSlack">
+                        <span class="chip-icon">🎙️</span>
+                        <span>"Summarize Notes &amp; send confirmed dates to Alex on Slack"</span>
+                    </button>
+                    <button type="button" class="desktop-prompt-chip" data-scenario="addChecklist">
+                        <span class="chip-icon">🎙️</span>
+                        <span>"Complete Architecture signoff &amp; add Nov release note"</span>
+                    </button>
+                    <button type="button" class="desktop-prompt-chip" data-scenario="researchM4">
+                        <span class="chip-icon">🎙️</span>
+                        <span>"Research M4 benchmarks and append to Notes"</span>
+                    </button>
+                    <button type="button" class="desktop-prompt-chip" data-scenario="draftSlack">
+                        <span class="chip-icon">🎙️</span>
+                        <span>"Draft #product-eng release update from Notes"</span>
+                    </button>
+                </div>
+            </footer>
+
+        </div>
+    </div>
+</section>
+
+<!-- ══════════════════════════════════════════════
+     SECTION 2 · FEATURES
+════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════
+     SECTION 2 · FEATURES & SIRI VS. HALO SHOWCASE
+════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════
+     SECTION 2 · CAPABILITIES & APPLE-STYLE BENTO SHOWCASE
+════════════════════════════════════════════════ -->
+<section class="features section-padded" id="features">
+    <div class="section-header">
+        <div class="section-eyebrow">Capabilities</div>
+        <h2>Everything Siri can't do.</h2>
+        <p>Halo understands your Mac, sees your screen, and executes real workflows across installed apps.</p>
+    </div>
+
+    <!-- ── VIGNETTE 1: The Siri Reality vs. The Halo Reality ── -->
+    <div class="siri-vs-halo-vignette" id="siriComparison">
+        <div class="vignette-header">
+            <span class="vignette-tag">Side-by-Side Reality</span>
+            <h3 class="vignette-title">A real Mac assistant vs. a web search redirect</h3>
+            <p class="vignette-sub">Click a real voice instruction to compare what Siri does against what Halo executes on macOS:</p>
+            
+            <div class="vignette-prompt-chips">
+                <button type="button" class="v-chip active" data-siri-prompt="notesSlack">
+                    <span>💬 "Summarize Notes &amp; send to Alex on Slack"</span>
+                </button>
+                <button type="button" class="v-chip" data-siri-prompt="xcodeFix">
+                    <span>🛠️ "Why is my Xcode build failing?"</span>
+                </button>
+                <button type="button" class="v-chip" data-siri-prompt="cleanDesktop">
+                    <span>📁 "Organize loose screenshots on Desktop into Archive"</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="vignette-cards-grid">
+            
+            <!-- Left: The Siri Reality (with Authentic Apple Siri Orb Logo) -->
+            <div class="vignette-card siri-reality-card">
+                <div class="v-card-top">
+                    <div class="siri-logo-wrap">
+                        <svg class="siri-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Apple Siri Logo">
+                            <defs>
+                                <radialGradient id="siriBgGlow" cx="50%" cy="50%" r="50%">
+                                    <stop offset="0%" stop-color="#3b1d60"/>
+                                    <stop offset="70%" stop-color="#0b0818"/>
+                                    <stop offset="100%" stop-color="#000000"/>
+                                </radialGradient>
+                                <linearGradient id="siriWavePink" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#ff2d55"/>
+                                    <stop offset="50%" stop-color="#e040fb"/>
+                                    <stop offset="100%" stop-color="#007aff"/>
+                                </linearGradient>
+                                <linearGradient id="siriWaveCyan" x1="100%" y1="0%" x2="0%" y2="100%">
+                                    <stop offset="0%" stop-color="#00f0ff"/>
+                                    <stop offset="50%" stop-color="#5856d6"/>
+                                    <stop offset="100%" stop-color="#ff2d55"/>
+                                </linearGradient>
+                                <linearGradient id="siriWavePurple" x1="50%" y1="0%" x2="50%" y2="100%">
+                                    <stop offset="0%" stop-color="#30d158"/>
+                                    <stop offset="50%" stop-color="#007aff"/>
+                                    <stop offset="100%" stop-color="#af52de"/>
+                                </linearGradient>
+                                <filter id="siriGlowFilter" x="-30%" y="-30%" width="160%" height="160%">
+                                    <feGaussianBlur stdDeviation="3.5" result="blur"/>
+                                    <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+                                </filter>
+                            </defs>
+                            <circle cx="50" cy="50" r="46" fill="url(#siriBgGlow)" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+                            <ellipse cx="50" cy="50" rx="38" ry="18" fill="none" stroke="url(#siriWavePink)" stroke-width="5" transform="rotate(-32 50 50)" filter="url(#siriGlowFilter)" opacity="0.95"/>
+                            <ellipse cx="50" cy="50" rx="36" ry="16" fill="none" stroke="url(#siriWaveCyan)" stroke-width="4.5" transform="rotate(48 50 50)" filter="url(#siriGlowFilter)" opacity="0.95"/>
+                            <ellipse cx="50" cy="50" rx="33" ry="19" fill="none" stroke="url(#siriWavePurple)" stroke-width="4" transform="rotate(115 50 50)" filter="url(#siriGlowFilter)" opacity="0.90"/>
+                            <circle cx="50" cy="50" r="10" fill="#ffffff" opacity="0.35" filter="blur(3px)"/>
+                            <circle cx="50" cy="50" r="4.5" fill="#ffffff" opacity="0.9"/>
+                        </svg>
+                    </div>
+                    <div class="v-card-meta">
+                        <span class="v-brand-title">Apple Siri</span>
+                        <span class="v-brand-subtitle">macOS Default Assistant</span>
+                    </div>
+                    <span class="v-status-pill siri-pill">Cloud Query</span>
+                </div>
+
+                <div class="v-card-speech" id="siriResponseText">
+                    "I found some web search results for 'summarize notes and send confirmed dates to Alex on Slack'. Tap to view in Safari."
+                </div>
+
+                <div class="v-card-bottom siri-bottom">
+                    <span class="v-verdict-tag fail">❌ Web Redirect Dead-End</span>
+                    <span class="v-verdict-detail">Zero Accessibility access · Cannot interact with Notes or Slack</span>
+                </div>
+            </div>
+
+            <!-- Right: The Halo Reality -->
+            <div class="vignette-card halo-reality-card">
+                <div class="v-card-top">
+                    <div class="halo-logo-wrap">
+                        <svg class="halo-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="50" cy="50" r="46" fill="#0f172a" stroke="rgba(56, 189, 248, 0.45)" stroke-width="1.5"/>
+                            <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(56, 189, 248, 0.25)" stroke-dasharray="4 4"/>
+                            <polygon points="50,22 74,36 74,64 50,78 26,64 26,36" fill="none" stroke="#38bdf8" stroke-width="3.5"/>
+                            <circle cx="50" cy="50" r="7" fill="#9be3f2"/>
+                            <path d="M50 29v42M30 39l40 22M30 61l40-22" stroke="#9be3f2" stroke-width="1.8" opacity="0.7"/>
+                        </svg>
+                    </div>
+                    <div class="v-card-meta">
+                        <span class="v-brand-title">Halo AI <span class="halo-badge-sub">"Mercy"</span></span>
+                        <span class="v-brand-subtitle">Autonomous Mac Agent</span>
+                    </div>
+                    <span class="v-status-pill halo-pill">Apple Silicon NPU</span>
+                </div>
+
+                <div class="v-card-speech halo-speech" id="haloResponseText">
+                    "Found <strong>Q4 Launch Strategy</strong> in Notes. Extracted 3 milestones: Oct 24, Nov 2, Nov 15. Drafted confirmation message to Alex Chen in #product-eng. Waiting for your approval."
+                </div>
+
+                <div class="v-card-bottom halo-bottom">
+                    <span class="v-verdict-tag success">✓ Cross-App Chained Execution</span>
+                    <span class="v-verdict-detail">Notes ➔ Slack ➔ Approval Card dispatched in 0.4s</span>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ── APPLE-STYLE ASYMMETRIC BENTO GRID ── -->
+    <div class="apple-bento-grid">
+
+        <!-- Bento Card 1 (Span 2): On-Device Neural Voice & Talk-Over -->
+        <article class="bento-card bento-span-2 bento-voice">
+            <div class="bento-header">
+                <span class="bento-category">Apple Silicon Neural Engine</span>
+                <h3>On-Device Voice &amp; Instant Talk-Over</h3>
+                <p>Say <strong>"Mercy"</strong> or <strong>"Hey Mercy"</strong> to wake her up. Keyword spotting (sherpa-onnx) and voice activity detection (Silero VAD) execute 100% on-device. Speak anytime while she answers to interrupt immediately — no waiting, no stuttering.</p>
+            </div>
+            <div class="bento-artifact bento-waveform-box">
+                <div class="waveform-meter">
+                    <span class="wave-bar wb-1"></span>
+                    <span class="wave-bar wb-2"></span>
+                    <span class="wave-bar wb-3"></span>
+                    <span class="wave-bar wb-4"></span>
+                    <span class="wave-bar wb-5"></span>
+                    <span class="wave-bar wb-6"></span>
+                    <span class="wave-bar wb-7"></span>
+                    <span class="wave-bar wb-8"></span>
+                    <span class="wave-bar wb-9"></span>
+                    <span class="wave-bar wb-10"></span>
+                </div>
+                <div class="waveform-meta">
+                    <span class="wf-status">● Neural Engine Listening</span>
+                    <span class="wf-privacy">RAM Buffer Only · Zero Audio Disk Writes</span>
+                </div>
+            </div>
+        </article>
+
+        <!-- Bento Card 2: Dual Brain — Any Model API or ChatGPT Plan -->
+        <article class="bento-card bento-brain">
+            <div class="bento-header">
+                <span class="bento-category">Flexible Intelligence</span>
+                <h3>Any Model API or ChatGPT Plan</h3>
+                <p>Connect any AI agent or LLM using a standard API key (Claude, GPT-4o, Llama, Ollama), or connect your personal ChatGPT Plus/Pro plan to use your existing subscription with zero token markup.</p>
+            </div>
+            <div class="bento-artifact bento-brain-switch">
+                <div class="brain-pill-option active">
+                    <span class="bp-icon">⚡</span>
+                    <div class="bp-info">
+                        <strong>Any Model API</strong>
+                        <span>BYO API key · 240 tok/s</span>
+                    </div>
+                </div>
+                <div class="brain-pill-option">
+                    <span class="bp-icon">💬</span>
+                    <div class="bp-info">
+                        <strong>ChatGPT Plan</strong>
+                        <span>$0 extra · Uses your Plus/Pro quota</span>
+                    </div>
+                </div>
+            </div>
+        </article>
+
+        <!-- Bento Card 3: Real macOS Accessibility Automation -->
+        <article class="bento-card bento-ui-auto">
+            <div class="bento-header">
+                <span class="bento-category">Accessibility Engine</span>
+                <h3>Clicks, Types &amp; Navigates Apps</h3>
+                <p>Unlike browser-only wrappers, Halo inspects genuine macOS Accessibility trees. It clicks buttons, enters text, and fires keyboard shortcuts across any running Mac application.</p>
+            </div>
+            <div class="bento-artifact bento-ax-inspector">
+                <div class="ax-tree-line"><span class="ax-muted">AXApplication</span> ("Safari")</div>
+                <div class="ax-tree-line ind-1"><span class="ax-muted">AXWindow</span> ("Checkout")</div>
+                <div class="ax-tree-line ind-2 ax-target"><span class="ax-highlight">AXButton</span> ("Submit Order") <span class="ax-coord">(840, 620)</span></div>
+                <div class="ax-badge-success">✓ Native Click Dispatched</div>
+            </div>
+        </article>
+
+        <!-- Bento Card 4: Zero-Surprise Approval Guard -->
+        <article class="bento-card bento-safety">
+            <div class="bento-header">
+                <span class="bento-category">Safety &amp; Sandboxing</span>
+                <h3>Approval-Gated Actions</h3>
+                <p>Harmless actions run instantly. But risky operations — modifying files, executing terminal commands, or sending messages — pause for your one-click approval before any side-effect occurs.</p>
+            </div>
+            <div class="bento-artifact bento-approval-card">
+                <div class="bac-header">
+                    <span class="bac-icon">🛡️</span>
+                    <strong>Confirm Slack Message</strong>
+                </div>
+                <p class="bac-body">Send confirmed Q4 milestones to <strong>Alex Chen</strong> in <strong>#product-eng</strong>?</p>
+                <div class="bac-actions">
+                    <button type="button" class="bac-btn decline">Decline</button>
+                    <button type="button" class="bac-btn approve">Approve &amp; Send</button>
+                </div>
+            </div>
+        </article>
+
+        <!-- Bento Card 5 (Span 2): Screen Understanding via ScreenCaptureKit -->
+        <article class="bento-card bento-span-2 bento-screen">
+            <div class="bento-header">
+                <span class="bento-category">ScreenCaptureKit + Vision</span>
+                <h3>Screen Understanding in Context</h3>
+                <p>Halo can see what you see. It takes an approved screenshot of your active window to debug terminal errors, interpret complex spreadsheets, or explain Xcode crash traces without requiring you to copy and paste.</p>
+            </div>
+            <div class="bento-artifact bento-screen-snippet">
+                <div class="screen-snippet-bar">
+                    <span class="ss-dot red"></span>
+                    <span class="ss-dot yellow"></span>
+                    <span class="ss-dot green"></span>
+                    <span class="ss-title">Xcode — ConversationTests.swift</span>
+                    <span class="ss-badge">ScreenCaptureKit</span>
+                </div>
+                <div class="screen-snippet-code">
+                    <code><span class="c-red">error:</span> type 'Conversation' does not conform to protocol 'CustomDebugStringConvertible'</code>
+                    <div class="screen-halo-callout">
+                        <span class="callout-icon">⬡</span>
+                        <span><strong>Halo Diagnosis:</strong> Add <code>var debugDescription: String { "Conversation(id: \(id))" }</code> at line 52 to resolve the protocol conformance.</span>
+                    </div>
+                </div>
+            </div>
+        </article>
+
+    </div>
+</section>
+
+<!-- ══════════════════════════════════════════════
+     SECTION 3 · HOW IT WORKS
+════════════════════════════════════════════════ -->
+<section class="how-it-works section-padded" id="how-it-works">
+    <div class="section-header">
+        <div class="section-eyebrow">Quick Setup</div>
+        <h2>Up and running in minutes.</h2>
+        <p>Three steps and Halo is ready to go on your Mac.</p>
+    </div>
+    <ol class="steps">
+        <li class="step">
+            <span class="step-number">1</span>
+            <div class="step-content">
+                <h3>Download &amp; Install</h3>
+                <p>Click the Download button, open the <code>.dmg</code>, and drag Halo to Applications. No Homebrew, no Node, no Python — just a native Mac app.</p>
+            </div>
+        </li>
+        <li class="step">
+            <span class="step-number">2</span>
+            <div class="step-content">
+                <h3>Grant Permissions</h3>
+                <p>On first launch, Halo asks for Microphone and Accessibility access. You can also optionally grant Full Disk Access for reading protected folders. Settings has one-tap shortcuts to the relevant macOS permission panes.</p>
+            </div>
+        </li>
+        <li class="step">
+            <span class="step-number">3</span>
+            <div class="step-content">
+                <h3>Say "Mercy" &amp; Go</h3>
+                <p>Halo lives in your menu bar. Click the icon or say <strong>"Mercy"</strong> to open the Liquid Glass panel. Ask anything — it types, taps, searches, and replies in your own Mac voice.</p>
+            </div>
+        </li>
+    </ol>
+    <div class="how-note">
+        <h4>Can't open it? macOS Gatekeeper</h4>
+        <p>Because Halo is not yet distributed through the Mac App Store, macOS may show a security warning on first launch. Right-click (or Control-click) <code>Halo.app</code> and choose <strong>Open</strong>, then confirm. You only need to do this once.</p>
+    </div>
+</section>
+
+<!-- ══════════════════════════════════════════════
+     SECTION 4 · SCREENSHOTS / DEMO
+════════════════════════════════════════════════ -->
+<section class="screenshots section-padded" id="screenshots">
+    <div class="section-header">
+        <div class="section-eyebrow">Preview</div>
+        <h2>See it in action.</h2>
+        <p>Native macOS experience designed from the ground up.</p>
+    </div>
+    <div class="screenshot-carousel" role="region" aria-label="Screenshots">
+        <div class="carousel-track" id="carouselTrack">
+            <div class="carousel-slide">
+                <div class="screenshot-card">
+                    <div class="sc-window">
+                        <div class="sc-titlebar">
+                            <div class="traffic-lights">
+                                <span class="light close"></span>
+                                <span class="light min"></span>
+                                <span class="light zoom"></span>
+                            </div>
+                            <span class="sc-title">Menu Bar Retracted Capsule</span>
+                        </div>
+                        <div class="sc-body">
+                            <div class="capsule-preview">
+                                <span class="capsule-icon">􀊫</span>
+                                <span class="capsule-text">"Mercy" ready</span>
+                                <span class="capsule-dot"></span>
+                            </div>
+                            <p class="sc-caption">Compact mode shrinks into an elegant pill anchored to your menu bar.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="carousel-slide">
+                <div class="screenshot-card">
+                    <div class="sc-window">
+                        <div class="sc-titlebar">
+                            <div class="traffic-lights">
+                                <span class="light close"></span>
+                                <span class="light min"></span>
+                                <span class="light zoom"></span>
+                            </div>
+                            <span class="sc-title">UI Automation &amp; Accessibility</span>
+                        </div>
+                        <div class="sc-body">
+                            <div class="code-preview">
+                                <code>&gt; Inspecting Accessibility tree for Safari...</code>
+                                <code>&gt; Target: Button [Submit Order] located at (840, 620)</code>
+                                <code>&gt; Action: Click simulated successfully</code>
+                            </div>
+                            <p class="sc-caption">Full accessibility tree inspection and native interaction without lag.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="carousel-slide">
+                <div class="screenshot-card">
+                    <div class="sc-window">
+                        <div class="sc-titlebar">
+                            <div class="traffic-lights">
+                                <span class="light close"></span>
+                                <span class="light min"></span>
+                                <span class="light zoom"></span>
+                            </div>
+                            <span class="sc-title">Live DeepSeek &amp; ChatGPT Streaming</span>
+                        </div>
+                        <div class="sc-body">
+                            <div class="code-preview">
+                                <code>Model: DeepSeek V3 (Tokens: 240/sec)</code>
+                                <code>Timeline: Web Search (3 sources) → Verification → Voice Synthesizer</code>
+                            </div>
+                            <p class="sc-caption">Real-time reasoning timeline with verified grounding before speaking.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="carousel-controls">
+            <button class="carousel-btn" id="carouselPrev" aria-label="Previous screenshot">&#8592;</button>
+            <div class="carousel-dots" id="carouselDots">
+                <button class="dot active" aria-label="Slide 1"></button>
+                <button class="dot" aria-label="Slide 2"></button>
+                <button class="dot" aria-label="Slide 3"></button>
+            </div>
+            <button class="carousel-btn" id="carouselNext" aria-label="Next screenshot">&#8594;</button>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════════════════════════════════════════
+     SECTION 5 · CHANGELOG PREVIEW
+════════════════════════════════════════════════ -->
+<section class="changelog-preview section-padded" id="changelog">
+    <div class="section-header">
+        <div class="section-eyebrow">Updates</div>
+        <h2>What's new in Halo.</h2>
+    </div>
+    <div class="changelog-entries">
+        <article class="changelog-entry">
+            <div class="entry-header">
+                <span class="entry-badge">Latest Release</span>
+                <time class="entry-date">Oct 17, 2026</time>
+            </div>
+            <h3 class="entry-version">Halo AI — Initial Release (macOS 26+)</h3>
+            <ul class="entry-changes">
+                <li>Native SwiftUI/AppKit shell for macOS 26+ Apple Silicon</li>
+                <li>Live DeepSeek &amp; ChatGPT (PKCE sign-in) streaming</li>
+                <li>On-device voice recognition with wake words "Mercy" / "Hey Mercy"</li>
+                <li>Liquid Glass panel — slides in from the menu bar edge</li>
+                <li>App control: open, switch, quit apps by spoken name</li>
+                <li>File tools: list, read (32 KB), write (64 KB with approval)</li>
+                <li>UI Automation: Accessibility tree inspection, click, type, keyboard shortcuts</li>
+                <li>Web research: multi-source concurrent search and read</li>
+                <li>Shell and AppleScript execution with approval</li>
+                <li>Screen understanding via approved screenshot capture</li>
+            </ul>
+        </article>
+    </div>
+    <div class="changelog-footer">
+        <a href="/changelog" class="btn btn-secondary">See full changelog</a>
+    </div>
+</section>
+
+<!-- ══════════════════════════════════════════════
+     BOTTOM CTA
+════════════════════════════════════════════════ -->
+<section class="bottom-cta section-padded">
+    <div class="bottom-cta-inner">
+        <h2>Ready to upgrade your Mac?</h2>
+        <p>Free. No account required. Just download, install, and say "Mercy".</p>
+        <a href="/download" class="btn btn-primary btn-lg">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" class="btn-icon">
+                <path d="M8 1a.5.5 0 0 1 .5.5v9.793l2.646-2.647a.5.5 0 0 1 .708.708l-3.5 3.5a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L7.5 11.293V1.5A.5.5 0 0 1 8 1z"/>
+            </svg>
+            Download Halo AI
+        </a>
+        <p class="bottom-note">macOS 26+ · Apple Silicon · 100% Free</p>
+    </div>
+</section>

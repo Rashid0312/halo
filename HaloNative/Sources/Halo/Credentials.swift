@@ -31,11 +31,11 @@ enum Credentials {
     }
 
     /// Imports only the requested existing development key, never logging its value.
-    static func existingDeepSeekKey() -> String {
+    private static func existingProviderKey(account: String, environmentName: String) -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: "deepseek",
+            kSecAttrAccount as String: account,
         ]
         var read = query
         read[kSecReturnData as String] = true
@@ -44,14 +44,14 @@ enum Credentials {
         if SecItemCopyMatching(read as CFDictionary, &result) == errSecSuccess,
            let data = result as? Data, let key = String(data: data, encoding: .utf8), !key.isEmpty { return key }
 
-        var key = ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"] ?? ""
+        var key = ProcessInfo.processInfo.environment[environmentName] ?? ""
         if key.isEmpty, let file = Bundle.main.object(forInfoDictionaryKey: "HaloDevelopmentEnvFile") as? String,
            let contents = try? String(contentsOfFile: file, encoding: .utf8) {
             for line in contents.components(separatedBy: .newlines) {
                 let pair = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
                 guard pair.count == 2 else { continue }
                 let name = pair[0].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "export ", with: "")
-                guard name == "DEEPSEEK_API_KEY" else { continue }
+                guard name == environmentName else { continue }
                 key = pair[1].trimmingCharacters(in: .whitespaces)
                 if key.count >= 2, (key.first == "\"" && key.last == "\"") || (key.first == "'" && key.last == "'") {
                     key = String(key.dropFirst().dropLast())
@@ -66,5 +66,13 @@ enum Credentials {
         // A failed save does not prevent using the existing development key this session.
         SecItemAdd(item as CFDictionary, nil)
         return key
+    }
+
+    static func existingDeepSeekKey() -> String {
+        existingProviderKey(account: "deepseek", environmentName: "DEEPSEEK_API_KEY")
+    }
+
+    static func existingDeepgramKey() -> String {
+        existingProviderKey(account: "deepgram", environmentName: "DEEPGRAM_API_KEY")
     }
 }

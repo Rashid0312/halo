@@ -109,10 +109,25 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
     @ObservationIgnored private var finalSegments: [String] = []
     @ObservationIgnored private var partial = ""
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
+    @ObservationIgnored private var deepgram: DeepgramSpeech?
+    @ObservationIgnored private var replyBuffer = ""
+    @ObservationIgnored private var replyInCode = false
+    @ObservationIgnored private var mentionedCode = false
+    @ObservationIgnored private var deepgramFailedForReply = false
 
     override init() {
         super.init()
         synthesizer.delegate = self
+    }
+
+    func configureDeepgram(key: String) {
+        deepgram?.stop()
+        deepgram = key.isEmpty ? nil : DeepgramSpeech(key: key)
+        deepgram?.onSpeakingChanged = { [weak self] speaking in self?.isSpeaking = speaking }
+        deepgram?.onFailure = { [weak self] message in
+            self?.deepgramFailedForReply = true
+            self?.notice = message + " Using the Mac voice for this reply."
+        }
     }
 
     static func checkAudioCallback() async throws {
@@ -182,6 +197,7 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
     func startListening(externalAudio: Bool = false, seed: [Float] = [], stripWake: Bool = false) {
         cancel()
         onStart?()
+        if speakReplies { deepgram?.warm() }
         externalMode = externalAudio
         pendingSamples = seed
         removeWake = stripWake
@@ -373,8 +389,110 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
         self.engine = nil
     }
 
-    func speak(_ text: String) {
-        guard speakReplies, phase == .idle, !text.isEmpty else { return }
+    func beginReply() {
+        replyBuffer = ""
+        replyInCode = false
+        mentionedCode = false
+        deepgramFailedForReply = false
+        guard speakReplies else { return }
+        // Keep the warmed Deepgram socket alive between listening and the first
+        // response token. Only interrupt the local fallback synthesizer here.
+        synthesizer.stopSpeaking(at: .immediate)
+        isSpeaking = false
+        if deepgram?.isAvailable == true { deepgram?.beginResponse() }
+    }
+
+    func appendReply(_ delta: String) {
+        guard speakReplies, deepgram?.isAvailable == true, !deepgramFailedForReply else { return }
+        replyBuffer += delta
+        drainReply(final: false)
+    }
+
+    func finishReply(_ fullText: String) {
+        guard speakReplies, phase == .idle, !fullText.isEmpty else { return }
+        if deepgram?.isAvailable == true, !deepgramFailedForReply {
+            drainReply(final: true)
+            deepgram?.finishResponse()
+        } else {
+            speakSystem(fullText)
+        }
+    }
+
+    private func drainReply(final: Bool) {
+        while let newline = replyBuffer.firstIndex(of: "\n") {
+            let line = String(replyBuffer[..<newline])
+            replyBuffer.removeSubrange(...newline)
+            speakLine(line)
+        }
+        while !replyInCode, let boundary = sentenceBoundary(in: replyBuffer) {
+            let sentence = String(replyBuffer[..<boundary])
+            replyBuffer.removeSubrange(..<boundary)
+            replyBuffer = replyBuffer.trimmingCharacters(in: .whitespaces)
+            sayDeepgram(sentence)
+        }
+        if final, !replyBuffer.isEmpty {
+            speakLine(replyBuffer)
+            replyBuffer = ""
+        }
+    }
+
+    private func sentenceBoundary(in text: String) -> String.Index? {
+        var index = text.startIndex
+        while index < text.endIndex {
+            let ch = text[index]
+            if ".!?".contains(ch) {
+                var end = text.index(after: index)
+                while end < text.endIndex, "\"')*_".contains(text[end]) { end = text.index(after: end) }
+                if end == text.endIndex || text[end].isWhitespace { return end }
+            } else if ",;:—\n".contains(ch) {
+                let prefixLen = text.distance(from: text.startIndex, to: index)
+                // Very small clause flushes can run the audio player dry while
+                // Deepgram synthesizes the next fragment. Keep clauses long
+                // enough to overlap synthesis with playback.
+                if prefixLen >= 48 {
+                    var end = text.index(after: index)
+                    while end < text.endIndex, "\"')*_".contains(text[end]) { end = text.index(after: end) }
+                    if end == text.endIndex || text[end].isWhitespace { return end }
+                }
+            }
+            index = text.index(after: index)
+        }
+        // Do not wait indefinitely when a model streams a long sentence with
+        // no punctuation. Split at a recent word boundary after enough text
+        // has accumulated to sustain continuous playback.
+        if text.count >= 120 {
+            let lower = text.index(text.startIndex, offsetBy: 80)
+            if let space = text[lower...].lastIndex(where: { $0.isWhitespace }) {
+                return text.index(after: space)
+            }
+        }
+        return nil
+    }
+
+    private func speakLine(_ line: String) {
+        if line.trimmingCharacters(in: .whitespaces).hasPrefix(String(repeating: "\u{0060}", count: 3)) {
+            replyInCode.toggle()
+            if replyInCode, !mentionedCode {
+                mentionedCode = true
+                sayDeepgram("I've put the code on screen.")
+            }
+        } else if !replyInCode {
+            sayDeepgram(line)
+        }
+    }
+
+    private func sayDeepgram(_ raw: String) {
+        let text = raw
+            .replacingOccurrences(of: #"\`([^\`]*)\`"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"[*_#>]+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"^\s*(?:[-•]|\d+[.)])\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { deepgram?.speak(text) }
+    }
+
+    private func speakSystem(_ text: String) {
         stopSpeaking()
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
@@ -383,6 +501,10 @@ final class VoiceController: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func stopSpeaking() {
+        deepgram?.stop()
+        replyBuffer = ""
+        replyInCode = false
+        mentionedCode = false
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
     }

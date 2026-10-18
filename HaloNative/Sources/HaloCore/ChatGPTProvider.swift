@@ -8,13 +8,19 @@ public struct ChatGPTProvider: ReplyProvider {
     private let token: String
     private let model: String
     private let tools: (any MacToolExecutor)?
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 6
+        config.timeoutIntervalForRequest = 35
+        config.timeoutIntervalForResource = 60
+        return URLSession(configuration: config)
+    }()
     public init(token: String, model: String, tools: (any MacToolExecutor)? = nil) { self.token = token; self.model = model; self.tools = tools }
 
     public func reply(to messages: [Message]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                let session = URLSession(configuration: .ephemeral)
-                defer { session.invalidateAndCancel() }
+                let session = Self.session
                 do {
                     var input: [[String: Any]] = messages.suffix(20).map {
                         ["role": $0.isUser ? "user" : "assistant", "content": [["type": $0.isUser ? "input_text" : "output_text", "text": $0.text]]]
@@ -32,11 +38,11 @@ public struct ChatGPTProvider: ReplyProvider {
                         try Task.checkCancellation()
                         var body: [String: Any] = ["model": model, "instructions": DeepSeekProvider.assistantInstructions,
                                                    "input": input, "store": false, "stream": true, "include": ["reasoning.encrypted_content"]]
-                        if let functions { body["tools"] = functions }
+                        if let functions, !functions.isEmpty { body["tools"] = functions }
                         if useReasoning { body["reasoning"] = ["effort": "low"] }
                         func request(_ body: [String: Any]) throws -> URLRequest {
                             var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
-                            request.httpMethod = "POST"; request.timeoutInterval = 60
+                            request.httpMethod = "POST"; request.timeoutInterval = 35
                             request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
                             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -74,6 +80,12 @@ public struct ChatGPTProvider: ReplyProvider {
                                     if item["type"] as? String == "function_call", let id = item["call_id"] as? String,
                                        let name = item["name"] as? String, let arguments = item["arguments"] as? String {
                                         calls.append((id, name, arguments))
+                                    } else if Self.completesVisibleAnswer(event), calls.isEmpty {
+                                        // The answer is complete. Do not keep the visible turn and
+                                        // spoken-response finalization waiting for trailing response
+                                        // bookkeeping such as usage and encrypted reasoning events.
+                                        continuation.finish()
+                                        return
                                     }
                                 }
                             case "response.completed": completed = true
@@ -122,6 +134,12 @@ public struct ChatGPTProvider: ReplyProvider {
         guard !text.isEmpty, text != "[DONE]" else { return nil }
         guard let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw Failure("ChatGPT sent an unreadable event.") }
         return object
+    }
+
+    public static func completesVisibleAnswer(_ event: [String: Any]?) -> Bool {
+        guard event?["type"] as? String == "response.output_item.done",
+              let item = event?["item"] as? [String: Any] else { return false }
+        return item["type"] as? String == "message" && (item["status"] as? String ?? "completed") == "completed"
     }
 
     public static func apiError(_ data: Data, status: Int) -> Failure {

@@ -1,0 +1,9 @@
+**/.git
+**/.gitignore
+**/bin
+**/obj
+**/node_modules
+.vs
+.vscode
+*.user
+*.suo

@@ -12,7 +12,7 @@ public struct RequestEndpoint: Sendable {
     public mutating func observe(sampleCount: Int, speechDetected: Bool) -> Bool {
         elapsed += max(0, sampleCount)
         if speechDetected { lastSpeech = elapsed }
-        let quiet = elapsed - lastSpeech >= 11200 // 0.7 s after VAD releases speech
+        let quiet = elapsed - lastSpeech >= 5600 // 0.35 s after VAD releases speech
         if elapsed >= 320000 { return true } // 20 s hard request limit
         if confirmedRequest { return quiet }
         return elapsed >= 128000 && quiet // 8 s to begin after the wake phrase

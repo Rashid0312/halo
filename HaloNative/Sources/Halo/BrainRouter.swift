@@ -4,9 +4,9 @@ import HaloCore
 @MainActor
 final class BrainRouter: ReplyProvider {
     let auth: ChatGPTAuth
-    let tools: MacTools
+    let tools: MacTools?
     let deepSeekKey: String
-    init(auth: ChatGPTAuth, tools: MacTools, deepSeekKey: String) { self.auth = auth; self.tools = tools; self.deepSeekKey = deepSeekKey }
+    init(auth: ChatGPTAuth, tools: MacTools?, deepSeekKey: String) { self.auth = auth; self.tools = tools; self.deepSeekKey = deepSeekKey }
     nonisolated func reply(to messages: [Message]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
