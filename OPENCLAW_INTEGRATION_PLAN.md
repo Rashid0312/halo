@@ -313,3 +313,13 @@ Decision: Option 2 adopted. Chromium browser automation is implemented natively 
 - Live verification passed with full PASS on macOS (`--check-browser-tabs`, `--check-safe-actions`, `--check-peekaboo-listing`, `HaloCoreChecks`, and `check-signing.sh`).
 - Packaged app bundle size: 56,476 KiB (0 MB Node runtime impact).
 - Phase 4 marked Complete. Ready for Phase 5 (Browser actions).
+
+### 2026-10-19 (Deep Scrutiny & Security Hardening Audit)
+
+- Audited the entire integration boundary across Phase 1 through Phase 4 for edge cases, delimiter injections, domain confusion, and credential protections.
+- **Domain-bound Tab Authorization**: Upgraded `ChromeBrowserService` authorization from raw tab IDs to `AuthorizedTabRecord(id, domain, title, url, authorizedAt)`. If an authorized tab navigates to a different domain, `readTab` catches the domain mismatch, revokes authorization immediately, and blocks further reads. Verified via `--check-browser-tabs`.
+- **Delimiter Injection Immunity**: Replaced ad-hoc `"|||"` splitting with ASCII Control Unit Separator `0x1F` (`\u{1F}`) and Record Separator `0x1E` (`\u{1E}`) for tab listings, and browser-side `JSON.stringify` with native `JSONSerialization` for DOM text extraction. Prevents malicious webpage titles or content from corrupting parsed URLs or metadata.
+- **Password / Secure Field Protection**: Blocked automated text entry into password and secure fields (`AXSecureTextField`, `subrole == AXSecureTextField`, `roleDescription` containing `secure` or `password`, and `isProtected == true`) across `MacTools.type_text`, `UIAutomation`, and `PeekabooMacInteractionDriver`. Added `Mercy test password` `NSSecureTextField` to the UI test host and verified that automated typing into it is blocked before execution and before approval across both drivers.
+- **Killswitch Race Defense**: Added post-execution pause rechecks in `readTab` to guarantee that killswitches activated while automation is in-flight block content return.
+- **AppleScript String Escaping**: Validated URL schemes and escaped backslashes and double quotes in AppleScript string literals in `openTab`.
+- All checks verified with full PASS across both `legacy` and `peekaboo` drivers (`--check-browser-tabs`, `--check-safe-actions`, `--check-commands`, `--check-peekaboo-listing`, `HaloCoreChecks`, and `check-signing.sh`).

@@ -13,6 +13,15 @@ struct UITarget: Sendable {
     let pid: pid_t
     let label: String
     let role: String
+    let isProtected: Bool
+
+    init(id: String, pid: pid_t, label: String, role: String, isProtected: Bool = false) {
+        self.id = id
+        self.pid = pid
+        self.label = label
+        self.role = role
+        self.isProtected = isProtected
+    }
 }
 
 /// AX messaging can block when another app hangs; keep it away from the UI actor.
@@ -56,7 +65,7 @@ private actor AccessibilityTree {
             var actions: CFArray?
             if AXUIElementCopyActionNames(element, &actions) == .success { row["actions"] = actions as? [String] ?? [] }
             elements[id] = element
-            targets[id] = UITarget(id: id, pid: pid, label: title.isEmpty ? description : title, role: role)
+            targets[id] = UITarget(id: id, pid: pid, label: title.isEmpty ? description : title, role: role, isProtected: secure || role == "AXSecureTextField")
             rows.append(row)
             if role == "AXMenuBar" || role == "AXMenu" {
                 if depth > 2 { return }
@@ -251,6 +260,7 @@ final class UIAutomation {
         try requireAccess()
         guard text.utf16.count <= 4000 else { throw UIControlError("Type at most 4,000 characters per action.") }
         let target = try await tree.target(id)
+        guard !target.isProtected else { throw UIControlError("Automated text entry into secure or password fields is strictly blocked.") }
         guard ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXEditableTextArea"].contains(target.role) else { throw UIControlError("Choose an observed text field, not another kind of control.") }
         guard let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else { throw UIControlError("The app has closed.") }
         app.activate()
@@ -339,11 +349,14 @@ final class UIAutomation {
         dialogBtn.frame = NSRect(x: 30, y: 105, width: 180, height: 32)
         let marker = NSTextField(labelWithString: "HALO VISION 73914")
         marker.font = .systemFont(ofSize: 27, weight: .bold)
-        marker.frame = NSRect(x: 30, y: 245, width: 400, height: 45)
+        let secureField = NSSecureTextField(frame: NSRect(x: 30, y: 195, width: 340, height: 28))
+        secureField.setAccessibilityTitle("Mercy test password")
+        secureField.setAccessibilityLabel("Mercy test password")
         window.contentView?.addSubview(marker)
         window.contentView?.addSubview(fullScreen)
         window.contentView?.addSubview(dialogBtn)
         window.contentView?.addSubview(field)
+        window.contentView?.addSubview(secureField)
         window.contentView?.addSubview(button)
         let menu = NSMenu()
         let appMenuItem = NSMenuItem()

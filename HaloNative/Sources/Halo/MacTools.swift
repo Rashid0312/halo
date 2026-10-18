@@ -272,6 +272,9 @@ final class MacTools: MacToolExecutor {
             case "type_text":
                 guard let id = args["element_id"] as? String, let text = args["text"] as? String, text.utf16.count <= 4000 else { return Self.json(["ok": false, "error": "Need an observed field and text up to 4,000 characters"] ) }
                 let target = try await interaction.describeTarget(id: id)
+                guard !target.isProtected else {
+                    return Self.json(["ok": false, "error": "Automated text entry into secure or password fields is strictly blocked for security."])
+                }
                 let approved = try await requestApproval(title: "Type this text?", path: "\(target.appName) · \(target.role) · \(target.label)", content: text)
                 try Task.checkCancellation()
                 guard approved else { return Self.json(["ok": false, "denied": true, "error": "The user declined this action."]) }
@@ -407,7 +410,12 @@ final class MacTools: MacToolExecutor {
                 guard approved else {
                     return Self.json(["ok": false, "denied": true, "error": "The user declined access to this tab."])
                 }
-                await ChromeBrowserService.shared.authorize(tabID: targetTab.id)
+                await ChromeBrowserService.shared.authorize(
+                    tabID: targetTab.id,
+                    domain: targetTab.domain,
+                    title: targetTab.title,
+                    url: targetTab.url
+                )
                 return Self.json([
                     "ok": true,
                     "authorized_tab_id": targetTab.id,

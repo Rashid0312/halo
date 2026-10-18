@@ -458,6 +458,21 @@ enum NativeChecks {
             throw Failure("Text field 'Mercy test input' missing. Found controls: [\(labels)]")
         }
 
+        // Security check: verify secure/password field is protected and typing into it is blocked
+        if let passwordElem = updatedRows.first(where: { ($0["label"] as? String) == "Mercy test password" }),
+           let passwordID = passwordElem["id"] as? String {
+            guard passwordElem["protected"] as? Bool == true else {
+                throw Failure("Password field was not marked as protected: \(passwordElem)")
+            }
+            let blockedTypeRes = try await tools.execute(name: "type_text", arguments: #"{"element_id":"\#(passwordID)","text":"secret123"}"#)
+            guard let blockedObj = try? JSONSerialization.jsonObject(with: Data(blockedTypeRes.utf8)) as? [String: Any],
+                  blockedObj["ok"] as? Bool == false,
+                  let err = blockedObj["error"] as? String,
+                  err.contains("strictly blocked") else {
+                throw Failure("Typing into password field was not blocked: \(blockedTypeRes)")
+            }
+        }
+
         // 6. Type text into observed field
         let typedText = "Halo observation typing"
         let typeTask = Task {
@@ -860,6 +875,47 @@ enum NativeChecks {
               resumedReadObj["ok"] as? Bool == true else {
             throw Failure("Reading after resume failed: \(resumedReadRaw)")
         }
+
+        // 12b. Test navigation domain hijacking protection:
+        // Navigating the authorized tab to a different domain must immediately revoke authorization and block reads.
+        let navigateScript = """
+        tell application "Google Chrome"
+            repeat with w in windows
+                repeat with t in tabs of w
+                    if (id of t as string) is "\(tabID)" then
+                        set URL of t to "http://localhost:\(server.port)/halo-test"
+                        return "NAVIGATED"
+                    end if
+                end repeat
+            end repeat
+            return "NOT_FOUND"
+        end tell
+        """
+        _ = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", navigateScript], directory: FileManager.default.temporaryDirectory)
+        try await Task.sleep(for: .milliseconds(400))
+
+        let hijackedReadRaw = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        guard let hijackedReadObj = try? JSONSerialization.jsonObject(with: Data(hijackedReadRaw.utf8)) as? [String: Any],
+              hijackedReadObj["ok"] as? Bool == false,
+              let hijackError = hijackedReadObj["error"] as? String,
+              hijackError.contains("navigated") || hijackError.contains("revoked") else {
+            throw Failure("Domain navigation hijacking was not caught and revoked: \(hijackedReadRaw)")
+        }
+        // Verify authorization was revoked automatically
+        let postHijackListRaw = try await tools.execute(name: "list_browser_tabs", arguments: "{}")
+        guard let postHijackListObj = try? JSONSerialization.jsonObject(with: Data(postHijackListRaw.utf8)) as? [String: Any],
+              let postHijackTabs = postHijackListObj["tabs"] as? [[String: Any]],
+              !postHijackTabs.contains(where: { ($0["id"] as? Int) == tabID }) else {
+            throw Failure("Navigated tab remained authorized after domain change")
+        }
+
+        // Re-authorize tab for the revocation test
+        let reauthTask = Task {
+            try await tools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        }
+        let reauthApproval = try await waitForApproval(tools, step: "re-authorize")
+        tools.resolve(id: reauthApproval.id, allow: true)
+        _ = try await reauthTask.value
 
         // 13. Test instant revocation killswitch
         let revokeRaw = try await tools.execute(name: "revoke_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)

@@ -252,7 +252,7 @@ final class LegacyMacInteractionDriver: MacInteractionDriver {
             appName: app?.localizedName ?? "App",
             role: target.role,
             label: target.label,
-            isProtected: target.role == "AXSecureTextField"
+            isProtected: target.isProtected
         )
     }
 
@@ -578,7 +578,12 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             currentElementIDs.insert(haloID)
             let role = element.attributes["role"] ?? String(describing: element.type)
             let subrole = element.attributes["subrole"] ?? ""
-            let isSecure = role == "AXSecureTextField" || subrole == "AXSecureTextField" || element.attributes["isSecure"] == "true"
+            let roleDesc = element.attributes["roleDescription"]?.lowercased() ?? ""
+            let isSecure = role.caseInsensitiveCompare("AXSecureTextField") == .orderedSame ||
+                subrole.caseInsensitiveCompare("AXSecureTextField") == .orderedSame ||
+                element.attributes["isSecure"] == "true" ||
+                roleDesc.contains("secure") ||
+                roleDesc.contains("password")
 
             let computedLabel: String = {
                 if let title = element.attributes["title"], !title.isEmpty { return title }
@@ -951,6 +956,9 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
     func typeText(elementID: String, text: String) async throws -> MacActionResult {
         guard let elem = observedElements[elementID] else {
             throw InteractionError("That control reference is stale. Inspect the app again.")
+        }
+        guard !elem.isProtected else {
+            throw InteractionError("Automated text entry into secure or password fields is strictly blocked.")
         }
         guard ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXEditableTextArea", "textField"].contains(elem.role) || elem.detectedElement.type == .textField else {
             throw InteractionError("Choose an observed text field, not another kind of control.")
