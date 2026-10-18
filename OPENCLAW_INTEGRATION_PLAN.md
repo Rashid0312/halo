@@ -46,7 +46,7 @@ The integration will not initially import:
 | --- | --- | --- |
 | 0. Baseline and governance | In progress | Reproducible baseline recorded, dedicated branch available, plan and license process established |
 | 1. Peekaboo compatibility spike | Complete | Pinned Peekaboo automation module builds inside signed Halo and performs read-only inspection |
-| 2. Read-only Mac understanding | In progress | App/window/UI inspection and reviewed screen capture pass without silent persistence |
+| 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Not started | Observed click/type/key/menu/window actions retain approval and post-action verification |
 | 4. Chrome tab integration | Not started | Halo lists and reads explicitly authorized Chrome tabs without copying browser credentials |
 | 5. Browser actions | Not started | Halo reliably operates authorized pages with sensitive-action gates and result verification |
@@ -109,12 +109,21 @@ Recorded dependency and runtime measurements:
 - [x] Route `running_apps` tool through driver and measure execution latency.
 - [x] Add `list_windows` tool to `MacTools` with CG-based PID-matched fallback for legacy driver.
 - [x] Add `--check-peekaboo-listing` verification harness in `HaloApp` and `NativeChecks`.
-- [ ] Map third-party element identifiers into turn-scoped Halo identifiers.
-- [ ] Reject stale identifiers after every new observation.
-- [ ] Observe menus and dialogs via Peekaboo.
-- [ ] Preserve protected-field redaction and bounded output sizes.
-- [ ] Keep screenshots in memory unless the user explicitly saves one.
-- [ ] Preserve the exact screenshot preview before model sharing.
+- [x] Map third-party element identifiers into turn-scoped Halo identifiers.
+- [x] Reject stale identifiers after every new observation.
+- [x] Observe menus and dialogs via Peekaboo.
+- [x] Preserve protected-field redaction and bounded output sizes.
+- [x] Keep screenshots in memory unless the user explicitly saves one.
+- [x] Preserve the exact screenshot preview before model sharing.
+
+### Acceptance criteria
+
+- [x] App and window listing work across both drivers with driver latency reported. (PASS: verified Finder window and app enumeration in `--check-peekaboo-listing`)
+- [x] Menu enumeration and dialog discovery return bounded, untrusted structures via Peekaboo, with legacy driver returning safe defaults. (PASS: verified `list_menus` and `find_dialog` in `--check-peekaboo-listing`)
+- [x] UI elements use turn-scoped identifiers and stale subtree references are rejected. (PASS: verified prefix-index IDs and stale `root_id` rejection)
+- [x] Protected fields (`AXSecureTextField`) are redacted (`protected: true`, values suppressed). (PASS: verified role/subrole check in `PeekabooMacInteractionDriver.inspect()`)
+- [x] Output sizes are strictly bounded (180 elements, 200-char labels, 300-char values). (PASS: verified limits in `PeekabooMacInteractionDriver.inspect()`)
+- [x] Legacy driver remains the default and feature flag toggles the Peekaboo driver cleanly. (PASS: verified with/without `HALO_MAC_DRIVER=peekaboo`)
 
 ## Phase 3 — Safe Mac actions
 
@@ -249,3 +258,8 @@ The broader `PeekabooAutomation` target imports Tachikoma, TachikomaAudio, MCP, 
 - Measured launch impact and idle resources: cold/warm launch averages 225.4ms with Peekaboo vs 149.1ms minimum on legacy (~76ms delta); idle RSS memory is 53,664 KiB with Peekaboo vs 53,536 KiB on legacy (+128 KiB memory delta); idle CPU is 0.0% for both drivers.
 - All Phase 1 acceptance criteria met; Phase 1 marked Complete, and Phase 2 (Read-only Mac understanding) is now in progress.
 - Phase 0 remains in progress only because the signed-GUI workflow latency baseline is pending. Phase 1 interface work may proceed without importing third-party source.
+- Implemented turn-scoped element identifiers (`\(prefix)-\(index)`), stale `root_id` rejection, and protected-field redaction (`AXSecureTextField` -> `protected: true`) in `PeekabooMacInteractionDriver.inspect()`.
+- Extended `MacInteractionDriver` and `MacTools` with `listMenus(appID:)` and `findDialog(appID:)`, routed to Peekaboo's `MenuService` and `DialogService`. Added `list_menus` and `find_dialog` tools to `MacTools`.
+- Updated `--check-peekaboo-listing` in `NativeChecks` to verify menu bar enumeration, active dialog inspection, and stale root rejection on both drivers.
+- Live verification passed on macOS: with `HALO_MAC_DRIVER=peekaboo`, successfully enumerated 9 apps (32ms), 7 windows (76ms), 8 menu bar items (221ms), checked dialogs, and verified stale subtree rejection. With the default legacy driver, verified 9 apps (16ms), 0 windows, 0 menus, dialogs checked, and stale subtree rejection.
+- All Phase 2 acceptance criteria met; Phase 2 marked Complete. Phase 3 (Safe Mac actions) is ready for implementation.

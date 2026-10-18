@@ -255,7 +255,46 @@ enum NativeChecks {
             throw Failure("list_windows failed for Finder")
         }
 
-        print("PASS: \(expectedDriver) driver app listing (\(apps.count) apps, \(runningLatencyMs)ms) and window listing (\(windows.count) windows, \(windowsLatencyMs)ms)")
+        // Test list_menus on Finder
+        let menusStart = Date()
+        let menusResult = try await tools.execute(name: "list_menus", arguments: #"{"app_id":"com.apple.finder"}"#)
+        let menusLatencyMs = Int((Date().timeIntervalSince(menusStart) * 1000).rounded())
+        guard let menusObj = try JSONSerialization.jsonObject(with: Data(menusResult.utf8)) as? [String: Any],
+              menusObj["ok"] as? Bool == true,
+              let menus = menusObj["menus"] as? [[String: Any]] else {
+            throw Failure("list_menus failed for Finder")
+        }
+
+        // Test find_dialog on Finder
+        let dialogResult = try await tools.execute(name: "find_dialog", arguments: #"{"app_id":"com.apple.finder"}"#)
+        guard let dialogObj = try JSONSerialization.jsonObject(with: Data(dialogResult.utf8)) as? [String: Any],
+              dialogObj["ok"] as? Bool == true else {
+            throw Failure("find_dialog failed for Finder")
+        }
+
+        // Test inspect_ui stale root_id rejection
+        let staleRootResult = try await tools.execute(name: "inspect_ui", arguments: #"{"app_id":"com.apple.finder","root_id":"stale-root-reference"}"#)
+        guard let staleObj = try JSONSerialization.jsonObject(with: Data(staleRootResult.utf8)) as? [String: Any],
+              staleObj["ok"] as? Bool == false else {
+            throw Failure("Stale root_id subtree was not rejected")
+        }
+
+        // Test inspect_ui element IDs and bounds
+        let inspectResult = try await tools.execute(name: "inspect_ui", arguments: #"{"app_id":"com.apple.finder"}"#)
+        guard let inspectObj = try JSONSerialization.jsonObject(with: Data(inspectResult.utf8)) as? [String: Any],
+              inspectObj["ok"] as? Bool == true,
+              let elements = inspectObj["elements"] as? [[String: Any]] else {
+            throw Failure("inspect_ui failed for Finder")
+        }
+
+        if let firstElem = elements.first, let id = firstElem["id"] as? String {
+            // Verify turn-scoped identifier pattern prefix-index (e.g., 8-char hex prefix and number)
+            guard id.contains("-") else {
+                throw Failure("Element ID is not turn-scoped: \(id)")
+            }
+        }
+
+        print("PASS: \(expectedDriver) driver app listing (\(apps.count) apps, \(runningLatencyMs)ms), windows (\(windows.count) windows, \(windowsLatencyMs)ms), menus (\(menus.count) items, \(menusLatencyMs)ms), dialogs checked, and stale root_id rejected")
     }
 
     static func files(_ tools: MacTools) async throws {

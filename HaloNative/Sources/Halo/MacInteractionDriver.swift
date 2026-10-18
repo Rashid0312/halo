@@ -10,6 +10,11 @@ struct MacInteractionCapture: Sendable {
     let frame: CGRect
 }
 
+struct InteractionError: LocalizedError {
+    let errorDescription: String?
+    init(_ message: String) { errorDescription = message }
+}
+
 /// Halo-owned boundary for permission-sensitive observation. Third-party
 /// automation must conform here so Halo keeps control of privacy and approval.
 @MainActor
@@ -29,6 +34,12 @@ protocol MacInteractionDriver: AnyObject {
 
     /// List windows for a running app. Returns nil if the driver cannot enumerate windows for this app.
     func listWindows(appID: String) async throws -> [[String: Any]]?
+
+    /// List menus and keyboard shortcuts for a running app. Returns nil if unsupported.
+    func listMenus(appID: String) async throws -> [[String: Any]]?
+
+    /// Find an active modal dialog, sheet, or prompt in an app. Returns nil if none active or unsupported.
+    func findDialog(appID: String?) async throws -> [String: Any]?
 }
 
 /// Compatibility driver retained until the pinned Peekaboo implementation
@@ -100,6 +111,14 @@ final class LegacyMacInteractionDriver: MacInteractionDriver {
         // Legacy driver cannot enumerate per-app windows beyond CG capture; return nil so callers fall back.
         return nil
     }
+
+    func listMenus(appID: String) async throws -> [[String: Any]]? {
+        return nil
+    }
+
+    func findDialog(appID: String?) async throws -> [String: Any]? {
+        return nil
+    }
 }
 
 /// Opt-in compatibility driver backed by the pinned Peekaboo automation kit.
@@ -112,7 +131,10 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
     private let automation: UIAutomationService
     private let captureService: PeekabooAutomationKit.ScreenCaptureService
     private let appService: ApplicationService
+    private let menuService: MenuService
+    private let dialogService: DialogService
     private var rememberedApplicationID: String?
+    private var currentElementIDs = Set<String>()
 
     init(ui: UIAutomation, screen: ScreenService) {
         self.legacy = LegacyMacInteractionDriver(ui: ui, screen: screen)
@@ -129,7 +151,10 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             loggingService: LoggingService(),
             feedbackClient: NoopAutomationFeedbackClient()
         )
-        self.appService = ApplicationService(feedbackClient: NoopAutomationFeedbackClient())
+        let appSvc = ApplicationService(feedbackClient: NoopAutomationFeedbackClient())
+        self.appService = appSvc
+        self.menuService = MenuService(applicationService: appSvc, feedbackClient: NoopAutomationFeedbackClient())
+        self.dialogService = DialogService(applicationService: appSvc, feedbackClient: NoopAutomationFeedbackClient())
     }
 
     let name = "peekaboo"
@@ -152,7 +177,10 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
     }
 
     func inspect(appID: String?, rootID: String?) async throws -> String {
-        if rootID != nil {
+        if let rootID {
+            guard currentElementIDs.contains(rootID) else {
+                throw InteractionError("That subtree reference is stale or belongs to a different app.")
+            }
             return try await legacy.inspect(appID: appID, rootID: rootID)
         }
         let targetID = appID ?? rememberedApplicationID
@@ -163,11 +191,21 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             accessibilityTimeoutSeconds: 2
         ))
         let all = result.elements.all
-        let limit = 200
-        let elements: [[String: Any]] = all.prefix(limit).map { element in
+        let limit = 180
+        let prefix = String(UUID().uuidString.prefix(8))
+        currentElementIDs = []
+
+        let elements: [[String: Any]] = all.prefix(limit).enumerated().map { index, element in
+            let haloID = "\(prefix)-\(index)"
+            currentElementIDs.insert(haloID)
+            let role = element.attributes["role"] ?? String(describing: element.type)
+            let subrole = element.attributes["subrole"] ?? ""
+            let isSecure = role == "AXSecureTextField" || subrole == "AXSecureTextField" || element.attributes["isSecure"] == "true"
+
             var item: [String: Any] = [
-                "id": element.id,
+                "id": haloID,
                 "type": String(describing: element.type),
+                "role": role,
                 "enabled": element.isEnabled,
                 "frame": [
                     "x": element.bounds.origin.x,
@@ -176,8 +214,14 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
                     "height": element.bounds.height,
                 ],
             ]
-            if let label = element.label { item["label"] = label }
-            if let value = element.value { item["value"] = value }
+            if let label = element.label, !label.isEmpty {
+                item["label"] = String(label.prefix(200))
+            }
+            if isSecure {
+                item["protected"] = true
+            } else if let value = element.value, !value.isEmpty {
+                item["value"] = String(value.prefix(300))
+            }
             if let selected = element.isSelected { item["selected"] = selected }
             return item
         }
@@ -261,6 +305,73 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             if let screenIdx = w.screenIndex { item["screen_index"] = screenIdx }
             if let screenName = w.screenName { item["screen_name"] = screenName }
             return item
+        }
+    }
+
+    func listMenus(appID: String) async throws -> [[String: Any]]? {
+        let structure = try await menuService.listMenus(for: appID)
+        var count = 0
+        let maxItems = 100
+        func convertMenuItem(_ item: MenuItem) -> [String: Any]? {
+            guard count < maxItems, !item.isSeparator else { return nil }
+            count += 1
+            var dict: [String: Any] = [
+                "title": item.title,
+                "path": item.path,
+                "enabled": item.isEnabled,
+            ]
+            if item.isChecked { dict["checked"] = true }
+            if let sc = item.keyboardShortcut { dict["shortcut"] = sc.displayString }
+            if !item.submenu.isEmpty {
+                let subs = item.submenu.compactMap { convertMenuItem($0) }
+                if !subs.isEmpty { dict["submenu"] = subs }
+            }
+            return dict
+        }
+        return structure.menus.map { menu -> [String: Any] in
+            let dict: [String: Any] = [
+                "title": menu.title,
+                "enabled": menu.isEnabled,
+                "items": menu.items.compactMap { convertMenuItem($0) },
+            ]
+            return dict
+        }
+    }
+
+    func findDialog(appID: String?) async throws -> [String: Any]? {
+        let target = appID ?? rememberedApplicationID
+        do {
+            let elements = try await dialogService.listDialogElements(windowTitle: nil, appName: target)
+            var dict: [String: Any] = [
+                "title": elements.dialogInfo.title,
+                "role": elements.dialogInfo.role,
+                "is_file_dialog": elements.dialogInfo.isFileDialog,
+                "bounds": [
+                    "x": elements.dialogInfo.bounds.origin.x,
+                    "y": elements.dialogInfo.bounds.origin.y,
+                    "width": elements.dialogInfo.bounds.width,
+                    "height": elements.dialogInfo.bounds.height,
+                ],
+                "buttons": elements.buttons.map { [
+                    "title": $0.title,
+                    "enabled": $0.isEnabled,
+                    "default": $0.isDefault,
+                ] as [String: Any] },
+                "text_fields": elements.textFields.map { [
+                    "title": $0.title ?? "",
+                    "value": String(($0.value ?? "").prefix(300)),
+                    "placeholder": $0.placeholder ?? "",
+                    "index": $0.index,
+                    "enabled": $0.isEnabled,
+                ] as [String: Any] },
+            ]
+            if let subrole = elements.dialogInfo.subrole { dict["subrole"] = subrole }
+            if !elements.staticTexts.isEmpty {
+                dict["text"] = elements.staticTexts.map { String($0.prefix(200)) }
+            }
+            return dict
+        } catch {
+            return nil
         }
     }
 
