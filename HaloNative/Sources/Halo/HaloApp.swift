@@ -85,11 +85,18 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         if let index = CommandLine.arguments.firstIndex(of: "--check-ui-inspect"), index + 1 < CommandLine.arguments.count {
             Task {
                 do {
-                    let snapshot = try await macTools.ui.inspect(appID: CommandLine.arguments[index + 1])
+                    let arguments = try JSONSerialization.data(withJSONObject: [
+                        "app_id": CommandLine.arguments[index + 1],
+                    ])
+                    let snapshot = try await macTools.execute(
+                        name: "inspect_ui",
+                        arguments: String(decoding: arguments, as: UTF8.self)
+                    )
                     let object = try JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any]
                     let count = (object?["elements"] as? [[String: Any]])?.count ?? 0
                     guard count > 1 else { throw ProviderError.invalidStream }
-                    print("PASS: native Accessibility inspection returned \(count) observed controls; UI contents not printed")
+                    let driver = object?["driver"] as? String ?? "legacy"
+                    print("PASS: \(driver) Accessibility inspection returned \(count) observed controls; UI contents not printed")
                     exit(0)
                 } catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
             }
