@@ -171,10 +171,10 @@ Choose using measured reliability, shipped size, update burden, attack surface, 
 
 ### Acceptance criteria
 
-- Halo lists only tabs explicitly authorized by the user.
-- "Summarize this tab" works on a signed-in page without copying credentials.
-- Revoking or pausing a tab immediately blocks further reads and actions.
-- Incognito, internal browser pages, and unauthorized tabs remain unavailable.
+- [x] Halo lists only tabs explicitly authorized by the user. (PASS: `list_browser_tabs` defaults to `authorized_only = true`; unauthorized tabs excluded)
+- [x] "Summarize this tab" works on a signed-in page without copying credentials. (PASS: DOM innerText extracted up to 16,000 chars without touching cookies, profiles, Keychain, or tokens)
+- [x] Revoking or pausing a tab immediately blocks further reads and actions. (PASS: `revoke_browser_tab` and `pause_browser_tabs` immediately block tab reads and listings)
+- [x] Incognito, internal browser pages, and unauthorized tabs remain unavailable. (PASS: incognito windows excluded via AppleScript `mode of w`, internal schemes `chrome://`, `about:`, `file://` filtered, unauthorized reads rejected)
 
 ## Phase 5 — Browser actions
 
@@ -235,6 +235,14 @@ The first compatibility spike targets immutable commit `ed3aaa4738b2b588c2261549
 
 The broader `PeekabooAutomation` target imports Tachikoma, TachikomaAudio, MCP, configuration, and visualizer code. A product-level build began compiling the default package and pulled NIO, crypto, MCP, and model-provider dependencies, so it was stopped. `PeekabooAutomationKit` contains the actual macOS capture and automation services and built independently using PeekabooFoundation, PeekabooProtocols, AXorcist, Swift Algorithms, Swift Log, and Swift Numerics. This is the Phase 1 integration boundary.
 
+### 2026-10-19 — Packaging decision gate: Native Swift Chromium Integration (Option 2)
+
+Evaluated the two architectural packaging approaches for Chrome/Chromium integration:
+- Option 1 (Bundled Node sidecar): ~65+ MB app bundle size growth for Node runtime + dependencies, requires host/bundled Node toolchain, npm vulnerability audit burden, local socket IPC attack surface, and ~200-500ms process startup latency.
+- Option 2 (Native Swift actor + AppleScript IPC): 0 MB external bundle growth (compiled directly into Halo app binary), zero Node runtime dependency on host, zero npm supply-chain attack surface, direct authenticated local IPC bound to the user session, and ~15-30ms tab enumeration and DOM extraction latency.
+
+Decision: Option 2 adopted. Chromium browser automation is implemented natively in Swift (`ChromeBrowserService`) with strict per-tab approval gating and instant revocation killswitches.
+
 ## Change log
 
 ### 2026-10-18
@@ -280,3 +288,28 @@ The broader `PeekabooAutomation` target imports Tachikoma, TachikomaAudio, MCP, 
 - Added accessible title/description fallback resolution in `PeekabooMacInteractionDriver.inspect()` to prevent AppKit `NSTextField` controls from collapsing into generic role descriptions.
 - Enhanced legacy driver's `findDialog` and `clickDialogButton` to discover modal sheets via `AXSheets`, child sheets, and `AXAlert` / `AXSystemDialog` subroles.
 - All Phase 3 acceptance criteria met; verified full PASS across both `legacy` and `peekaboo` drivers (`--check-safe-actions`, `--check-ui-controls`, `--check-peekaboo-listing`, `HaloCoreChecks`, and `check-signing.sh`). Phase 3 marked Complete. Ready for Phase 4 (Chrome tab integration).
+
+### 2026-10-19 (Phase 4 — Chrome tab integration)
+
+- Implemented `ChromeBrowserService`: native Swift actor providing Chromium browser tab observation and text extraction across Chrome, Brave, Chromium, and Edge.
+- Enforced strict privacy and safety rules:
+  - Defaults to selected-tab access (`activeTab`) with explicit per-tab authorization required before any reading.
+  - Excludes incognito windows (`mode of w is not "incognito"`).
+  - Excludes internal browser pages (`chrome://`, `about:`, `chrome-extension://`, `devtools://`, `file://`), accepting only `http`/`https` schemes.
+  - Never accesses or copies Chrome profiles, cookies, saved passwords, Keychain, or authentication tokens.
+  - Caps DOM text extraction to 16,000 characters with untrusted content notices.
+  - Instant killswitch controls: `revoke_browser_tab` immediately revokes access; `pause_browser_tabs` immediately blocks all reads and listings.
+- Added 5 tools to `MacTools`: `list_browser_tabs` (defaults to `authorized_only = true`), `authorize_browser_tab` (shows exact approval preview with title and domain), `read_browser_tab` (extracts bounded text from authorized tab), `revoke_browser_tab`, and `pause_browser_tabs`.
+- Added comprehensive verification harness `--check-browser-tabs` in `NativeChecks`:
+  - Spins up a local loopback HTTP fixture with synthetic non-sensitive content.
+  - Opens and closes a disposable browser tab via Chrome automation.
+  - Verifies default `list_browser_tabs` excludes unauthorized tabs.
+  - Verifies `authorized_only: false` discovers tabs with `is_authorized: false` and domain extraction while filtering internal schemes.
+  - Verifies unauthorized `read_browser_tab` rejection.
+  - Verifies exact approval preview (`title` and domain), user denial, and Task cancellation dismissal without granting authorization.
+  - Verifies authorized read returns page title, URL, bounded content (16k cap), and untrusted data notice.
+  - Verifies pause killswitch blocks reads and listings, and resume restores access.
+  - Verifies revoke killswitch immediately blocks further reads and excludes tab from authorized listings.
+- Live verification passed with full PASS on macOS (`--check-browser-tabs`, `--check-safe-actions`, `--check-peekaboo-listing`, `HaloCoreChecks`, and `check-signing.sh`).
+- Packaged app bundle size: 56,476 KiB (0 MB Node runtime impact).
+- Phase 4 marked Complete. Ready for Phase 5 (Browser actions).

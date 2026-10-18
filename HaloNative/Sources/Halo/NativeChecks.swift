@@ -579,6 +579,317 @@ enum NativeChecks {
         print("PASS: \(expectedDriver) driver Safe Mac actions: focus, stale ID rejection, approval preview/denial/cancellation, control click, typing, shortcut, scroll, menu selection, dialog operation, and window layout verified with post-action observation")
     }
 
+    private final class DisposableTabServer: @unchecked Sendable {
+        let port: UInt16
+        let url: URL
+        private let socketFD: Int32
+        private let lock = NSLock()
+        private var stopped = false
+
+        init() throws {
+            let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+            guard fd >= 0 else { throw Failure("Could not create local test socket") }
+            var opt: Int32 = 1
+            _ = Darwin.setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, socklen_t(MemoryLayout<Int32>.size))
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = 0
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let bound = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            guard bound == 0, Darwin.listen(fd, 8) == 0 else {
+                Darwin.close(fd)
+                throw Failure("Could not bind/listen on local test socket")
+            }
+            var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let named = withUnsafeMutablePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.getsockname(fd, $0, &size) }
+            }
+            guard named == 0, Darwin.fcntl(fd, F_SETFL, O_NONBLOCK) == 0 else {
+                Darwin.close(fd)
+                throw Failure("Could not configure non-blocking local test socket")
+            }
+            socketFD = fd
+            port = UInt16(bigEndian: address.sin_port)
+            url = URL(string: "http://127.0.0.1:\(port)/halo-test")!
+
+            Thread.detachNewThread { [weak self] in
+                guard let self else { return }
+                let htmlBody = """
+                <!DOCTYPE html>
+                <html>
+                <head><title>Halo Disposable Browser Fixture</title></head>
+                <body>
+                <h1>Halo Chrome Integration Test</h1>
+                <p>Halo Browser Integration Test Content - Non-sensitive verification text. No cookies, no credentials, no passwords.</p>
+                </body>
+                </html>
+                """
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(htmlBody.utf8.count)\r\nConnection: close\r\n\r\n\(htmlBody)"
+                let responseBytes = [UInt8](response.utf8)
+
+                while true {
+                    let isStopped = self.lock.withLock { self.stopped }
+                    if isStopped { break }
+
+                    let client = Darwin.accept(self.socketFD, nil, nil)
+                    if client < 0 {
+                        usleep(10_000)
+                        continue
+                    }
+                    var noSigPipe: Int32 = 1
+                    _ = Darwin.setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+                    _ = Darwin.write(client, responseBytes, responseBytes.count)
+                    Darwin.close(client)
+                }
+            }
+        }
+
+        func stop() {
+            let alreadyStopped = lock.withLock {
+                if stopped { return true }
+                stopped = true
+                return false
+            }
+            if !alreadyStopped {
+                Darwin.close(socketFD)
+            }
+        }
+
+        deinit {
+            stop()
+        }
+    }
+
+    static func browserTabIntegration(_ tools: MacTools) async throws {
+        // 1. Verify tool definitions
+        let definitions = try JSONSerialization.jsonObject(with: await tools.definitions()) as? [[String: Any]] ?? []
+        let names = Set(definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
+        guard ["list_browser_tabs", "authorize_browser_tab", "read_browser_tab", "revoke_browser_tab", "pause_browser_tabs"].allSatisfy(names.contains) else {
+            throw Failure("Chrome browser tab tool definitions missing")
+        }
+
+        // 2. Start local disposable HTTP fixture
+        let server = try DisposableTabServer()
+        defer { server.stop() }
+
+        // 3. Open a disposable tab in Chrome
+        var disposableTabID: Int? = nil
+        do {
+            disposableTabID = try await ChromeBrowserService.shared.openTab(url: server.url.absoluteString)
+        } catch {
+            throw Failure("Failed to open disposable test tab in Chrome: \(error.localizedDescription)")
+        }
+        guard let tabID = disposableTabID else {
+            throw Failure("No tab ID returned for disposable tab")
+        }
+
+        defer {
+            Task {
+                try? await ChromeBrowserService.shared.closeTab(id: tabID)
+                await ChromeBrowserService.shared.revokeAll()
+                await ChromeBrowserService.shared.setPaused(false)
+            }
+        }
+
+        // Allow Chrome to navigate and render the DOM
+        try await Task.sleep(for: .milliseconds(500))
+
+        // 4. Test listing with default authorized_only = true: disposable tab MUST NOT be listed
+        let defaultListRaw = try await tools.execute(name: "list_browser_tabs", arguments: "{}")
+        guard let defaultListObj = try? JSONSerialization.jsonObject(with: Data(defaultListRaw.utf8)) as? [String: Any],
+              defaultListObj["ok"] as? Bool == true,
+              let authorizedTabs = defaultListObj["tabs"] as? [[String: Any]] else {
+            throw Failure("list_browser_tabs default execution failed: \(defaultListRaw)")
+        }
+        if authorizedTabs.contains(where: { ($0["id"] as? Int) == tabID }) {
+            throw Failure("Unauthorized tab appeared in default (authorized_only) tab list")
+        }
+
+        // 5. Test listing with authorized_only = false: disposable tab MUST be listed as unauthorized
+        let allListRaw = try await tools.execute(name: "list_browser_tabs", arguments: #"{"authorized_only":false}"#)
+        guard let allListObj = try? JSONSerialization.jsonObject(with: Data(allListRaw.utf8)) as? [String: Any],
+              allListObj["ok"] as? Bool == true,
+              let allTabs = allListObj["tabs"] as? [[String: Any]] else {
+            throw Failure("list_browser_tabs with authorized_only:false failed: \(allListRaw)")
+        }
+        guard let discoveredTab = allTabs.first(where: { ($0["id"] as? Int) == tabID }) else {
+            throw Failure("Disposable tab not found in list_browser_tabs")
+        }
+        guard discoveredTab["is_authorized"] as? Bool == false else {
+            throw Failure("New tab was unexpectedly authorized")
+        }
+        guard let discoveredDomain = discoveredTab["domain"] as? String, discoveredDomain == "127.0.0.1" else {
+            throw Failure("Tab domain extraction failed: \(discoveredTab)")
+        }
+        // Verify internal schemes (chrome://, about:) are excluded
+        for t in allTabs {
+            if let u = t["url"] as? String {
+                guard let parsed = URL(string: u), let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
+                    throw Failure("Internal browser URL leaked into tab listing: \(u)")
+                }
+            }
+        }
+
+        // 6. Test unauthorized read rejection
+        let unauthReadRaw = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        guard let unauthReadObj = try? JSONSerialization.jsonObject(with: Data(unauthReadRaw.utf8)) as? [String: Any],
+              unauthReadObj["ok"] as? Bool == false,
+              let errorMsg = unauthReadObj["error"] as? String,
+              errorMsg.contains("not authorized") else {
+            throw Failure("Unauthorized tab read was not rejected: \(unauthReadRaw)")
+        }
+
+        // 7. Test authorization preview & user denial
+        let denyTask = Task {
+            try await tools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        }
+        let denyApproval = try await waitForApproval(tools, step: "authorize deny")
+        guard denyApproval.title == "Authorize access to browser tab?" else {
+            tools.resolve(id: denyApproval.id, allow: false)
+            throw Failure("Authorization approval title mismatch: \(denyApproval.title)")
+        }
+        guard denyApproval.path.contains("127.0.0.1") else {
+            tools.resolve(id: denyApproval.id, allow: false)
+            throw Failure("Authorization approval preview path did not include domain: \(denyApproval.path)")
+        }
+        tools.resolve(id: denyApproval.id, allow: false)
+        let denyResult = try await denyTask.value
+        guard let denyObj = try? JSONSerialization.jsonObject(with: Data(denyResult.utf8)) as? [String: Any],
+              denyObj["denied"] as? Bool == true else {
+            throw Failure("Tab authorization denial ignored: \(denyResult)")
+        }
+        guard await !ChromeBrowserService.shared.isAuthorized(tabID: tabID) else {
+            throw Failure("Declined tab was authorized")
+        }
+
+        // 8. Test authorization preview cancellation dismissal
+        let cancelTask = Task {
+            try await tools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        }
+        _ = try await waitForApproval(tools, step: "authorize cancel")
+        cancelTask.cancel()
+        do {
+            _ = try await cancelTask.value
+            throw Failure("Pending tab authorization ignored Task cancellation")
+        } catch is CancellationError {}
+        guard tools.approval == nil else {
+            throw Failure("Cancelled authorization approval remained visible")
+        }
+        guard await !ChromeBrowserService.shared.isAuthorized(tabID: tabID) else {
+            throw Failure("Cancelled tab was authorized")
+        }
+
+        // 9. Test authorization approval
+        let approveTask = Task {
+            try await tools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        }
+        let approveApproval = try await waitForApproval(tools, step: "authorize approve")
+        tools.resolve(id: approveApproval.id, allow: true)
+        let approveResult = try await approveTask.value
+        guard let approveObj = try? JSONSerialization.jsonObject(with: Data(approveResult.utf8)) as? [String: Any],
+              approveObj["ok"] as? Bool == true,
+              approveObj["authorized_tab_id"] as? Int == tabID else {
+            throw Failure("Tab authorization approval failed: \(approveResult)")
+        }
+        guard await ChromeBrowserService.shared.isAuthorized(tabID: tabID) else {
+            throw Failure("Tab was not marked authorized in service")
+        }
+
+        // 10. Test listing with default authorized_only = true now includes the authorized tab
+        let postAuthListRaw = try await tools.execute(name: "list_browser_tabs", arguments: "{}")
+        guard let postAuthListObj = try? JSONSerialization.jsonObject(with: Data(postAuthListRaw.utf8)) as? [String: Any],
+              let postAuthTabs = postAuthListObj["tabs"] as? [[String: Any]],
+              let authorizedTabEntry = postAuthTabs.first(where: { ($0["id"] as? Int) == tabID }) else {
+            throw Failure("Newly authorized tab not found in default list_browser_tabs")
+        }
+        guard authorizedTabEntry["is_authorized"] as? Bool == true else {
+            throw Failure("Authorized tab listed with is_authorized == false")
+        }
+
+        // 11. Test reading authorized tab content
+        let readRaw = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        guard let readObj = try? JSONSerialization.jsonObject(with: Data(readRaw.utf8)) as? [String: Any],
+              readObj["ok"] as? Bool == true,
+              let content = readObj["content"] as? String,
+              content.contains("Halo Browser Integration Test Content"),
+              let readTitle = readObj["title"] as? String,
+              readTitle.contains("Halo Disposable Browser Fixture") else {
+            throw Failure("read_browser_tab failed or content mismatch: \(readRaw)")
+        }
+        guard readObj["truncated"] as? Bool == false else {
+            throw Failure("Disposable tab unexpectedly truncated")
+        }
+        guard let note = readObj["note"] as? String, note.contains("untrusted data") else {
+            throw Failure("Untrusted data advisory notice missing from read result")
+        }
+
+        // 12. Test pause killswitch
+        let pauseRaw = try await tools.execute(name: "pause_browser_tabs", arguments: #"{"paused":true}"#)
+        guard let pauseObj = try? JSONSerialization.jsonObject(with: Data(pauseRaw.utf8)) as? [String: Any],
+              pauseObj["ok"] as? Bool == true,
+              pauseObj["paused"] as? Bool == true else {
+            throw Failure("pause_browser_tabs(true) failed: \(pauseRaw)")
+        }
+        // Reading while paused must fail
+        let pausedReadRaw = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        guard let pausedReadObj = try? JSONSerialization.jsonObject(with: Data(pausedReadRaw.utf8)) as? [String: Any],
+              pausedReadObj["ok"] as? Bool == false,
+              let pauseError = pausedReadObj["error"] as? String,
+              pauseError.contains("paused") else {
+            throw Failure("Reading paused browser tab was not blocked: \(pausedReadRaw)")
+        }
+        // Listing while paused must fail
+        let pausedListRaw = try await tools.execute(name: "list_browser_tabs", arguments: "{}")
+        guard let pausedListObj = try? JSONSerialization.jsonObject(with: Data(pausedListRaw.utf8)) as? [String: Any],
+              pausedListObj["ok"] as? Bool == false else {
+            throw Failure("Listing while paused was not blocked: \(pausedListRaw)")
+        }
+        // Resume
+        let resumeRaw = try await tools.execute(name: "pause_browser_tabs", arguments: #"{"paused":false}"#)
+        guard let resumeObj = try? JSONSerialization.jsonObject(with: Data(resumeRaw.utf8)) as? [String: Any],
+              resumeObj["ok"] as? Bool == true,
+              resumeObj["paused"] as? Bool == false else {
+            throw Failure("pause_browser_tabs(false) resume failed: \(resumeRaw)")
+        }
+        // Reading after resume must succeed
+        let resumedReadRaw = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        guard let resumedReadObj = try? JSONSerialization.jsonObject(with: Data(resumedReadRaw.utf8)) as? [String: Any],
+              resumedReadObj["ok"] as? Bool == true else {
+            throw Failure("Reading after resume failed: \(resumedReadRaw)")
+        }
+
+        // 13. Test instant revocation killswitch
+        let revokeRaw = try await tools.execute(name: "revoke_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        guard let revokeObj = try? JSONSerialization.jsonObject(with: Data(revokeRaw.utf8)) as? [String: Any],
+              revokeObj["ok"] as? Bool == true,
+              revokeObj["revoked_tab_id"] as? Int == tabID else {
+            throw Failure("revoke_browser_tab failed: \(revokeRaw)")
+        }
+        // Default list must no longer contain the revoked tab
+        let postRevokeListRaw = try await tools.execute(name: "list_browser_tabs", arguments: "{}")
+        guard let postRevokeListObj = try? JSONSerialization.jsonObject(with: Data(postRevokeListRaw.utf8)) as? [String: Any],
+              let postRevokeTabs = postRevokeListObj["tabs"] as? [[String: Any]],
+              !postRevokeTabs.contains(where: { ($0["id"] as? Int) == tabID }) else {
+            throw Failure("Revoked tab still present in authorized tab list")
+        }
+        // Reading revoked tab must fail
+        let postRevokeReadRaw = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        guard let postRevokeReadObj = try? JSONSerialization.jsonObject(with: Data(postRevokeReadRaw.utf8)) as? [String: Any],
+              postRevokeReadObj["ok"] as? Bool == false,
+              let postRevokeErr = postRevokeReadObj["error"] as? String,
+              postRevokeErr.contains("not authorized") else {
+            throw Failure("Reading revoked tab was not blocked: \(postRevokeReadRaw)")
+        }
+
+        // 14. Close disposable tab
+        try await ChromeBrowserService.shared.closeTab(id: tabID)
+
+        print("PASS: Chrome browser tab integration: tab enumeration, incognito/internal URL exclusion, active tab resolution, approval preview/denial/cancellation, authorized DOM text extraction without credentials, pause killswitch, and instant revocation verified.")
+    }
+
     private static func waitForApproval(_ tools: MacTools, attempts: Int = 300, step: String = "") async throws -> MacTools.Approval {
         for _ in 0..<attempts {
             if let approval = tools.approval { return approval }
