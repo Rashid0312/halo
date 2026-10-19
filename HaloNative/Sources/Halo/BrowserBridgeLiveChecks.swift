@@ -14,6 +14,13 @@ extension NativeChecks {
         private let lock = NSLock()
         private var pid: pid_t = 0
         private var tabs: [(id: Int, title: String, url: String)] = []
+        private var readResponses: [Int: String] = [:]
+
+        /// Answers the AppleScript read path for a tab the bridge does not cover.
+        func setReadResponse(id: Int, title: String, url: String, text: String) {
+            let json = (try? JSONSerialization.data(withJSONObject: ["title": title, "url": url, "text": text])) ?? Data()
+            lock.withLock { readResponses[id] = String(decoding: json, as: UTF8.self) }
+        }
 
         func setBrowser(pid: pid_t) { lock.withLock { self.pid = pid; self.tabs = [] } }
         func setTab(id: Int, title: String, url: String) {
@@ -31,6 +38,12 @@ extension NativeChecks {
         }
 
         func runAppleScript(_ script: String) async throws -> String {
+            if script.contains("execute t javascript") {
+                let responses = lock.withLock { readResponses }
+                guard let match = script.range(of: #"is "(\d+)""#, options: .regularExpression),
+                      let id = Int(script[match].filter(\.isNumber)), let response = responses[id] else { return "NOT_FOUND" }
+                return response
+            }
             let tabs = lock.withLock { self.tabs }
             return tabs.enumerated().map { index, tab in
                 ["\(tab.id)", "1", "\(index + 1)", "1", tab.title, tab.url].joined(separator: "\u{1F}")
@@ -835,6 +848,21 @@ extension NativeChecks {
         }
         pass("5B.3 cross-site navigation: approval warned it leaves the site; access to the tab ended after loading.")
 
+        // Sites the extension cannot reach keep the normal read path while the
+        // bridge is connected, and refuse browser actions with a clear reason.
+        let outsideTab = 987_654
+        runtime.setReadResponse(id: outsideTab, title: "Example Domain", url: "https://example.com/", text: "Example page text")
+        try await authorize(outsideTab, url: "https://example.com/", title: "Example Domain")
+        let outsideRead = try await service.readTab(id: outsideTab)
+        let outsideClick = try await run("click_browser_element", ["tab_id": outsideTab, "element_id": "el_1_ab"])
+        let outsideNav = try await run("navigate_browser_tab", ["tab_id": outsideTab, "url": "https://example.com/next"])
+        guard outsideRead.content == "Example page text", outsideRead.elements.isEmpty, await service.activeBridgeServer() != nil,
+              (outsideClick["error"] as? String)?.contains("local test pages") == true,
+              (outsideNav["error"] as? String)?.contains("local test pages") == true else {
+            throw Failure("Uncovered site handling failed: read=\(outsideRead.content) click=\(outsideClick) nav=\(outsideNav)")
+        }
+        pass("Bridge coverage: with the bridge connected, a site outside the extension's permissions is still read via the normal path; browser actions there are refused with a clear reason.")
+
         // 13. Disable: no manifest, session, socket, or helper may remain.
         let finalSession = await service.activeBridgeServer()?.directoryURL
         controller.enabled = false
@@ -1112,5 +1140,43 @@ extension NativeChecks {
             throw Failure("Navigation protocol: a click result survived a navigation in flight.")
         } catch let error as BridgeErrorDetails where error.code == .accessPaused {}
         print("PASS: Phase 5B.3 select/scroll/navigate protocol: each action carries only its own fields; scroll bounds and unsafe or credentialed addresses rejected; navigation results survive only their own navigation.")
+    }
+}
+
+extension NativeChecks {
+    /// Browser selection is unambiguous, and the bridge's covered sites match
+    /// the extension manifest exactly.
+    static func browserSelectionAndCoverageChecks() throws {
+        typealias Running = SystemBrowserRuntime.RunningBrowser
+        let chrome = Running(bundleID: "com.google.Chrome", pid: 10, launched: 1)
+        let brave = Running(bundleID: "com.brave.Browser", pid: 20, launched: 2)
+        let chromeCopy = Running(bundleID: "com.google.Chrome", pid: 11, launched: 3)
+        let finder = Running(bundleID: "com.apple.finder", pid: 30, launched: 0)
+        func refuses(_ what: String, _ body: () throws -> Running) throws {
+            do { _ = try body() } catch { return }
+            throw Failure("Browser selection: \(what) did not refuse.")
+        }
+        guard try SystemBrowserRuntime.choose(from: [finder, chrome], requested: nil, lastActive: nil) == chrome,
+              try SystemBrowserRuntime.choose(from: [chrome, brave], requested: nil, lastActive: "com.brave.Browser") == brave,
+              try SystemBrowserRuntime.choose(from: [chrome, brave], requested: "com.google.Chrome", lastActive: "com.brave.Browser") == chrome else {
+            throw Failure("Browser selection picked the wrong browser.")
+        }
+        try refuses("two browsers, none recently used") { try SystemBrowserRuntime.choose(from: [chrome, brave], requested: nil, lastActive: nil) }
+        try refuses("two copies of one browser") { try SystemBrowserRuntime.choose(from: [chrome, chromeCopy], requested: nil, lastActive: "com.google.Chrome") }
+        try refuses("requested browser not running") { try SystemBrowserRuntime.choose(from: [chrome], requested: "com.brave.Browser", lastActive: nil) }
+        try refuses("no browser") { try SystemBrowserRuntime.choose(from: [finder], requested: nil, lastActive: nil) }
+
+        guard ChromeBrowserService.bridgeCovers("http://127.0.0.1:8080/a"), ChromeBrowserService.bridgeCovers("http://localhost/x"),
+              !ChromeBrowserService.bridgeCovers("https://127.0.0.1/a"), !ChromeBrowserService.bridgeCovers("https://example.com/"),
+              !ChromeBrowserService.bridgeCovers("http://127.0.0.1.evil.com/") else {
+            throw Failure("Bridge coverage matched the wrong addresses.")
+        }
+        let manifestURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Fixtures/BrowserBridgeExtension/manifest.json")
+        guard let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any],
+              let hosts = manifest["host_permissions"] as? [String], Set(hosts) == Set(ChromeBrowserService.bridgeHostPermissions) else {
+            throw Failure("Bridge coverage list does not match the extension manifest's host_permissions.")
+        }
+        print("PASS: Browser selection and bridge coverage: one browser or the most recently used one is chosen, ambiguous or duplicate browsers are refused, and the bridge covers exactly the extension's host permissions.")
     }
 }

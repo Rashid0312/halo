@@ -114,39 +114,92 @@ internal protocol BrowserAutomationRuntime: Sendable {
     func runAppleScript(_ script: String) async throws -> String
 }
 
-internal struct SystemBrowserRuntime: BrowserAutomationRuntime {
-    func resolveBrowserContext(_ requestedBundleID: String?) throws -> ChromeBrowserService.BrowserContext {
-        let running = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }
-        let app: NSRunningApplication
-        let bundleID: String
+/// Remembers which supported browser the user activated most recently, so an
+/// unnamed browser request means "the browser I was just using" rather than
+/// whichever app happens to be frontmost (Halo's own panel can be).
+final class BrowserActivityTracker: @unchecked Sendable {
+    static let shared = BrowserActivityTracker()
+    private let lock = NSLock()
+    private var lastActiveBundleID: String?
+    private var observer: NSObjectProtocol?
 
-        if let requestedBundleID {
-            guard ChromeBrowserService.supportedBrowserBundleIDs[requestedBundleID] != nil else {
-                throw InteractionError("Unsupported Chromium browser bundle ID '\(requestedBundleID)'.")
+    /// Starts observing app activation. Safe to call more than once.
+    func start() {
+        lock.withLock {
+            guard observer == nil else { return }
+            if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+               ChromeBrowserService.supportedBrowserBundleIDs[front] != nil {
+                lastActiveBundleID = front
             }
-            guard let exact = running.first(where: { $0.bundleIdentifier == requestedBundleID }) else {
+            observer = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
+            ) { [weak self] note in
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      let id = app.bundleIdentifier, ChromeBrowserService.supportedBrowserBundleIDs[id] != nil else { return }
+                self?.lock.withLock { self?.lastActiveBundleID = id }
+            }
+        }
+    }
+
+    var lastActive: String? { lock.withLock { lastActiveBundleID } }
+}
+
+internal struct SystemBrowserRuntime: BrowserAutomationRuntime {
+    struct RunningBrowser: Equatable {
+        let bundleID: String
+        let pid: pid_t
+        let launched: TimeInterval
+    }
+
+    /// Picks exactly one running browser instance, or explains why it cannot.
+    /// - One supported browser: use it.
+    /// - Several different browsers: the one most recently activated, if known;
+    ///   otherwise refuse and ask which.
+    /// - Several instances of the chosen browser (separate profiles or test
+    ///   copies): refuse, since AppleScript cannot address a specific instance.
+    static func choose(from running: [RunningBrowser], requested: String?, lastActive: String?) throws -> RunningBrowser {
+        let supported = running.filter { ChromeBrowserService.supportedBrowserBundleIDs[$0.bundleID] != nil }
+        let bundleID: String
+        if let requested {
+            guard ChromeBrowserService.supportedBrowserBundleIDs[requested] != nil else {
+                throw InteractionError("Unsupported Chromium browser bundle ID '\(requested)'.")
+            }
+            guard supported.contains(where: { $0.bundleID == requested }) else {
                 throw InteractionError("The requested Chromium browser is not running.")
             }
-            app = exact
-            bundleID = requestedBundleID
+            bundleID = requested
         } else {
-            let candidates = running.filter { candidate in
-                candidate.bundleIdentifier.map { ChromeBrowserService.supportedBrowserBundleIDs[$0] != nil } == true
-            }
-            guard let selected = candidates.first(where: { $0.isActive }) ?? candidates.sorted(by: {
-                ($0.bundleIdentifier ?? "") < ($1.bundleIdentifier ?? "")
-            }).first, let selectedID = selected.bundleIdentifier else {
+            let open = Set(supported.map(\.bundleID))
+            if open.count == 1, let only = open.first {
+                bundleID = only
+            } else if let lastActive, open.contains(lastActive) {
+                bundleID = lastActive
+            } else if open.isEmpty {
                 throw InteractionError("No supported Chromium browser (Google Chrome, Brave, Chromium, Edge) is currently running.")
+            } else {
+                let names = open.compactMap { ChromeBrowserService.supportedBrowserBundleIDs[$0] }.sorted().joined(separator: ", ")
+                throw InteractionError("Several browsers are open (\(names)). Say which one to use with browser_app_id.")
             }
-            app = selected
-            bundleID = selectedID
         }
+        let instances = supported.filter { $0.bundleID == bundleID }
+        guard instances.count == 1, let instance = instances.first else {
+            let name = ChromeBrowserService.supportedBrowserBundleIDs[bundleID] ?? bundleID
+            throw InteractionError("\(name) is running more than once (separate profiles or copies), so Halo cannot tell which one to use. Quit the extra copies and try again.")
+        }
+        return instance
+    }
 
-        let launched = app.launchDate?.timeIntervalSince1970 ?? 0
-        return ChromeBrowserService.BrowserContext(bundleID: bundleID,
-                                                   name: ChromeBrowserService.supportedBrowserBundleIDs[bundleID]!,
-                                                   pid: app.processIdentifier,
-                                                   sessionID: "\(app.processIdentifier):\(launched)")
+    func resolveBrowserContext(_ requestedBundleID: String?) throws -> ChromeBrowserService.BrowserContext {
+        BrowserActivityTracker.shared.start()
+        let running = NSWorkspace.shared.runningApplications.compactMap { app -> RunningBrowser? in
+            guard !app.isTerminated, let id = app.bundleIdentifier else { return nil }
+            return RunningBrowser(bundleID: id, pid: app.processIdentifier, launched: app.launchDate?.timeIntervalSince1970 ?? 0)
+        }
+        let chosen = try Self.choose(from: running, requested: requestedBundleID, lastActive: BrowserActivityTracker.shared.lastActive)
+        return ChromeBrowserService.BrowserContext(bundleID: chosen.bundleID,
+                                                   name: ChromeBrowserService.supportedBrowserBundleIDs[chosen.bundleID]!,
+                                                   pid: chosen.pid,
+                                                   sessionID: "\(chosen.pid):\(chosen.launched)")
     }
 
     func runAppleScript(_ script: String) async throws -> String {
@@ -494,6 +547,34 @@ public actor ChromeBrowserService {
             ["input", "textarea"].contains(element.tagName)
     }
 
+    /// The development extension's `host_permissions` (Fixtures manifest). The
+    /// bridge can only see these sites; every other site is read through the
+    /// AppleScript path, and browser actions are unavailable there.
+    static let bridgeHostPermissions = ["http://127.0.0.1/*", "http://localhost/*"]
+
+    static func bridgeCovers(_ url: String) -> Bool {
+        guard let components = URLComponents(string: url), let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased() else { return false }
+        return bridgeHostPermissions.contains { pattern in
+            guard let separator = pattern.range(of: "://") else { return false }
+            let patternScheme = String(pattern[..<separator.lowerBound])
+            let patternHost = pattern[separator.upperBound...].split(separator: "/").first.map(String.init) ?? ""
+            let schemeMatches = patternScheme == "*" ? ["http", "https"].contains(scheme) : patternScheme == scheme
+            return schemeMatches && patternHost == host
+        }
+    }
+
+    /// Browser actions need the bridge, which only covers its host permissions.
+    private func requireBridgeCoverage(tabID: Int, browserAppID: String?) throws {
+        let key = tabKey(tabID, context: try browserContext(browserAppID))
+        guard let record = authorizedTabs[key] else {
+            throw InteractionError("Tab \(tabID) is not authorized for this browser session.")
+        }
+        guard Self.bridgeCovers(record.url) else {
+            throw InteractionError("Browser actions are only available on sites the Halo browser extension covers (currently local test pages on 127.0.0.1 and localhost). Reading this tab still works.")
+        }
+    }
+
     /// Phase 5B.3: enabled, unprotected single-choice dropdowns with options.
     static func isSelectable(_ element: ObservedDOMElement) -> Bool {
         element.isSelectable == true && element.isEnabled && !element.isProtected &&
@@ -635,6 +716,7 @@ public actor ChromeBrowserService {
         guard bridgeServer != nil else {
             throw InteractionError("Browser actions require the Halo browser extension connection (Settings → Mac Access → Browser bridge).")
         }
+        try requireBridgeCoverage(tabID: tabID, browserAppID: browserAppID)
         let content = try await readTab(id: tabID, browserAppID: browserAppID)
         let context = try browserContext(browserAppID)
         let key = tabKey(tabID, context: context)
@@ -666,6 +748,7 @@ public actor ChromeBrowserService {
         guard bridgeServer != nil else {
             throw InteractionError("Browser actions require the Halo browser extension connection (Settings → Mac Access → Browser bridge).")
         }
+        try requireBridgeCoverage(tabID: tabID, browserAppID: browserAppID)
         let content = try await readTab(id: tabID, browserAppID: browserAppID)
         let context = try browserContext(browserAppID)
         let key = tabKey(tabID, context: context)
@@ -810,7 +893,9 @@ public actor ChromeBrowserService {
         let epoch = accessEpoch
 
         // 1. If an authenticated Native Messaging bridge is connected, route observation through the bridge:
-        if let server = bridgeServer, let validator = bridgeValidator, await server.isConnected {
+        // Only sites the extension can reach go through the bridge; others keep
+        // the AppleScript read path, so enabling the bridge never breaks reading.
+        if let server = bridgeServer, let validator = bridgeValidator, Self.bridgeCovers(record.url), await server.isConnected {
             let (resp, tabIdent, record) = try await bridgeExchange(id: id, key: key, context: context, server: server, validator: validator) {
                 BridgeRequest(requestID: $1, sessionNonce: $2, type: .observeTab, targetTab: $0)
             }

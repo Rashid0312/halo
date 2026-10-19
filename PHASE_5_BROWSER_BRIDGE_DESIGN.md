@@ -375,7 +375,12 @@ The 13 stages are:
 
 ### 16.12 Known Limits Carried Forward
 - **Loopback only:** the development extension only covers loopback pages. A production extension identity, its distribution, and broader host permissions are release-hardening decisions.
-- **Ambiguous default browser:** when no browser is named, Phase 4's `SystemBrowserRuntime` picks the *active* Chromium-family browser, which is ambiguous when several are running. Tracked as a Phase 4 follow-up.
+- **Ambiguous default browser (fixed 2026-10-19):** with no browser named, Halo uses:
+  - the only supported browser running, or
+  - the one the user most recently activated (`BrowserActivityTracker`).
+
+  It refuses when that is unknown or when several copies of the chosen browser are running.
+- **Bridge coverage (fixed 2026-10-19):** reads go through the bridge only for sites the extension's `host_permissions` cover (`ChromeBrowserService.bridgeHostPermissions`, checked against the manifest). Every other site keeps the AppleScript read path, so enabling the bridge never breaks reading. Browser actions on uncovered sites are refused with a clear reason.
 - **Mutations:** Phase 5A itself has none. Phase 5B.1 adds one approved click (§17).
 
 

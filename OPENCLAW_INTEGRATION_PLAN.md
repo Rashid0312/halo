@@ -589,3 +589,18 @@ Implementation boundary: Transport foundation (`BrowserBridgeProtocol.swift`) im
 - Extension: select policy and scripted selection, scroll-region detection, trusted wheel scrolling, and bounded navigation.
 - Fix: form fields are labelled only by `<label>`, `aria-label` or `placeholder`. Select options and textarea text had been leaking into labels.
 - Tests: protocol and validator checks, plus 8 real-Chromium stages.
+
+### 2026-10-19 (Fixes before 5B.4)
+
+- **Bridge coverage:** with the bridge on, every tab read had gone through the extension, which only covers loopback, so reading real sites broke. Reads now use the bridge only for covered sites, and actions elsewhere are refused with a reason. A check pins the coverage list to the manifest.
+- **Browser selection:** an unnamed browser is now the only one running, or the most recently activated. Halo refuses when that is ambiguous, or when the browser runs in several copies. Before, it picked the "active" app (which flips with focus) and an arbitrary copy of duplicates.
+- **Tests:**
+  - six browser-selection cases
+  - coverage matching
+  - manifest consistency
+  - a real-bridge stage that reads an uncovered site via AppleScript and refuses actions there.
+- **Still open and deliberately deferred:**
+  - real-site support (broader host permissions, large-page element prioritisation, shadow DOM)
+  - verifying that AppleScript and extension tab IDs match in real Chrome
+  - a manual check of the settings toggle
+  - rerunning `--check-safe-actions`.

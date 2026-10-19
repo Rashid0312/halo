@@ -356,6 +356,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         conversation.onReply = { [weak self] text in self?.voice.finishReply(text) }
         conversation.onStop = { [weak self] in self?.voice.stopSpeaking(); self?.macTools.cancelApproval() }
         NSApp.setActivationPolicy(.accessory)
+        BrowserActivityTracker.shared.start()
         browserBridge.resumeIfEnabled()
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "circle.hexagongrid.fill", accessibilityDescription: "Halo")

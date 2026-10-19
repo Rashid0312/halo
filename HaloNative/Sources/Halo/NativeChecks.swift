@@ -2397,6 +2397,7 @@ enum NativeChecks {
         print("PASS: All 17 required adversarial checks passed deterministically.")
         try await runBridgeSecurityValidationChecks(helperBinaryURL: helperBinaryURL, pinnedExtensionID: pinnedExtensionID)
         try await clickProtocolChecks()
+        try browserSelectionAndCoverageChecks()
     }
 
     private static func runBridgePerformanceBenchmarks(helperBinaryURL: URL, pinnedExtensionID: String) async throws {
