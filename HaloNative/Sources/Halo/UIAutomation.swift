@@ -8,6 +8,20 @@ private struct UIControlError: LocalizedError {
     init(_ message: String) { errorDescription = message }
 }
 
+enum SecureFieldPolicy {
+    static func isProtected(role: String, subrole: String = "", roleDescription: String = "",
+                            isSecure: Bool = false, label: String = "") -> Bool {
+        let roleText = role.lowercased()
+        let subroleText = subrole.lowercased()
+        let descriptionText = roleDescription.lowercased()
+        let labelText = label.lowercased()
+        let labelWords = Set(labelText.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        return isSecure || roleText.contains("securetext") || subroleText.contains("securetext") ||
+            descriptionText.contains("secure") || descriptionText.contains("password") ||
+            labelText.contains("password") || labelText.contains("passcode") || labelWords.contains("pin")
+    }
+}
+
 struct UITarget: Sendable {
     let id: String
     let pid: pid_t
@@ -57,7 +71,13 @@ private actor AccessibilityTree {
             let role = value(element, kAXRoleAttribute) as? String ?? "unknown"
             let title = value(element, kAXTitleAttribute) as? String ?? ""
             let description = value(element, kAXDescriptionAttribute) as? String ?? ""
-            let secure = (value(element, kAXSubroleAttribute) as? String) == "AXSecureTextField"
+            let subrole = value(element, kAXSubroleAttribute) as? String ?? ""
+            let roleDescription = value(element, kAXRoleDescriptionAttribute) as? String ?? ""
+            let secureAttribute = value(element, "AXSecure") as? Bool ?? false
+            let label = title.isEmpty ? description : title
+            let secure = SecureFieldPolicy.isProtected(role: role, subrole: subrole,
+                                                        roleDescription: roleDescription,
+                                                        isSecure: secureAttribute, label: label)
             var row: [String: Any] = ["id": id, "role": role, "label": String((title.isEmpty ? description : title).prefix(200))]
             if let parent { row["parent"] = parent }
             if !secure, let text = value(element, kAXValueAttribute) as? String { row["value"] = String(text.prefix(300)) }
@@ -65,7 +85,7 @@ private actor AccessibilityTree {
             var actions: CFArray?
             if AXUIElementCopyActionNames(element, &actions) == .success { row["actions"] = actions as? [String] ?? [] }
             elements[id] = element
-            targets[id] = UITarget(id: id, pid: pid, label: title.isEmpty ? description : title, role: role, isProtected: secure || role == "AXSecureTextField")
+            targets[id] = UITarget(id: id, pid: pid, label: label, role: role, isProtected: secure)
             rows.append(row)
             if role == "AXMenuBar" || role == "AXMenu" {
                 if depth > 2 { return }
@@ -104,12 +124,29 @@ private actor AccessibilityTree {
         guard error == .success else { throw UIControlError("The app did not accept \(action) (Accessibility error \(error.rawValue)). Inspect it again.") }
     }
 
-    func focus(_ id: String) throws {
+    func focusForTyping(_ id: String) throws {
         guard let element = elements[id], let target = targets[id] else { throw UIControlError("Inspect the app again before typing.") }
+        func currentlyProtected(_ candidate: AXUIElement) -> Bool {
+            let role = value(candidate, kAXRoleAttribute) as? String ?? ""
+            let subrole = value(candidate, kAXSubroleAttribute) as? String ?? ""
+            let roleDescription = value(candidate, kAXRoleDescriptionAttribute) as? String ?? ""
+            let title = value(candidate, kAXTitleAttribute) as? String ?? ""
+            let description = value(candidate, kAXDescriptionAttribute) as? String ?? ""
+            return SecureFieldPolicy.isProtected(role: role, subrole: subrole,
+                roleDescription: roleDescription, isSecure: value(candidate, "AXSecure") as? Bool ?? false,
+                label: title.isEmpty ? description : title)
+        }
+        guard !currentlyProtected(element) else {
+            throw UIControlError("Automated text entry into secure or password fields is strictly blocked.")
+        }
         _ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         let app = AXUIElementCreateApplication(target.pid)
         guard let focused = value(app, kAXFocusedUIElementAttribute), CFEqual(focused, element) else {
             throw UIControlError("The intended field did not receive focus; no text was typed.")
+        }
+        guard CFGetTypeID(focused) == AXUIElementGetTypeID(),
+              !currentlyProtected(unsafeDowncast(focused, to: AXUIElement.self)) else {
+            throw UIControlError("Automated text entry into secure or password fields is strictly blocked.")
         }
     }
 
@@ -264,7 +301,7 @@ final class UIAutomation {
         guard ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXEditableTextArea"].contains(target.role) else { throw UIControlError("Choose an observed text field, not another kind of control.") }
         guard let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else { throw UIControlError("The app has closed.") }
         app.activate()
-        try await tree.focus(id)
+        try await tree.focusForTyping(id)
         try Task.checkCancellation()
         // Target a specific process rather than whichever app happens to be frontmost.
         var chunks: [String] = [], chunk = ""

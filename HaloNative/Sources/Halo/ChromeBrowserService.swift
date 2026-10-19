@@ -10,17 +10,14 @@ public struct BrowserTab: Sendable, Codable, Equatable {
     public let isAuthorized: Bool
     public let windowIndex: Int
     public let tabIndex: Int
+    public let browserBundleID: String
+    public let browserPID: Int32
+    public let browserSessionID: String
 
-    public init(
-        id: Int,
-        title: String,
-        url: String,
-        domain: String,
-        isActive: Bool,
-        isAuthorized: Bool,
-        windowIndex: Int = 1,
-        tabIndex: Int = 1
-    ) {
+    public init(id: Int, title: String, url: String, domain: String, isActive: Bool,
+                isAuthorized: Bool, windowIndex: Int = 1, tabIndex: Int = 1,
+                browserBundleID: String = "", browserPID: Int32 = 0,
+                browserSessionID: String = "") {
         self.id = id
         self.title = title
         self.url = url
@@ -29,6 +26,9 @@ public struct BrowserTab: Sendable, Codable, Equatable {
         self.isAuthorized = isAuthorized
         self.windowIndex = windowIndex
         self.tabIndex = tabIndex
+        self.browserBundleID = browserBundleID
+        self.browserPID = browserPID
+        self.browserSessionID = browserSessionID
     }
 }
 
@@ -39,48 +39,38 @@ public struct BrowserTabContent: Sendable, Codable {
     public let domain: String
     public let content: String
     public let truncated: Bool
+}
 
-    public init(
-        id: Int,
-        title: String,
-        url: String,
-        domain: String,
-        content: String,
-        truncated: Bool
-    ) {
-        self.id = id
-        self.title = title
-        self.url = url
-        self.domain = domain
-        self.content = content
-        self.truncated = truncated
-    }
+public struct AuthorizedTabKey: Sendable, Codable, Hashable {
+    public let browserBundleID: String
+    public let browserSessionID: String
+    public let tabID: Int
 }
 
 public struct AuthorizedTabRecord: Sendable, Codable, Equatable {
-    public let id: Int
+    public let key: AuthorizedTabKey
     public let domain: String
     public let title: String
     public let url: String
     public let authorizedAt: Date
-
-    public init(id: Int, domain: String, title: String, url: String, authorizedAt: Date = Date()) {
-        self.id = id
-        self.domain = domain
-        self.title = title
-        self.url = url
-        self.authorizedAt = authorizedAt
-    }
 }
 
-/// Service providing observation and access to explicitly authorized Chrome/Chromium tabs.
-/// Strictly enforces per-tab authorization with domain binding, filters incognito windows and internal browser URLs,
-/// never touches browser profiles or credentials, and provides instant pause/revocation killswitches.
+/// Read-only, explicitly authorized access to non-incognito Chromium tabs.
+/// Authorization is scoped to a browser process session and tab. An access epoch
+/// ensures pause and revocation win over results already in flight.
 public actor ChromeBrowserService {
     public static let shared = ChromeBrowserService()
 
-    private var authorizedTabs: [Int: AuthorizedTabRecord] = [:]
+    private struct BrowserContext: Sendable {
+        let bundleID: String
+        let name: String
+        let pid: pid_t
+        let sessionID: String
+    }
+
+    private var authorizedTabs: [AuthorizedTabKey: AuthorizedTabRecord] = [:]
     private var isPaused = false
+    private var accessEpoch: UInt64 = 0
 
     public static let supportedBrowserBundleIDs: [String: String] = [
         "com.google.Chrome": "Google Chrome",
@@ -95,62 +85,72 @@ public actor ChromeBrowserService {
     public init() {}
 
     public func setPaused(_ paused: Bool) {
+        guard isPaused != paused else { return }
         isPaused = paused
+        accessEpoch &+= 1
     }
 
-    public func isAccessPaused() -> Bool {
-        isPaused
-    }
+    public func isAccessPaused() -> Bool { isPaused }
 
     public func isAuthorized(tabID: Int) -> Bool {
-        authorizedTabs[tabID] != nil
+        authorizedTabs.keys.contains { $0.tabID == tabID }
     }
 
-    public func authorize(tabID: Int, domain: String, title: String, url: String) {
-        authorizedTabs[tabID] = AuthorizedTabRecord(
-            id: tabID,
-            domain: domain.lowercased(),
-            title: title,
-            url: url,
-            authorizedAt: Date()
-        )
-    }
-
-    public func revoke(tabID: Int) {
-        authorizedTabs.removeValue(forKey: tabID)
+    public func revoke(tabID: Int, browserAppID: String? = nil) {
+        authorizedTabs = authorizedTabs.filter { key, _ in
+            key.tabID != tabID || (browserAppID != nil && key.browserBundleID != browserAppID)
+        }
+        accessEpoch &+= 1
     }
 
     public func revokeAll() {
         authorizedTabs.removeAll()
+        accessEpoch &+= 1
     }
 
-    public func authorizedCount() -> Int {
-        authorizedTabs.count
+    public func authorizedCount() -> Int { authorizedTabs.count }
+
+    private func browserContext(_ requestedBundleID: String?) throws -> BrowserContext {
+        let running = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }
+        let app: NSRunningApplication
+        let bundleID: String
+
+        if let requestedBundleID {
+            guard Self.supportedBrowserBundleIDs[requestedBundleID] != nil else {
+                throw InteractionError("Unsupported Chromium browser bundle ID '\(requestedBundleID)'.")
+            }
+            guard let exact = running.first(where: { $0.bundleIdentifier == requestedBundleID }) else {
+                throw InteractionError("The requested Chromium browser is not running.")
+            }
+            app = exact
+            bundleID = requestedBundleID
+        } else {
+            let candidates = running.filter { candidate in
+                candidate.bundleIdentifier.map { Self.supportedBrowserBundleIDs[$0] != nil } == true
+            }
+            guard let selected = candidates.first(where: { $0.isActive }) ?? candidates.sorted(by: {
+                ($0.bundleIdentifier ?? "") < ($1.bundleIdentifier ?? "")
+            }).first, let selectedID = selected.bundleIdentifier else {
+                throw InteractionError("No supported Chromium browser (Google Chrome, Brave, Chromium, Edge) is currently running.")
+            }
+            app = selected
+            bundleID = selectedID
+        }
+
+        let launched = app.launchDate?.timeIntervalSince1970 ?? 0
+        return BrowserContext(bundleID: bundleID, name: Self.supportedBrowserBundleIDs[bundleID]!,
+                              pid: app.processIdentifier,
+                              sessionID: "\(app.processIdentifier):\(launched)")
     }
 
     public func resolveBrowserAppName(_ browserAppID: String?) throws -> String {
-        if let browserAppID {
-            if let name = Self.supportedBrowserBundleIDs[browserAppID] {
-                return name
-            }
-        }
-        let running = NSWorkspace.shared.runningApplications
-        for (bundleID, name) in Self.supportedBrowserBundleIDs {
-            if running.contains(where: { $0.bundleIdentifier == bundleID }) {
-                return name
-            }
-        }
-        throw InteractionError("No supported Chromium browser (Google Chrome, Brave, Chromium, Edge) is currently running.")
+        try browserContext(browserAppID).name
     }
 
     private func runAppleScript(_ script: String) async throws -> String {
         try Task.checkCancellation()
-        let result = try await CommandRunner.run(
-            executable: "/usr/bin/osascript",
-            arguments: ["-e", script],
-            directory: FileManager.default.temporaryDirectory,
-            timeout: 10
-        )
+        let result = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", script],
+                                                 directory: FileManager.default.temporaryDirectory, timeout: 10)
         guard result.status == 0 else {
             throw InteractionError("Browser automation error: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
@@ -158,33 +158,27 @@ public actor ChromeBrowserService {
     }
 
     public func openTab(url: String, browserAppID: String? = nil) async throws -> Int {
-        guard let parsed = URL(string: url),
-              let scheme = parsed.scheme?.lowercased(),
-              ["http", "https"].contains(scheme) else {
-            throw InteractionError("Only HTTP/HTTPS URLs are allowed.")
-        }
-        let browserName = try resolveBrowserAppName(browserAppID)
-        let escapedURL = url
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let script = """
-        tell application "\(browserName)"
+        guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(),
+              ["http", "https"].contains(scheme) else { throw InteractionError("Only HTTP/HTTPS URLs are allowed.") }
+        let context = try browserContext(browserAppID)
+        let escaped = url.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let raw = try await runAppleScript("""
+        tell application "\(context.name)"
             if not (exists front window) then make new window
-            set newTab to make new tab at end of tabs of front window with properties {URL:"\(escapedURL)"}
+            set newTab to make new tab at end of tabs of front window with properties {URL:"\(escaped)"}
             return (id of newTab as string)
         end tell
-        """
-        let raw = try await runAppleScript(script)
-        guard let tabID = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            throw InteractionError("Failed to open tab in \(browserName)")
+        """)
+        guard let id = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw InteractionError("Failed to open tab in \(context.name)")
         }
-        return tabID
+        return id
     }
 
     public func closeTab(id: Int, browserAppID: String? = nil) async throws {
-        let browserName = try resolveBrowserAppName(browserAppID)
-        let script = """
-        tell application "\(browserName)"
+        let context = try browserContext(browserAppID)
+        _ = try? await runAppleScript("""
+        tell application "\(context.name)"
             repeat with w in windows
                 repeat with t in tabs of w
                     if (id of t as string) is "\(id)" then
@@ -195,74 +189,82 @@ public actor ChromeBrowserService {
             end repeat
             return "NOT_FOUND"
         end tell
-        """
-        _ = try? await runAppleScript(script)
-        authorizedTabs.removeValue(forKey: id)
+        """)
+        revoke(tabID: id, browserAppID: context.bundleID)
+    }
+
+    private func tabKey(_ id: Int, context: BrowserContext) -> AuthorizedTabKey {
+        AuthorizedTabKey(browserBundleID: context.bundleID, browserSessionID: context.sessionID, tabID: id)
     }
 
     public func listTabs(browserAppID: String? = nil, authorizedOnly: Bool = false) async throws -> [BrowserTab] {
-        guard !isPaused else {
-            throw InteractionError("Browser tab access is currently paused.")
-        }
-        let browserName = try resolveBrowserAppName(browserAppID)
-        // Use non-printable ASCII control characters: 0x1F (unit separator) for fields, 0x1E (record separator) for tab records.
-        // This makes parsing completely immune to delimiter collisions with webpage titles or URLs.
-        let script = """
-        tell application "\(browserName)"
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        let epoch = accessEpoch
+        let context = try browserContext(browserAppID)
+        // Sanitize both framing characters inside AppleScript before concatenation.
+        // This keeps tab enumeration independent of Chrome's optional JavaScript-from-
+        // Apple-Events setting while strict field counts reject malformed output.
+        let raw = try await runAppleScript("""
+        on replaceText(findText, replacementText, sourceText)
+            set oldDelimiters to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to findText
+            set sourceItems to text items of sourceText
+            set AppleScript's text item delimiters to replacementText
+            set sourceText to sourceItems as text
+            set AppleScript's text item delimiters to oldDelimiters
+            return sourceText
+        end replaceText
+        tell application "\(context.name)"
             if not (exists front window) then return ""
             set outList to {}
+            set wIdx to 1
             repeat with w in windows
                 if mode of w is not "incognito" then
                     set actIndex to active tab index of w
                     set tIdx to 1
                     repeat with t in tabs of w
-                        set end of outList to (id of t as string) & (character id 31) & (title of t) & (character id 31) & (URL of t) & (character id 31) & (actIndex as string) & (character id 31) & (tIdx as string)
+                        set safeTitle to my replaceText(character id 31, "�", title of t)
+                        set safeTitle to my replaceText(character id 30, "�", safeTitle)
+                        set safeURL to my replaceText(character id 31, "�", URL of t)
+                        set safeURL to my replaceText(character id 30, "�", safeURL)
+                        set end of outList to (id of t as string) & (character id 31) & (actIndex as string) & (character id 31) & (tIdx as string) & (character id 31) & (wIdx as string) & (character id 31) & safeTitle & (character id 31) & safeURL
                         set tIdx to tIdx + 1
                     end repeat
                 end if
+                set wIdx to wIdx + 1
             end repeat
             set AppleScript's text item delimiters to (character id 30)
             return outList as text
         end tell
-        """
-        let raw = try await runAppleScript(script)
+        """)
+        try Task.checkCancellation()
+        guard !isPaused, epoch == accessEpoch else {
+            throw InteractionError("Browser tab access changed while the listing was in flight.")
+        }
+        let current = try browserContext(context.bundleID)
+        guard current.sessionID == context.sessionID else {
+            throw InteractionError("The browser restarted while tabs were being listed.")
+        }
+
         var tabs: [BrowserTab] = []
-        let records = raw.components(separatedBy: "\u{1E}")
-        for record in records {
+        for record in raw.components(separatedBy: "\u{1E}") where !record.isEmpty {
             let parts = record.components(separatedBy: "\u{1F}")
-            guard parts.count >= 5,
+            guard parts.count == 6,
                   let id = Int(parts[0].trimmingCharacters(in: .whitespacesAndNewlines)),
-                  let activeIdx = Int(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)),
-                  let tabIdx = Int(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                continue
+                  let active = Int(parts[1]), let tabIndex = Int(parts[2]), let windowIndex = Int(parts[3]) else {
+                throw InteractionError("Malformed browser tab metadata; no tabs were returned.")
             }
-            let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            let url = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Filter out internal or unsupported schemes (chrome://, chrome-extension://, about:, file://, devtools://)
-            guard let parsedURL = URL(string: url),
-                  let scheme = parsedURL.scheme?.lowercased(),
-                  ["http", "https"].contains(scheme) else {
-                continue
-            }
-            let domain = parsedURL.host ?? "browser"
-            let isActive = (activeIdx == tabIdx)
-            let authorized = (authorizedTabs[id] != nil)
-
-            if authorizedOnly && !authorized {
-                continue
-            }
-
-            tabs.append(BrowserTab(
-                id: id,
-                title: String(title.prefix(200)),
-                url: url,
-                domain: domain,
-                isActive: isActive,
-                isAuthorized: authorized,
-                windowIndex: 1,
-                tabIndex: tabIdx
-            ))
+            let title = parts[4]
+            let url = parts[5].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme), let host = parsed.host else { continue }
+            let authorized = authorizedTabs[tabKey(id, context: context)] != nil
+            if authorizedOnly && !authorized { continue }
+            tabs.append(BrowserTab(id: id, title: String(title.prefix(200)), url: url,
+                                   domain: host.lowercased(), isActive: active == tabIndex,
+                                   isAuthorized: authorized, windowIndex: windowIndex, tabIndex: tabIndex,
+                                   browserBundleID: context.bundleID, browserPID: context.pid,
+                                   browserSessionID: context.sessionID))
             if tabs.count >= 50 { break }
         }
         return tabs
@@ -273,71 +275,76 @@ public actor ChromeBrowserService {
         return tabs.first(where: { $0.isActive }) ?? tabs.first
     }
 
+    /// Re-observes after approval and authorizes only an unchanged browser-session/tab/URL.
+    public func authorizeObservedTab(_ approved: BrowserTab) async throws -> AuthorizedTabRecord {
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        let tabs = try await listTabs(browserAppID: approved.browserBundleID, authorizedOnly: false)
+        guard let current = tabs.first(where: { $0.id == approved.id }),
+              current.browserSessionID == approved.browserSessionID,
+              current.url == approved.url, current.domain == approved.domain else {
+            throw InteractionError("The browser tab changed while approval was open. Inspect it and approve again.")
+        }
+        let key = AuthorizedTabKey(browserBundleID: current.browserBundleID,
+                                   browserSessionID: current.browserSessionID, tabID: current.id)
+        let record = AuthorizedTabRecord(key: key, domain: current.domain, title: current.title,
+                                         url: current.url, authorizedAt: Date())
+        authorizedTabs[key] = record
+        accessEpoch &+= 1
+        return record
+    }
+
     public func readTab(id: Int, browserAppID: String? = nil) async throws -> BrowserTabContent {
-        guard !isPaused else {
-            throw InteractionError("Browser tab access is currently paused.")
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        let context = try browserContext(browserAppID)
+        let key = tabKey(id, context: context)
+        guard let record = authorizedTabs[key] else {
+            throw InteractionError("Tab \(id) is not authorized for this browser session.")
         }
-        guard let record = authorizedTabs[id] else {
-            throw InteractionError("Tab \(id) is not authorized. The user must explicitly authorize this tab before its contents can be read.")
-        }
-        let browserName = try resolveBrowserAppName(browserAppID)
-        // Return JSON from the browser DOM directly. JSON.stringify safely handles quotes, escapes, unicode, and newlines.
-        let script = """
-        tell application "\(browserName)"
+        let epoch = accessEpoch
+        let raw = try await runAppleScript("""
+        tell application "\(context.name)"
             repeat with w in windows
                 if mode of w is not "incognito" then
                     repeat with t in tabs of w
                         if (id of t as string) is "\(id)" then
-                            set jsonStr to execute t javascript "JSON.stringify({title: document.title || '', url: window.location.href || '', text: (document.body ? (document.body.innerText || '') : '').slice(0, 16000)})"
-                            return jsonStr
+                            return execute t javascript "JSON.stringify({title: document.title || '', url: window.location.href || '', text: (document.body ? (document.body.innerText || '') : '').slice(0, 16000)})"
                         end if
                     end repeat
                 end if
             end repeat
             return "NOT_FOUND"
         end tell
-        """
-        let raw = try await runAppleScript(script)
+        """)
+        try Task.checkCancellation()
+        guard !isPaused, epoch == accessEpoch, authorizedTabs[key] == record else {
+            throw InteractionError("Browser tab access changed while the read was in flight.")
+        }
+        let currentContext = try browserContext(context.bundleID)
+        guard currentContext.sessionID == context.sessionID else {
+            authorizedTabs.removeValue(forKey: key)
+            throw InteractionError("The browser restarted; tab authorization was revoked.")
+        }
         if raw.trimmingCharacters(in: .whitespacesAndNewlines) == "NOT_FOUND" {
-            authorizedTabs.removeValue(forKey: id)
+            authorizedTabs.removeValue(forKey: key)
             throw InteractionError("Tab \(id) was not found in non-incognito windows.")
         }
         guard let data = raw.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let title = json["title"] as? String,
-              let url = json["url"] as? String,
+              let title = json["title"] as? String, let url = json["url"] as? String,
               let content = json["text"] as? String else {
             throw InteractionError("Failed to parse tab content from browser.")
         }
-
-        // Recheck pause state after execution before returning data (defense-in-depth against race conditions)
-        guard !isPaused else {
-            throw InteractionError("Browser tab access is currently paused.")
-        }
-
-        guard let parsedURL = URL(string: url),
-              let scheme = parsedURL.scheme?.lowercased(),
-              ["http", "https"].contains(scheme) else {
-            authorizedTabs.removeValue(forKey: id)
+        guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(),
+              ["http", "https"].contains(scheme), let host = parsed.host else {
+            authorizedTabs.removeValue(forKey: key)
             throw InteractionError("Reading internal browser pages is strictly forbidden.")
         }
-        let domain = (parsedURL.host ?? "browser").lowercased()
-
-        // Domain binding check: if the tab was navigated to a different domain, revoke authorization immediately
+        let domain = host.lowercased()
         guard domain == record.domain else {
-            authorizedTabs.removeValue(forKey: id)
-            throw InteractionError("Security violation: Tab \(id) has navigated from authorized domain '\(record.domain)' to '\(domain)'. Access has been revoked.")
+            authorizedTabs.removeValue(forKey: key)
+            throw InteractionError("Tab \(id) navigated from '\(record.domain)' to '\(domain)'; authorization was revoked.")
         }
-
-        let truncated = content.count >= 16000
-
-        return BrowserTabContent(
-            id: id,
-            title: String(title.prefix(200)),
-            url: url,
-            domain: domain,
-            content: content,
-            truncated: truncated
-        )
+        return BrowserTabContent(id: id, title: String(title.prefix(200)), url: url, domain: domain,
+                                 content: content, truncated: content.utf16.count >= 16000)
     }
 }

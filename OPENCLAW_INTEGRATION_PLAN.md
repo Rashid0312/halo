@@ -1,6 +1,6 @@
 # Halo OpenClaw Integration Plan
 
-Last updated: 2026-10-18
+Last updated: 2026-10-19
 
 ## Purpose
 
@@ -47,9 +47,9 @@ The integration will not initially import:
 | 0. Baseline and governance | In progress | Reproducible baseline recorded, dedicated branch available, plan and license process established |
 | 1. Peekaboo compatibility spike | Complete | Pinned Peekaboo automation module builds inside signed Halo and performs read-only inspection |
 | 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
-| 3. Safe Mac actions | Not started | Observed click/type/key/menu/window actions retain approval and post-action verification |
-| 4. Chrome tab integration | Not started | Halo lists and reads explicitly authorized Chrome tabs without copying browser credentials |
-| 5. Browser actions | Not started | Halo reliably operates authorized pages with sensitive-action gates and result verification |
+| 3. Safe Mac actions | Complete | Exact-target execution, approvals, secure-field protection, and post-action verification pass across both drivers |
+| 4. Chrome tab integration | Hardening | Browser-session authorization, approval revalidation, injection-safe metadata framing, and in-flight killswitch checks must pass |
+| 5. Browser actions | Blocked on bridge | Do not add DOM mutations through AppleScript; select and validate a narrowly scoped Native Messaging/CDP boundary first |
 | 6. Legacy automation retirement | Not started | Replaced Halo implementations are removed only after parity and rollback validation |
 | 7. Release hardening | Not started | Security, permissions, signing, notarization, clean-install, and recovery checks pass |
 
@@ -139,6 +139,9 @@ Recorded dependency and runtime measurements:
 - [x] Exact approval preview, user denial, and Task cancellation tests.
 - [x] Post-action observation validation (re-inspecting UI to verify side effects).
 - [x] Add `--check-safe-actions` verification harness in `HaloApp` and `NativeChecks`.
+- [x] Remove Peekaboo fuzzy-label and cached-coordinate mutation fallbacks; unresolved snapshot targets fail closed.
+- [x] Centralize secure-field classification, recheck the exact legacy target immediately before typing, and redact protected dialog values.
+- [x] Require approval for application focus and window layout as mutating actions.
 
 ### Acceptance criteria
 
@@ -148,7 +151,7 @@ Recorded dependency and runtime measurements:
 - [x] Control click changes state verified by re-inspection. (PASS: verified button title transitions to `"Mercy test button pressed"`)
 - [x] Typing into an observed field updates field value verified by re-inspection. (PASS: verified typed content in test input)
 - [x] Keyboard shortcuts (e.g. `cmd+a`), scrolling, menu item selection (`Edit > Select All`), and dialog operations (`Confirm`) succeed across both drivers. (PASS: verified on legacy and Peekaboo drivers)
-- [x] Strict feature parity maintained between `legacy` and `peekaboo` drivers under `HALO_MAC_DRIVER=peekaboo`. (PASS: both drivers pass `--check-safe-actions`)
+- [x] Strict security parity maintained between `legacy` and `peekaboo` drivers. Peekaboo uses snapshot targets or a unique exact AX fingerprint with bounded geometry tolerance; legacy rechecks the exact focused element. Both pass `--check-safe-actions` after hardening.
 
 ## Phase 4 — Chrome tab integration
 
@@ -175,9 +178,15 @@ Choose using measured reliability, shipped size, update burden, attack surface, 
 - [x] "Summarize this tab" works on a signed-in page without copying credentials. (PASS: DOM innerText extracted up to 16,000 chars without touching cookies, profiles, Keychain, or tokens)
 - [x] Revoking or pausing a tab immediately blocks further reads and actions. (PASS: `revoke_browser_tab` and `pause_browser_tabs` immediately block tab reads and listings)
 - [x] Incognito, internal browser pages, and unauthorized tabs remain unavailable. (PASS: incognito windows excluded via AppleScript `mode of w`, internal schemes `chrome://`, `about:`, `file://` filtered, unauthorized reads rejected)
+- [x] Authorization is keyed by browser bundle, browser process-session identity, and tab ID; unknown explicit browser IDs fail closed.
+- [x] Authorization re-observes the tab after approval and rejects navigation, restart, replacement, and ID reuse.
+- [x] Page-controlled title and URL metadata have framing controls sanitized inside AppleScript and are accepted only with an exact field count; listing does not require Chrome's JavaScript-from-Apple-Events setting.
+- [x] Pause/revoke changes an access epoch checked after every external await so in-flight results cannot return afterward.
+- [ ] Adversarial signed-GUI checks pass for browser-session collision/restart and concurrent in-flight pause/revoke. Same-tab approval changes and delimiter injection are covered; multi-browser/restart coverage remains to be exercised live.
 
 ## Phase 5 — Browser actions
 
+- **Architecture gate:** AppleScript-injected JavaScript remains read-only. Browser mutation requires a narrowly scoped, authenticated Native Messaging/CDP bridge with stable page/node identities and navigation lifecycle events. No Phase 5 mutation tool may ship before this gate passes.
 - Add semantic click, type, select, scroll, and navigation on authorized tabs.
 - Re-observe after navigation and invalidate old page references.
 - Initially block downloads, uploads, password fields, purchases, messages, and account changes.
@@ -323,3 +332,13 @@ Decision: Option 2 adopted. Chromium browser automation is implemented natively 
 - **Killswitch Race Defense**: Added post-execution pause rechecks in `readTab` to guarantee that killswitches activated while automation is in-flight block content return.
 - **AppleScript String Escaping**: Validated URL schemes and escaped backslashes and double quotes in AppleScript string literals in `openTab`.
 - All checks verified with full PASS across both `legacy` and `peekaboo` drivers (`--check-browser-tabs`, `--check-safe-actions`, `--check-commands`, `--check-peekaboo-listing`, `HaloCoreChecks`, and `check-signing.sh`).
+
+### 2026-10-19 (Adversarial review remediation)
+
+- Reopened Phases 3 and 4 for hardening after finding cross-browser tab-ID authorization, approval-time replacement, page-controlled listing framing, fuzzy/coordinate action fallbacks, and inconsistent secure-field redaction.
+- Browser authorization now uses `(browser bundle ID, process-session identity, tab ID)`, revalidates the exact URL after approval, rejects unsupported explicit bundle IDs, and uses an epoch to invalidate in-flight results after pause or revoke.
+- Tab titles and URLs have framing controls sanitized before strict framing; malformed metadata fails the whole listing without making enumeration depend on browser JavaScript settings.
+- Peekaboo mutations first use the snapshot-bound target. If Peekaboo cannot invoke it, Halo permits only a unique live AX match with the complete observed role, exact frame, and stable identifier or exact label; fuzzy/sub-string lookup and cached-coordinate fallbacks remain forbidden. Snapshot validity was reduced from 120 seconds to 15 seconds.
+- Secure-field classification is shared by legacy and Peekaboo-facing code, legacy typing rechecks the exact focused AX element immediately before input, and dialog inspection suppresses protected values.
+- Material decision: Phase 5 browser mutations will not use the AppleScript/JavaScript read path. A scoped Native Messaging/CDP bridge is required first; Halo remains the policy and approval owner, and the legacy Mac driver remains the default.
+- Verification after remediation: production build passed; `--check-browser-tabs` passed; default legacy and opt-in Peekaboo `--check-safe-actions` passed; legacy and Peekaboo listing checks passed; command and core checks passed; signing passed; `git diff --check` passed. Peekaboo's strict resolver required a bounded four-point geometry tolerance for AX/Peekaboo coordinate rounding while retaining exact role, exact stable identifier or label, uniqueness, and AX-action validation.

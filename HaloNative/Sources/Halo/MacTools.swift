@@ -258,11 +258,18 @@ final class MacTools: MacToolExecutor {
                 guard let appID = args["app_id"] as? String, !appID.isEmpty else {
                     return Self.json(["ok": false, "error": "Need an app_id from running_apps."])
                 }
+                let app = try ui.runningApp(appID)
+                let approved = try await requestApproval(title: "Focus this app?", path: app.localizedName ?? appID,
+                                                         content: "Bring the application to the foreground")
                 try Task.checkCancellation()
+                guard approved else { return Self.json(["ok": false, "denied": true, "error": "The user declined this action."]) }
                 let result = try await interaction.focusApp(appID: appID)
                 return Self.json(["ok": result.success, "result": result.summary, "observation": result.observation ?? [:]])
             case "ui_action":
                 guard let id = args["element_id"] as? String, let action = args["action"] as? String else { return Self.json(["ok": false, "error": "Need an observed control and action"] ) }
+                guard [kAXPressAction, kAXShowMenuAction, kAXRaiseAction, kAXIncrementAction, kAXDecrementAction].contains(action) else {
+                    return Self.json(["ok": false, "error": "Unsupported Accessibility action."])
+                }
                 let target = try await interaction.describeTarget(id: id)
                 let approved = try await requestApproval(title: "Control this app?", path: "\(target.appName) · \(target.role) · \(target.label)", content: action)
                 try Task.checkCancellation()
@@ -342,8 +349,13 @@ final class MacTools: MacToolExecutor {
                 return Self.json(["ok": result.success, "result": result.summary, "observation": result.observation ?? [:]])
             case "window_layout":
                 guard let position = args["position"] as? String else { return Self.json(["ok": false, "error": "Need a window position"] ) }
+                let appID = args["app_id"] as? String
+                let app = try ui.runningApp(appID)
+                let approved = try await requestApproval(title: "Arrange this window?", path: app.localizedName ?? appID ?? "Active app",
+                                                         content: "Move or resize the active window to: \(position)")
                 try Task.checkCancellation()
-                let result = try await interaction.layoutWindow(appID: args["app_id"] as? String, position: position, displayIndex: args["display_index"] as? Int)
+                guard approved else { return Self.json(["ok": false, "denied": true, "error": "The user declined this action."]) }
+                let result = try await interaction.layoutWindow(appID: appID, position: position, displayIndex: args["display_index"] as? Int)
                 return Self.json(["ok": result.success, "result": result.summary, "observation": result.observation ?? [:]])
             case "screen_info":
                 return Self.json(["ok": true, "displays": NSScreen.screens.enumerated().map { index, screen in
@@ -378,6 +390,7 @@ final class MacTools: MacToolExecutor {
                         "title": $0.title,
                         "url": $0.url,
                         "domain": $0.domain,
+                        "browser_app_id": $0.browserBundleID,
                         "is_active": $0.isActive,
                         "is_authorized": $0.isAuthorized,
                         "tab_index": $0.tabIndex,
@@ -410,15 +423,13 @@ final class MacTools: MacToolExecutor {
                 guard approved else {
                     return Self.json(["ok": false, "denied": true, "error": "The user declined access to this tab."])
                 }
-                await ChromeBrowserService.shared.authorize(
-                    tabID: targetTab.id,
-                    domain: targetTab.domain,
-                    title: targetTab.title,
-                    url: targetTab.url
-                )
+                // Approval is bound to the observation shown above. Re-observe now so
+                // navigation, browser restart, tab replacement, or ID reuse fails closed.
+                _ = try await ChromeBrowserService.shared.authorizeObservedTab(targetTab)
                 return Self.json([
                     "ok": true,
                     "authorized_tab_id": targetTab.id,
+                    "browser_app_id": targetTab.browserBundleID,
                     "title": targetTab.title,
                     "domain": targetTab.domain,
                     "summary": "Tab '\(targetTab.title)' authorized for reading."
@@ -443,7 +454,8 @@ final class MacTools: MacToolExecutor {
                 guard let tabID = args["tab_id"] as? Int else {
                     return Self.json(["ok": false, "error": "Need a numeric tab_id to revoke."])
                 }
-                await ChromeBrowserService.shared.revoke(tabID: tabID)
+                let browserAppID = args["browser_app_id"] as? String
+                await ChromeBrowserService.shared.revoke(tabID: tabID, browserAppID: browserAppID)
                 return Self.json([
                     "ok": true,
                     "revoked_tab_id": tabID,

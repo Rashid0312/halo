@@ -216,10 +216,22 @@ final class LegacyMacInteractionDriver: MacInteractionDriver {
                         var tRef: CFTypeRef?
                         _ = AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &tRef)
                         buttons.append(["title": (tRef as? String) ?? "", "enabled": true, "default": false])
-                    } else if r == "AXTextField" || r == "AXTextArea" {
-                        var valRef: CFTypeRef?
-                        _ = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valRef)
-                        textFields.append(["title": "", "value": (valRef as? String) ?? "", "placeholder": "", "index": textFields.count, "enabled": true])
+                    } else if r == "AXTextField" || r == "AXTextArea" || r == "AXSecureTextField" {
+                        func stringAttribute(_ name: String) -> String {
+                            var ref: CFTypeRef?
+                            _ = AXUIElementCopyAttributeValue(element, name as CFString, &ref)
+                            return ref as? String ?? ""
+                        }
+                        let title = stringAttribute(kAXTitleAttribute)
+                        let description = stringAttribute(kAXDescriptionAttribute)
+                        let protected = SecureFieldPolicy.isProtected(
+                            role: r, subrole: stringAttribute(kAXSubroleAttribute),
+                            roleDescription: stringAttribute(kAXRoleDescriptionAttribute),
+                            label: title.isEmpty ? description : title)
+                        var field: [String: Any] = ["title": title, "placeholder": "",
+                            "index": textFields.count, "enabled": true, "protected": protected]
+                        if !protected { field["value"] = String(stringAttribute(kAXValueAttribute).prefix(300)) }
+                        textFields.append(field)
                     }
                     var chRef: CFTypeRef?
                     if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &chRef) == .success,
@@ -483,6 +495,68 @@ private struct PeekabooObservedElement {
     let isProtected: Bool
 }
 
+/// Resolve one observation by its full live AX fingerprint. Duplicate, renamed,
+/// or moved controls fail closed instead of degrading to fuzzy labels or coordinates.
+private func performExactAXAction(_ observed: PeekabooObservedElement, action: String) -> Bool {
+    let app = AXUIElementCreateApplication(observed.pid)
+    var windowsRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+          let windows = windowsRef as? [AXUIElement] else { return false }
+    let expected = observed.detectedElement
+    let expectedIdentifier = expected.attributes["identifier"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+    var matches: [AXUIElement] = []
+
+    func stringValue(_ element: AXUIElement, _ name: String) -> String {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &ref) == .success else { return "" }
+        return ref as? String ?? ""
+    }
+    func frameValue(_ element: AXUIElement) -> CGRect? {
+        var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let positionRef, let sizeRef,
+              CFGetTypeID(positionRef) == AXValueGetTypeID(), CFGetTypeID(sizeRef) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(positionRef, to: AXValue.self), .cgPoint, &point),
+              AXValueGetValue(unsafeDowncast(sizeRef, to: AXValue.self), .cgSize, &size) else { return nil }
+        return CGRect(origin: point, size: size)
+    }
+    func scan(_ element: AXUIElement) {
+        let role = stringValue(element, kAXRoleAttribute)
+        if role == observed.role, let frame = frameValue(element) {
+            // Peekaboo and direct AX can round logical coordinates differently.
+            // Permit only a small geometry tolerance; this is identity validation,
+            // never a coordinate-based click target.
+            let geometryMatches = abs(frame.midX - expected.bounds.midX) <= 4 &&
+                abs(frame.midY - expected.bounds.midY) <= 4 &&
+                abs(frame.width - expected.bounds.width) <= 4 &&
+                abs(frame.height - expected.bounds.height) <= 4
+            let identifier = stringValue(element, kAXIdentifierAttribute)
+            let title = stringValue(element, kAXTitleAttribute)
+            let description = stringValue(element, kAXDescriptionAttribute)
+            let identityMatches: Bool
+            if let expectedIdentifier, !expectedIdentifier.isEmpty {
+                identityMatches = identifier == expectedIdentifier
+            } else {
+                identityMatches = !observed.label.isEmpty && (title == observed.label || description == observed.label)
+            }
+            if geometryMatches && identityMatches { matches.append(element) }
+        }
+        var childrenRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+           let children = childrenRef as? [AXUIElement] {
+            for child in children { scan(child) }
+        }
+    }
+    for window in windows { scan(window) }
+    guard matches.count == 1 else { return false }
+    var actions: CFArray?
+    guard AXUIElementCopyActionNames(matches[0], &actions) == .success,
+          (actions as? [String] ?? []).contains(action) else { return false }
+    return AXUIElementPerformAction(matches[0], action as CFString) == .success
+}
+
 /// Opt-in compatibility driver backed by the pinned Peekaboo automation kit.
 /// Gated behind Halo's exact approval previews, cancellation, freshness checks,
 /// and post-action observation.
@@ -504,7 +578,7 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
     init(ui: UIAutomation, screen: ScreenService) {
         self.legacy = LegacyMacInteractionDriver(ui: ui, screen: screen)
         let snapshots = InMemorySnapshotManager(options: .init(
-            snapshotValidityWindow: 120,
+            snapshotValidityWindow: 15,
             maxSnapshots: 4,
             deleteArtifactsOnCleanup: true
         ))
@@ -579,18 +653,16 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             let role = element.attributes["role"] ?? String(describing: element.type)
             let subrole = element.attributes["subrole"] ?? ""
             let roleDesc = element.attributes["roleDescription"]?.lowercased() ?? ""
-            let isSecure = role.caseInsensitiveCompare("AXSecureTextField") == .orderedSame ||
-                subrole.caseInsensitiveCompare("AXSecureTextField") == .orderedSame ||
-                element.attributes["isSecure"] == "true" ||
-                roleDesc.contains("secure") ||
-                roleDesc.contains("password")
-
             let computedLabel: String = {
                 if let title = element.attributes["title"], !title.isEmpty { return title }
                 if let desc = element.attributes["description"], !desc.isEmpty { return desc }
                 if let l = element.label, !l.isEmpty, l.lowercased() != "text field" && l.lowercased() != "edit text" { return l }
                 return element.label ?? element.attributes["description"] ?? ""
             }()
+            let isSecure = SecureFieldPolicy.isProtected(
+                role: role, subrole: subrole, roleDescription: roleDesc,
+                isSecure: element.attributes["isSecure"]?.lowercased() == "true",
+                label: computedLabel)
 
             observedElements[haloID] = PeekabooObservedElement(
                 haloID: haloID,
@@ -764,13 +836,16 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
                     "enabled": $0.isEnabled,
                     "default": $0.isDefault,
                 ] as [String: Any] },
-                "text_fields": elements.textFields.map { [
-                    "title": $0.title ?? "",
-                    "value": String(($0.value ?? "").prefix(300)),
-                    "placeholder": $0.placeholder ?? "",
-                    "index": $0.index,
-                    "enabled": $0.isEnabled,
-                ] as [String: Any] },
+                "text_fields": elements.textFields.map {
+                    let title = $0.title ?? ""
+                    let placeholder = $0.placeholder ?? ""
+                    // DialogService does not expose the AX secure subrole. Treat the
+                    // value as sensitive by default instead of risking credential disclosure.
+                    let protected = true
+                    let field: [String: Any] = ["title": title, "placeholder": placeholder,
+                        "index": $0.index, "enabled": $0.isEnabled, "protected": protected]
+                    return field
+                },
             ]
             if let subrole = elements.dialogInfo.subrole { dict["subrole"] = subrole }
             if !elements.staticTexts.isEmpty {
@@ -830,58 +905,6 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
         )
     }
 
-    private func directAXPerformAction(pid: pid_t, role: String, label: String, action: String) -> Bool {
-        let app = AXUIElementCreateApplication(pid)
-        var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let windows = windowsRef as? [AXUIElement] else { return false }
-        var target: AXUIElement?
-        func scan(_ elem: AXUIElement) {
-            if target != nil { return }
-            var rRef: CFTypeRef?, tRef: CFTypeRef?
-            _ = AXUIElementCopyAttributeValue(elem, kAXRoleAttribute as CFString, &rRef)
-            _ = AXUIElementCopyAttributeValue(elem, kAXTitleAttribute as CFString, &tRef)
-            let r = rRef as? String ?? ""
-            let t = tRef as? String ?? ""
-            if (role.isEmpty || r == role) && (label.isEmpty || t == label || t.contains(label)) {
-                target = elem
-                return
-            }
-            var chRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(elem, kAXChildrenAttribute as CFString, &chRef) == .success,
-               let children = chRef as? [AXUIElement] {
-                for c in children { scan(c) }
-            }
-        }
-        for w in windows { scan(w) }
-        guard let target else { return false }
-        return AXUIElementPerformAction(target, action as CFString) == .success
-    }
-
-    private func directAXFocus(pid: pid_t, role: String, label: String) {
-        let app = AXUIElementCreateApplication(pid)
-        var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let windows = windowsRef as? [AXUIElement] else { return }
-        func scan(_ elem: AXUIElement) {
-            var rRef: CFTypeRef?, tRef: CFTypeRef?
-            _ = AXUIElementCopyAttributeValue(elem, kAXRoleAttribute as CFString, &rRef)
-            _ = AXUIElementCopyAttributeValue(elem, kAXTitleAttribute as CFString, &tRef)
-            let r = rRef as? String ?? ""
-            let t = tRef as? String ?? ""
-            if (r == "AXTextField" || r == role) && (label.isEmpty || t == label || t.contains(label)) {
-                _ = AXUIElementSetAttributeValue(elem, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-                return
-            }
-            var chRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(elem, kAXChildrenAttribute as CFString, &chRef) == .success,
-               let children = chRef as? [AXUIElement] {
-                for c in children { scan(c) }
-            }
-        }
-        for w in windows { scan(w) }
-    }
-
     func performAction(elementID: String, action: String) async throws -> MacActionResult {
         guard let elem = observedElements[elementID] else {
             throw InteractionError("That control reference is stale. Inspect the app again.")
@@ -890,51 +913,23 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             app.activate()
             try await Task.sleep(for: .milliseconds(100))
         }
-        var actionExecuted = false
+        try Task.checkCancellation()
         if action == "AXPress" {
             do {
                 try await automation.click(target: .elementId(elem.detectedElement.id), clickType: .single, snapshotId: elem.snapshotId, targetProcessIdentifier: elem.pid)
-                actionExecuted = true
             } catch {
-                do {
-                    _ = try await automation.performAction(target: elem.detectedElement.id, actionName: action, snapshotId: elem.snapshotId)
-                    actionExecuted = true
-                } catch {
-                    if directAXPerformAction(pid: elem.pid, role: elem.role, label: elem.label, action: action) {
-                        actionExecuted = true
-                    } else {
-                        let center = CGPoint(x: elem.detectedElement.bounds.midX, y: elem.detectedElement.bounds.midY)
-                        if center != .zero,
-                           let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
-                           let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) {
-                            down.post(tap: .cghidEventTap)
-                            up.post(tap: .cghidEventTap)
-                            actionExecuted = true
-                        }
-                    }
+                guard performExactAXAction(elem, action: action) else {
+                    throw InteractionError("The approved control is no longer uniquely resolvable in its observation. Inspect and approve it again.")
                 }
             }
         } else {
             do {
                 _ = try await automation.performAction(target: elem.detectedElement.id, actionName: action, snapshotId: elem.snapshotId)
-                actionExecuted = true
             } catch {
-                if directAXPerformAction(pid: elem.pid, role: elem.role, label: elem.label, action: action) {
-                    actionExecuted = true
-                } else {
-                    let center = CGPoint(x: elem.detectedElement.bounds.midX, y: elem.detectedElement.bounds.midY)
-                    if center != .zero,
-                       let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
-                       let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) {
-                        down.post(tap: .cghidEventTap)
-                        up.post(tap: .cghidEventTap)
-                        actionExecuted = true
-                    }
+                guard performExactAXAction(elem, action: action) else {
+                    throw InteractionError("The approved control no longer uniquely accepts the approved action. Inspect and approve it again.")
                 }
             }
-        }
-        guard actionExecuted else {
-            throw InteractionError("The app did not accept action '\(action)'. Inspect it again.")
         }
         try await Task.sleep(for: .milliseconds(150))
         let focused = await automation.getFocusedElement(targetProcessIdentifier: elem.pid)
@@ -967,7 +962,7 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
             app.activate()
             try await Task.sleep(for: .milliseconds(100))
         }
-        directAXFocus(pid: elem.pid, role: elem.role, label: elem.label)
+        try Task.checkCancellation()
         do {
             try await automation.type(
                 text: text,
@@ -977,30 +972,7 @@ final class PeekabooMacInteractionDriver: MacInteractionDriver {
                 snapshotId: elem.snapshotId
             )
         } catch {
-            let center = CGPoint(x: elem.detectedElement.bounds.midX, y: elem.detectedElement.bounds.midY)
-            if center != .zero,
-               let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
-               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) {
-                down.post(tap: .cghidEventTap)
-                up.post(tap: .cghidEventTap)
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            var chunks: [String] = [], chunk = ""
-            for character in text {
-                if chunk.utf16.count + String(character).utf16.count > 20 { chunks.append(chunk); chunk = "" }
-                chunk.append(character)
-            }
-            if !chunk.isEmpty { chunks.append(chunk) }
-            for c in chunks {
-                guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                      let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { break }
-                let utf16 = Array(c.utf16)
-                utf16.withUnsafeBufferPointer { buffer in
-                    down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
-                    up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
-                }
-                down.postToPid(elem.pid); up.postToPid(elem.pid)
-            }
+            throw InteractionError("The approved text field is stale or no longer accepts text. Inspect and approve it again.")
         }
         try await Task.sleep(for: .milliseconds(150))
         let focused = await automation.getFocusedElement(targetProcessIdentifier: elem.pid)

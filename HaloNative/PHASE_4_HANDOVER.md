@@ -2,8 +2,8 @@
 
 **Date**: 2026-10-19  
 **Branch**: `feature/openclaw-integration`  
-**Latest Commit**: `6ebe857` (`Security audit & hardening: domain-bound tab authorization, delimiter injection immunity, and password field protections`)  
-**Status**: Phase 1, Phase 2, Phase 3, and Phase 4 are **100% Complete & Verified**. Ready for Phase 5.
+**Reviewed through**: `30fc661` plus the current adversarial-remediation worktree
+**Status**: Phases 3 and 4 are reopened for hardening verification. Phase 5 browser mutation is gated on a scoped Native Messaging/CDP design.
 
 ---
 
@@ -11,7 +11,7 @@
 
 If you're picking this up tomorrow with fresh eyes, here is the quick bottom line:
 
-### What We Built & Why It's Great
+### What We Built
 - **0 MB App Size Overhead**: Instead of embedding OpenClaw's bulky 65+ MB Node.js runtime and running local background web servers, we built a native Swift service (`ChromeBrowserService`).
 - **Instant Response (~20ms)**: Reading tab text or listing tabs happens in ~15–30ms without process startup lag.
 - **Strict Human Approval**: Halo cannot touch or read any tab until the user explicitly clicks "Allow" on an approval popup showing the exact tab title and website domain.
@@ -33,11 +33,11 @@ During deep scrutiny, four real-world vulnerabilities were identified and harden
 
 1. **Delimiter Injection Immunity**
    - *Problem*: Tab listings and text extraction previously split raw strings with `"|||"`. Webpages with `"|||"` in their `<title>` corrupted the parser.
-   - *Fix*: Switched `listTabs` to use non-printable ASCII C0 control characters: **Unit Separator `0x1F` (`\u{1F}`)** for fields, and **Record Separator `0x1E` (`\u{1E}`)** for records. Switched `readTab` to browser-side `JSON.stringify` and native Swift `JSONSerialization`.
+   - *Fix*: Page-controlled titles and URLs have framing controls sanitized inside AppleScript before strict framing. Malformed records fail closed without requiring JavaScript merely to list tabs.
 
 2. **Domain-Bound Authorization Records**
    - *Problem*: Storing raw integer tab IDs allowed an agent to read a tab that navigated to an unauthorized sensitive site after approval.
-   - *Fix*: Created `AuthorizedTabRecord(id, domain, title, url, authorizedAt)`. `readTab` verifies `currentDomain == record.domain`; on any domain change, authorization is instantly revoked.
+   - *Fix*: Authorization is bound to browser bundle ID, browser process-session identity, and tab ID. The exact URL is re-observed after approval; reads also verify the current domain and session.
 
 3. **Multi-Attribute Secure Field Protection**
    - *Problem*: Legacy driver failed to recognize `NSSecureTextField` when `role` was generic `AXTextField` with `subrole: AXSecureTextField`.
@@ -103,8 +103,8 @@ When you begin work tomorrow on **Phase 5 — Browser actions**, here is the pla
    - Automatically block file uploads and downloads.
    - Block typing into `<input type="password">` or credit card fields.
    - Block financial checkouts, account changes, or purchases without separate confirmation policies.
-4. **Architectural Choice for Browser Actions**:
-   - Assess whether DOM event simulation (`element.dispatchEvent(new MouseEvent(...))`) via our hardened JavaScript runner is sufficient, or if a lightweight Native Messaging bridge is required for edge cases.
+4. **Architecture Gate for Browser Actions**:
+   - AppleScript-injected JavaScript stays read-only. Design and validate a narrowly scoped, authenticated Native Messaging/CDP bridge before adding mutation tools.
 
 ---
 

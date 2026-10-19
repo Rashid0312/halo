@@ -381,7 +381,10 @@ enum NativeChecks {
         }
 
         // 1. Focus / raise app
-        let focusRes = try await tools.execute(name: "focus_app", arguments: #"{"app_id":"\#(hostAppID)"}"#)
+        let focusTask = Task { try await tools.execute(name: "focus_app", arguments: #"{"app_id":"\#(hostAppID)"}"#) }
+        let focusApproval = try await waitForApproval(tools, step: "focus app")
+        tools.resolve(id: focusApproval.id, allow: true)
+        let focusRes = try await focusTask.value
         guard let focusObj = try? JSONSerialization.jsonObject(with: Data(focusRes.utf8)) as? [String: Any],
               focusObj["ok"] as? Bool == true else {
             throw Failure("focus_app failed for host")
@@ -585,7 +588,10 @@ enum NativeChecks {
         }
 
         // 11. Window layout
-        let layoutRes = try await tools.execute(name: "window_layout", arguments: #"{"app_id":"\#(hostAppID)","position":"left"}"#)
+        let layoutTask = Task { try await tools.execute(name: "window_layout", arguments: #"{"app_id":"\#(hostAppID)","position":"left"}"#) }
+        let layoutApproval = try await waitForApproval(tools, step: "window layout")
+        tools.resolve(id: layoutApproval.id, allow: true)
+        let layoutRes = try await layoutTask.value
         guard let layoutObj = try? JSONSerialization.jsonObject(with: Data(layoutRes.utf8)) as? [String: Any],
               layoutObj["ok"] as? Bool == true else {
             throw Failure("window_layout failed: \(layoutRes)")
@@ -685,6 +691,11 @@ enum NativeChecks {
         guard ["list_browser_tabs", "authorize_browser_tab", "read_browser_tab", "revoke_browser_tab", "pause_browser_tabs"].allSatisfy(names.contains) else {
             throw Failure("Chrome browser tab tool definitions missing")
         }
+        let invalidBrowser = try await tools.execute(name: "list_browser_tabs", arguments: #"{"authorized_only":false,"browser_app_id":"invalid.browser"}"#)
+        guard let invalidObject = try? JSONSerialization.jsonObject(with: Data(invalidBrowser.utf8)) as? [String: Any],
+              invalidObject["ok"] as? Bool == false else {
+            throw Failure("An unknown explicit browser bundle ID did not fail closed")
+        }
 
         // 2. Start local disposable HTTP fixture
         let server = try DisposableTabServer()
@@ -739,6 +750,32 @@ enum NativeChecks {
         guard let discoveredDomain = discoveredTab["domain"] as? String, discoveredDomain == "127.0.0.1" else {
             throw Failure("Tab domain extraction failed: \(discoveredTab)")
         }
+        // Page-controlled C0 separators must remain data inside JSON rather than
+        // corrupting the outer tab record framing or approval metadata.
+        let browserName = try await ChromeBrowserService.shared.resolveBrowserAppName(nil)
+        let hostileTitleScript = """
+        tell application "\(browserName)"
+            repeat with w in windows
+                repeat with t in tabs of w
+                    if (id of t as string) is "\(tabID)" then
+                        execute t javascript "document.title = 'Halo' + String.fromCharCode(31) + 'field' + String.fromCharCode(30) + 'record'"
+                    end if
+                end repeat
+            end repeat
+        end tell
+        """
+        _ = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", hostileTitleScript], directory: FileManager.default.temporaryDirectory)
+        let hostileListRaw = try await tools.execute(name: "list_browser_tabs", arguments: #"{"authorized_only":false}"#)
+        guard let hostileObject = try? JSONSerialization.jsonObject(with: Data(hostileListRaw.utf8)) as? [String: Any],
+              let hostileTabs = hostileObject["tabs"] as? [[String: Any]],
+              let hostileTab = hostileTabs.first(where: { ($0["id"] as? Int) == tabID }),
+              (hostileTab["domain"] as? String) == "127.0.0.1" else {
+            throw Failure("Page-controlled record separators corrupted tab metadata")
+        }
+        let restoreTitleScript = hostileTitleScript.replacingOccurrences(
+            of: "document.title = 'Halo' + String.fromCharCode(31) + 'field' + String.fromCharCode(30) + 'record'",
+            with: "document.title = 'Halo Disposable Browser Fixture'")
+        _ = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", restoreTitleScript], directory: FileManager.default.temporaryDirectory)
         // Verify internal schemes (chrome://, about:) are excluded
         for t in allTabs {
             if let u = t["url"] as? String {
@@ -795,6 +832,33 @@ enum NativeChecks {
         }
         guard await !ChromeBrowserService.shared.isAuthorized(tabID: tabID) else {
             throw Failure("Cancelled tab was authorized")
+        }
+
+        // A same-origin URL change while approval is visible still changes what the
+        // user approved and must require a fresh observation and approval.
+        let changedApprovalTask = Task {
+            try await tools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+        }
+        let changedApproval = try await waitForApproval(tools, step: "authorize changed tab")
+        let changedURLScript = """
+        tell application "\(browserName)"
+            repeat with w in windows
+                repeat with t in tabs of w
+                    if (id of t as string) is "\(tabID)" then
+                        set URL of t to "\(server.url.absoluteString)?changed-during-approval=1"
+                    end if
+                end repeat
+            end repeat
+        end tell
+        """
+        _ = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", changedURLScript], directory: FileManager.default.temporaryDirectory)
+        try await Task.sleep(for: .milliseconds(250))
+        tools.resolve(id: changedApproval.id, allow: true)
+        let changedResult = try await changedApprovalTask.value
+        guard let changedObject = try? JSONSerialization.jsonObject(with: Data(changedResult.utf8)) as? [String: Any],
+              changedObject["ok"] as? Bool == false,
+              await !ChromeBrowserService.shared.isAuthorized(tabID: tabID) else {
+            throw Failure("A tab changed during approval retained authorization: \(changedResult)")
         }
 
         // 9. Test authorization approval
