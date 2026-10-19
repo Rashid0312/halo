@@ -659,3 +659,54 @@ The 6 live stages:
 
 ### 20.5 Still blocked
 The `login`, `payment`, `account`, `message`, `upload`, `download`, `crossSiteForm` and `newTab` families. Each needs its own slice with dedicated approval wording and verification before it can be enabled. Classification is heuristic and conservative; a false "blocked" is preferred over a false "allowed".
+
+## 21. Real Sites in the User's Chrome
+
+Status: **verified** (2026-10-19) on Wikipedia and YouTube in the user's real Google Chrome, with the development extension loaded unpacked.
+
+### 21.1 What changed for real sites
+- **Site access:**
+  - The extension's `host_permissions` are now all http(s) sites. Users can narrow them with Chrome's Site access setting.
+  - The content script is no longer injected into every page. It is injected on demand, only into tabs Halo uses.
+  - Every action checks `chrome.permissions.contains` for the page's origin.
+  - When Chrome withholds a site (`hostNotGranted`), Halo reads it through the AppleScript path and explains how to allow actions.
+- **Same-site forms:** "ordinary form submission" now means the destination has the **same origin as the page**. It had meant "covered by the bridge", which only held while coverage was loopback.
+- **Large pages:** only rendered elements are listed, on-screen first, within the 200 limit. Labels are capped at 500 characters.
+- **Shadow DOM:**
+  - open shadow roots are searched
+  - hit testing descends into shadow roots
+  - the click guard uses `composedPath()`
+  - submit is detected on the form itself
+  - the focus check follows shadow roots.
+- **Formless buttons:** a `<button>` with no form owner behaves as a plain button. YouTube's search button is one.
+- **Element memory per document:** elements seen earlier in the same document stay resolvable when a capped listing omits them, for example after a suggestion dropdown opens. The extension still re-verifies every element before acting.
+- **Page re-renders:** when a page replaces an element between approval and action, nothing is done. The error tells the model to read the tab again and use a current id. When a page swaps a field while Halo types, the result is honestly reported as unconfirmed.
+
+### 21.2 Real-Chrome check (`--check-real-chrome`)
+Opt-in, and run with the user's consent. It uses production code:
+- the system runtime, so tab IDs come from real AppleScript
+- the bridge controller, with the host registered only in Chrome's folder
+- the model-facing tools, with approvals answered by the check. Every preview is printed.
+
+It acts only in tabs it opens. Cleanup (closing its tabs and removing the registration) is awaited on both success and failure.
+
+Steps and evidence (3 of 3 runs passed):
+- **Tab IDs:** all 20 open web tabs had the same ID and address in AppleScript and in the extension.
+- **Wikipedia:**
+  - read through the bridge (200 elements)
+  - genuine wheel scroll, verified
+  - typed "Ada Lovelace" into "Search Wikipedia". Two runs saw Wikipedia swap its search box while typing; Halo reported it unconfirmed, re-read, and typed again.
+  - submitted the search. The approval showed the field with "(typed by Halo)", the submit was verified, and the tab landed on `/wiki/Ada_Lovelace`.
+  - followed the "Charles Babbage" link with a genuine click.
+- **YouTube:**
+  - read through the bridge (200 elements, about 170 clickable)
+  - scroll, verified
+  - typed "lofi hip hop", verified
+  - clicked Search, landing on `/results?search_query=lofi+hip+hop`.
+  - The check stops at a consent page if one appears, and never accepts cookies on the user's behalf.
+
+### 21.3 Remaining real-site limits
+- **Iframes:** not supported (main frame only).
+- **Heuristic classification:** sensitive-action classification is heuristic. Real sites will need tuning as they are encountered.
+- **Re-renders cost a second approval:** a page that re-renders often can need a re-read and a second approval.
+- **The local suite runs restricted:** it loads a copy of the extension with Site access narrowed to loopback, to exercise the withheld-site path. The real-Chrome check exercises the shipped broad manifest.

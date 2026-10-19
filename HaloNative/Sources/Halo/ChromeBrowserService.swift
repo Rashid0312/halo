@@ -770,7 +770,13 @@ public actor ChromeBrowserService {
             }
             guard resp.success else {
                 if resp.error?.code == .hostNotGranted { throw SiteAccessWithheld() }
-                throw InteractionError(resp.error?.message ?? "The browser bridge refused the operation.")
+                let message = resp.error?.message ?? "The browser bridge refused the operation."
+                // Pages re-render; a changed or replaced element is never acted on,
+                // but a fresh read usually offers its current equivalent.
+                if resp.error?.code == .elementChanged {
+                    throw InteractionError(message + " Nothing was done. Read the tab again and use a current element id.")
+                }
+                throw InteractionError(message)
             }
             return (resp, tabIdent, record)
         } catch {
@@ -1035,7 +1041,16 @@ public actor ChromeBrowserService {
                 authorizedTabs.removeValue(forKey: key)
                 throw InteractionError("Tab \(id) navigated from '\(record.domain)' to '\(obs.tab.domain)'; authorization was revoked.")
             }
-            bridgeElements[key] = (obs.tab.documentGenerationID, Dictionary(obs.elements.map { ($0.elementID, $0) }, uniquingKeysWith: { first, _ in first }))
+            // Observations are capped and on-screen-first, so an element seen
+            // earlier in this document may be missing from the latest listing
+            // (e.g. a suggestion dropdown opened). Keep what was seen in the same
+            // document; the extension re-verifies any element before acting.
+            let latest = Dictionary(obs.elements.map { ($0.elementID, $0) }, uniquingKeysWith: { first, _ in first })
+            if let previous = bridgeElements[key], previous.generation == obs.tab.documentGenerationID, previous.elements.count < 2_000 {
+                bridgeElements[key] = (obs.tab.documentGenerationID, previous.elements.merging(latest) { _, new in new })
+            } else {
+                bridgeElements[key] = (obs.tab.documentGenerationID, latest)
+            }
             let contentText = obs.elements.map { el in
                 el.isProtected ? "[\(el.role): (protected)]" : "\(el.role): \(el.label)"
             }.joined(separator: "\n")

@@ -560,7 +560,7 @@ extension NativeChecks {
         }
 
         var map = try await elements()
-        for (label, clickable) in [("Clicked 0 times", true), ("Rename me", true), ("Covered button", true),
+        for (label, clickable) in [("Clicked 0 times", true), ("Rename me", true), ("Covered button", true), ("Formless action", true),
                                    ("Submit form", true), ("Go to page B", true), ("Disabled action", false), ("(protected)", false)] {
             guard map[label]?["clickable"] as? Bool == clickable else {
                 throw Failure("Element '\(label)' clickable flag should be \(clickable); got \(String(describing: map[label])).")

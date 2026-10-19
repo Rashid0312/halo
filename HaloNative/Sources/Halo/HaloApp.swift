@@ -79,6 +79,13 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if CommandLine.arguments.contains("--check-real-chrome") {
+            Task {
+                do { try await NativeChecks.realChromeCheck(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--check-browser-bridge-live") {
             Task {
                 do { try await NativeChecks.runRealBrowserLifecycleSuite(helperBinaryURL: NativeChecks.locateHelperBinary()); exit(0) }

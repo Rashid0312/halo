@@ -49,7 +49,7 @@ The integration will not initially import:
 | 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Complete | Exact-target execution, approvals, secure-field protection, and post-action verification pass across both drivers |
 | 4. Chrome tab integration | Complete | Browser-session authorization, approval revalidation, injection-safe metadata framing, and in-flight killswitch checks pass |
-| 5. Browser actions | In progress: 5A and 5B.1–5B.4 complete (form submission and links enabled; other sensitive families blocked); real-site support next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
+| 5. Browser actions | In progress: 5A and 5B.1–5B.4 complete and verified on real sites (Wikipedia, YouTube) in the user's Chrome; further sensitive families next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
 | 6. Legacy automation retirement | Not started | Replaced Halo implementations are removed only after parity and rollback validation |
 | 7. Release hardening | Not started | Security, permissions, signing, notarization, clean-install, and recovery checks pass |
 
@@ -630,3 +630,23 @@ Implementation boundary: Transport foundation (`BrowserBridgeProtocol.swift`) im
   - plain buttons with sensitive labels were clickable
   - clicks that navigate reported a spurious page change.
 - Tests: Halo click-policy checks, and 6 real-Chromium stages. The 5B.1 expectations were updated (its submit and link are now 5B.4 kinds).
+
+### 2026-10-19 (Real sites in the user's Chrome)
+
+- Real-site groundwork (`a41cc3f`):
+  - broad Site access with permission checks
+  - on-demand content script
+  - fallback for withheld sites
+  - same-origin forms
+  - shadow DOM support
+  - on-screen-first listing.
+- Fixes found only on real sites:
+  - YouTube's formless search button was not clickable
+  - capped listings dropped elements the user had just seen
+  - re-rendered elements now give the model a clear "read again" error.
+- `--check-real-chrome` passed 3 of 3 runs:
+  - tab-ID parity across 20 tabs
+  - Wikipedia: read, scroll, type, submit search, follow a link
+  - YouTube: read, scroll, type, search.
+
+  Cleanup is verified on success and failure.

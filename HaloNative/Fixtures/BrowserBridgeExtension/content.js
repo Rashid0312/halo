@@ -145,7 +145,10 @@
     }
 
     if (el.closest("form, a[href]")) return {};
-    const isPlainButton = info.tagName === "button" && type === "button";
+    // A <button> with no form owner submits nothing, whatever its type, so it
+    // behaves as a plain button (common on real sites, e.g. search buttons
+    // wired up in script).
+    const isPlainButton = info.tagName === "button" && (type === "button" || ((type === "" || type === "submit") && !el.form));
     const isRoleButton = info.role === "button" && !["a", "input", "select", "textarea", "form"].includes(info.tagName);
     if (!isPlainButton && !isRoleButton) return {};
     const words = sensitiveWords(info.label);

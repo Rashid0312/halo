@@ -682,6 +682,7 @@ enum NativeChecks {
                 <style>#cover{position:relative;display:inline-block}#cover div{position:absolute;inset:0;background:rgba(0,0,0,0)}</style></head>
                 <body><h1>Halo Click Fixture</h1>
                 <button type="button" id="counter">Clicked 0 times</button>
+                <button id="formless">Formless action</button>
                 <button type="button" id="rename">Rename me</button><h2 id="rename-count">Rename clicks: 0</h2>
                 <span id="cover"><button type="button" id="covered">Covered button</button><div></div></span><h2 id="covered-count">Covered clicks: 0</h2>
                 <form><button type="submit">Submit form</button></form>
