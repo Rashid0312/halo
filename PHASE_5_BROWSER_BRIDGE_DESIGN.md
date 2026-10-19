@@ -299,7 +299,7 @@ Status: **complete** (2026-10-19). Everything in this section describes the code
 - **Removal:** manifests are removed when the bridge is disabled and on app quit (`shutdownForTermination`).
 
 ### 16.6 Extension Permissions
-- Permissions: `activeTab`, `tabs`, `nativeMessaging`, `scripting`.
+- Permissions: `activeTab`, `tabs`, `nativeMessaging`, `scripting`, and from Phase 5B.1 `debugger` (§17.2).
 - Host permissions: `http://127.0.0.1/*` and `http://localhost/*` only.
 - `scripting` is used solely to inject the read-only `content.js` into a page that has none. That happens for pages loaded before the extension started, and host permissions still confine it to loopback.
 - Not used: `cookies`, `storage`, `history`, `downloads`, `webRequest`, `<all_urls>`.
@@ -376,4 +376,70 @@ The 13 stages are:
 ### 16.12 Known Limits Carried Forward
 - **Loopback only:** the development extension only covers loopback pages. A production extension identity, its distribution, and broader host permissions are release-hardening decisions.
 - **Ambiguous default browser:** when no browser is named, Phase 4's `SystemBrowserRuntime` picks the *active* Chromium-family browser, which is ambiguous when several are running. Tracked as a Phase 4 follow-up.
-- **No mutations:** none are implemented. Clicks start in Phase 5B.1.
+- **Mutations:** Phase 5A itself has none. Phase 5B.1 adds one approved click (§17).
+
+
+## 17. Phase 5B.1: Approved Click
+
+Status: **complete** (2026-10-19). The first browser mutation: one approved click on one plain button.
+
+### 17.1 Flow
+1. **Observe.** `read_browser_tab` (bridge path) returns element references, and each element carries a `clickable` flag. References are opaque (`el_<generation>_<16 hex>`). The content script keeps them stable for the life of the document. A new document gets a new content script, so an old reference can never resolve again.
+2. **Re-check before asking.** `click_browser_element(tab_id, element_id)` → `ChromeBrowserService.describeClickTarget` re-observes the tab. The element must be in that fresh observation and pass Halo's own policy (`isClickable`). The extension's `isActionable` flag is required too, but it is never sufficient on its own.
+3. **Approve.** The approval preview shows the domain, the page title, and the element's role and label ("Click the button “…”").
+4. **Click.** After approval, `click` sends a `clickElement` request bound to the approved document generation, with the expected fingerprint (tag, role, label). Halo refuses first if the generation moved.
+5. **Re-verify in the extension:**
+   1. The tab, its URL and the generation are unchanged, and the tab was observed this session.
+   2. It attaches `chrome.debugger` to that tab only.
+   3. The content script re-resolves the element, matches the fingerprint, re-applies the policy and scrolls it into view.
+   4. It waits two frames for layout to settle (the debugger infobar can shift the page).
+   5. It hit-tests the centre point with `elementFromPoint` and arms a one-shot guard.
+   6. It re-checks the page.
+   7. It sends a genuine left click (`Input.dispatchMouseEvent`).
+   8. It confirms the outcome.
+   9. It always detaches.
+6. **Report.** Halo matches the `actionResult` to the request's tab and document, re-observes, and returns the verified result to the model.
+
+### 17.2 Decision: `chrome.debugger` for trusted input
+- **Why:** scripted `element.click()` produces untrusted events that some sites ignore, and it clicks hidden elements regardless of what the user would see. Genuine input requires the DevTools input domain.
+- **How it fits the design:** §1 rejects launching browsers with a remote-debugging **port**, because any local process can connect to one. `chrome.debugger` opens no port. It is reachable only by this pinned extension, Chrome shows a visible "started debugging this browser" infobar while it is attached, and Halo attaches it only to the authorized tab, only after approval, only for one click.
+- **Precedent:** the same approach is used by the ChatGPT/Codex Chrome extension, which declares `debugger` alongside `nativeMessaging`.
+- **Cost:** the `debugger` permission is powerful and carries a strong install warning. Our code is the only limit on what the attachment does, so the extension issues only the three `Input.dispatchMouseEvent` commands for an approved click.
+
+### 17.3 Policy (5B.1)
+| Allowed | Refused before approval |
+|---|---|
+| `<button type="button">`, `role="button"` on a non-form, non-link element; enabled, visible, not protected | links (5B.3); any element inside a `<form>` or link (submission is 5B.4); disabled or `aria-disabled`; protected/password-like; hidden or zero-size |
+
+At click time the click is also refused, with nothing clicked, when:
+- the element was removed or its label, role or tag changed
+- another element covers its click point (a hidden overlay)
+- the page navigated or reloaded after approval
+- the reference came from a previous document.
+
+**Misdirect guard:** while the guard is armed, any trusted pointer or click event landing outside the approved element is cancelled with `preventDefault` and `stopImmediatePropagation`, and the click is reported as failed.
+- *Limit:* the page's own window-capture listeners registered earlier still run first. The hit test is the primary defence; the guard is secondary.
+
+### 17.4 Verification
+| Check | Covers |
+|---|---|
+| `--check-browser-tabs` → "Phase 5B.1 click protocol" | Incomplete click requests, malformed element references, element fields on non-click requests, and a click result for a different tab are all rejected. |
+| `--check-browser-bridge-live` → 8 "5B.1" stages | The model-facing `click_browser_element` tool, with real approvals, against real Chromium. |
+
+The 8 live stages:
+1. element flags are correct
+2. approved click lands once, is genuine (`isTrusted`) and is verified
+3. denied click does nothing
+4. submit, link, disabled and password are refused with no approval prompt
+5. element renamed during approval is refused
+6. hidden overlay is refused
+7. reload during approval is refused
+8. stale reference is refused.
+
+In each refused case the page's own counters confirm that nothing was clicked.
+
+### 17.5 Limits
+- **Loopback only:** the development extension still covers loopback pages only.
+- **Main frame only:** a click inside an iframe is not supported.
+- **Zoom:** the click point uses CSS pixels in the main-frame viewport, which matches `Input.dispatchMouseEvent`. Not yet tested under page zoom.
+- **Unconfirmed after navigation:** a click that makes the page navigate cannot be confirmed by the guard, because the document is replaced. It is reported as `verified: false`, "Click sent; the page changed before it could be confirmed."

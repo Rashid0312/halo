@@ -49,7 +49,7 @@ The integration will not initially import:
 | 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Complete | Exact-target execution, approvals, secure-field protection, and post-action verification pass across both drivers |
 | 4. Chrome tab integration | Complete | Browser-session authorization, approval revalidation, injection-safe metadata framing, and in-flight killswitch checks pass |
-| 5. Browser actions | In progress: 5A read-only bridge complete; 5B (mutations) not started | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
+| 5. Browser actions | In progress: 5A read-only bridge and 5B.1 approved click complete; 5B.2 (text entry) next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
 | 6. Legacy automation retirement | Not started | Replaced Halo implementations are removed only after parity and rollback validation |
 | 7. Release hardening | Not started | Security, permissions, signing, notarization, clean-install, and recovery checks pass |
 
@@ -243,7 +243,23 @@ Commands: `Halo --check-browser-tabs` and `Halo --check-browser-bridge-live`, bu
 
 After Phase 5A evidence is complete, stop for primary-engineer review. Do not proceed to clicks or typing in the same change set. The first mutation slice will be planned separately from measured read-only results.
 
-- Add semantic click, type, select, scroll, and navigation on authorized tabs.
+### Phase 5B.1 — Approved click (complete, 2026-10-19)
+
+- [x] Observe a harmless fixture button with a generation-bound opaque element reference.
+- [x] Re-observe before approval; show the exact domain, page, element label and role, and action.
+- [x] Click only after approval, with genuine input (`chrome.debugger`, attached only for that click on that tab).
+- [x] Abort if the document or element changed, or another element covers it; refuse links, form submission, and disabled or protected controls before approval.
+- [x] Verify the result afterward (trusted click confirmed by the page, then a fresh observation).
+
+Evidence: design doc §17. `--check-browser-tabs` (click protocol) and `--check-browser-bridge-live` (8 click stages) pass on Chromium 158.
+
+### Remaining Phase 5B slices
+
+- **5B.2:** safe text entry.
+- **5B.3:** select, scroll, and navigation.
+- **5B.4:** the sensitive-action policy (forms, messages, purchases, accounts, uploads, downloads, credentials).
+- Original scope still to cover:
+
 - Re-observe after navigation and invalidate old page references.
 - Initially block downloads, uploads, password fields, purchases, messages, and account changes.
 - Add explicit policy and confirmation UI before enabling each sensitive family.
@@ -518,3 +534,16 @@ Implementation boundary: Transport foundation (`BrowserBridgeProtocol.swift`) im
   - crashed sessions left `hb_*` directories and manifests behind
 - Added `--check-browser-bridge-live` (13 real-Chromium stages) and Phase 5A security validation (impostor process with a stolen token, installer rollback, abandoned-manifest recovery).
 - Phase 5A is complete. Next: Phase 5B.1 (approved click), planned separately per the mandatory review stop.
+
+### 2026-10-19 (Phase 5B.1 — Approved click)
+
+- New tool `click_browser_element`: re-observe, approve exact target, genuine click via `chrome.debugger` (no debugging port), verify.
+- Protocol: `clickElement` request with element reference and fingerprint; `actionResult` response; `elementNotActionable` and `elementChanged` errors; strict validation.
+- `ChromeBrowserService`: a shared `bridgeExchange` for observe and click; per-generation element cache; `describeClickTarget` and `click`.
+- Extension:
+  - stable per-document element references
+  - plain-button policy
+  - fingerprint re-check, hit test and misdirect guard
+  - re-injection guard
+  - `debugger` permission.
+- Tests: deterministic click protocol checks, and 8 real-Chromium click stages, including hidden-overlay and reload-during-approval refusals.

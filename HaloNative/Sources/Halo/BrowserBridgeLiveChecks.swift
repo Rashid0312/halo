@@ -199,6 +199,8 @@ extension NativeChecks {
                                                  manifestDirectories: { [manifestDir] in [manifestDir] }, defaults: defaults)
         var browser: Process?
         func launchBrowser(_ url: String) throws -> Process {
+            // A stale port file from the previous browser must not be reused.
+            try? FileManager.default.removeItem(at: profile.appendingPathComponent("DevToolsActivePort"))
             let process = Process()
             process.executableURL = browserURL
             process.arguments = [
@@ -256,10 +258,10 @@ extension NativeChecks {
             }
         }
         /// Polls Halo's production read until it satisfies `condition`.
-        func readUntil(_ what: String, _ condition: @escaping (BrowserTabContent) -> Bool) async throws -> BrowserTabContent {
+        func readUntil(_ what: String, id: Int? = nil, _ condition: @escaping (BrowserTabContent) -> Bool) async throws -> BrowserTabContent {
             var latest: BrowserTabContent?
             _ = try await waitUntil(what, timeout: 10) {
-                guard let content = try? await service.readTab(id: tabA), condition(content) else { return false }
+                guard let content = try? await service.readTab(id: id ?? tabA), condition(content) else { return false }
                 latest = content
                 return true
             }
@@ -469,6 +471,142 @@ extension NativeChecks {
         _ = try await service.readTab(id: tabC)
         pass("Browser restart: new browser session re-handshaked; previous session's authorizations invalid; new tab readable after approval.")
 
+        // 5B.1. Approved click through the production tool, approval, and bridge.
+        let devtoolsC = try await DevToolsClient.attach(profile: profile)
+        let pageC = try await devtoolsC.page(urlContaining: "/halo-test")
+        let before = await {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "performance.timeOrigin", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? Double else { return 0.0 }
+            return value
+        }()
+        try await devtoolsC.call(pageC, "Page.navigate", ["url": base + "/click"])
+        _ = try await waitUntil("click fixture to load", timeout: 10) {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate",
+                      ["expression": "performance.timeOrigin + '|' + document.readyState", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? String else { return false }
+            let parts = value.split(separator: "|")
+            return parts.count == 2 && Double(parts[0]) != before && parts[1] == "complete"
+        }
+        _ = try await readUntil("click fixture read", id: tabC) { $0.title == "Halo Click Fixture" }
+
+        let tools = MacTools(catalog: AppCatalog(), browserService: service)
+        var approvals: [MacTools.Approval] = []
+        var decide: (MacTools.Approval) -> Void = { _ in }
+        tools.showApproval = { [weak tools] in
+            guard let tools, let approval = tools.approval else { return }
+            approvals.append(approval)
+            decide(approval)
+        }
+        func run(_ name: String, _ args: [String: Any]) async throws -> [String: Any] {
+            let data = try JSONSerialization.data(withJSONObject: args)
+            let raw = try await tools.execute(name: name, arguments: String(decoding: data, as: UTF8.self))
+            return try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] ?? [:]
+        }
+        func elements() async throws -> [String: [String: Any]] {
+            let read = try await run("read_browser_tab", ["tab_id": tabC])
+            guard read["ok"] as? Bool == true, let list = read["elements"] as? [[String: Any]] else {
+                throw Failure("read_browser_tab returned no element references: \(read)")
+            }
+            var byLabel: [String: [String: Any]] = [:]
+            for element in list { if let label = element["label"] as? String { byLabel[label] = element } }
+            return byLabel
+        }
+        func elementID(_ map: [String: [String: Any]], _ label: String) throws -> String {
+            guard let id = map[label]?["id"] as? String else { throw Failure("Element '\(label)' missing; got \(map.keys.sorted()).") }
+            return id
+        }
+        func click(_ id: String) async throws -> [String: Any] {
+            try await run("click_browser_element", ["tab_id": tabC, "element_id": id])
+        }
+
+        var map = try await elements()
+        for (label, clickable) in [("Clicked 0 times", true), ("Rename me", true), ("Covered button", true),
+                                   ("Submit form", false), ("Go to page B", false), ("Disabled action", false), ("(protected)", false)] {
+            guard map[label]?["clickable"] as? Bool == clickable else {
+                throw Failure("Element '\(label)' clickable flag should be \(clickable); got \(String(describing: map[label])).")
+            }
+        }
+        pass("5B.1 observation: element references returned; only plain enabled buttons are clickable (submit, link, disabled, password refused).")
+
+        // Approve: a genuine (trusted) click lands and is verified.
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        approvals = []
+        let approved = try await click(try elementID(map, "Clicked 0 times"))
+        guard approved["ok"] as? Bool == true, approved["verified"] as? Bool == true,
+              let preview = approvals.first, approvals.count == 1,
+              preview.path.contains("127.0.0.1"), preview.path.contains("Halo Click Fixture"), preview.preview.contains("Clicked 0 times") else {
+            throw Failure("Approved click failed or preview was wrong: \(approved) preview=\(String(describing: approvals.first))")
+        }
+        map = try await elements()
+        guard map["Clicked 1 times"] != nil else { throw Failure("Counter did not show one trusted click; got \(map.keys.sorted()).") }
+        pass("5B.1 approved click: preview showed exact site, page, and button; genuine click landed once and was verified (page saw isTrusted).")
+
+        // Deny: nothing happens.
+        decide = { tools.resolve(id: $0.id, allow: false) }
+        let denied = try await click(try elementID(map, "Clicked 1 times"))
+        map = try await elements()
+        guard denied["denied"] as? Bool == true, map["Clicked 1 times"] != nil else {
+            throw Failure("Denied click changed the page: \(denied)")
+        }
+        pass("5B.1 denied click: nothing was clicked.")
+
+        // Refused before approval: links, submit, disabled, protected.
+        approvals = []
+        for label in ["Submit form", "Go to page B", "Disabled action", "(protected)"] {
+            let refused = try await click(try elementID(map, label))
+            guard refused["ok"] as? Bool == false else { throw Failure("'\(label)' was not refused: \(refused)") }
+        }
+        guard approvals.isEmpty else { throw Failure("A refused element still reached the approval prompt.") }
+        pass("5B.1 policy: submit button, link, disabled button, and password field refused before any approval prompt.")
+
+        // Element changes while the approval is open: refused, nothing clicked.
+        decide = { approval in
+            Task { @MainActor in
+                _ = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "rename.textContent = 'Renamed'"])
+                tools.resolve(id: approval.id, allow: true)
+            }
+        }
+        let renamed = try await click(try elementID(map, "Rename me"))
+        map = try await elements()
+        guard renamed["ok"] as? Bool == false, map["Rename clicks: 0"] != nil else {
+            throw Failure("Click on an element changed during approval was not refused: \(renamed)")
+        }
+        pass("5B.1 element changed during approval: refused, nothing clicked (\(renamed["error"] as? String ?? "")).")
+
+        // Covered by an invisible overlay: refused by hit test, nothing clicked.
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        let covered = try await click(try elementID(map, "Covered button"))
+        map = try await elements()
+        guard covered["ok"] as? Bool == false, map["Covered clicks: 0"] != nil else {
+            throw Failure("Click on a covered element was not refused: \(covered)")
+        }
+        pass("5B.1 hidden overlay: hit test refused the click, nothing clicked (\(covered["error"] as? String ?? "")).")
+
+        // Page reloads while the approval is open: refused.
+        let counterBeforeReload = try elementID(map, "Clicked 1 times")
+        decide = { approval in
+            Task { @MainActor in
+                _ = try? await devtoolsC.call(pageC, "Page.reload")
+                _ = try? await waitUntil("reload during approval", timeout: 10) {
+                    guard let r = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "document.getElementById('counter').textContent", "returnByValue": true]),
+                          let text = (r["result"] as? [String: Any])?["value"] as? String else { return false }
+                    return text == "Clicked 0 times"
+                }
+                tools.resolve(id: approval.id, allow: true)
+            }
+        }
+        let reloaded = try await click(counterBeforeReload)
+        guard reloaded["ok"] as? Bool == false else { throw Failure("Click after reload during approval was not refused: \(reloaded)") }
+        map = try await elements()
+        guard map["Clicked 0 times"] != nil else { throw Failure("Reloaded page shows a click: \(map.keys.sorted()).") }
+        pass("5B.1 page reloaded during approval: refused, nothing clicked (\(reloaded["error"] as? String ?? "")).")
+
+        // An element reference from the previous document is never valid.
+        approvals = []
+        let stale = try await click(counterBeforeReload)
+        guard stale["ok"] as? Bool == false, approvals.isEmpty else { throw Failure("Stale element reference was accepted: \(stale)") }
+        pass("5B.1 stale element reference from the previous document refused before approval.")
+
         // 13. Disable: no manifest, session, socket, or helper may remain.
         let finalSession = await service.activeBridgeServer()?.directoryURL
         controller.enabled = false
@@ -512,7 +650,7 @@ extension NativeChecks {
               milliseconds(detectCrash) <= 1000, milliseconds(warmReconnect) <= 5000, helperCPU < 1, haloCPU < 2 else {
             throw Failure("Real-browser performance thresholds not met.")
         }
-        print("PASS: Phase 5A real Chromium lifecycle suite: \(results.count) stages verified end to end.")
+        print("PASS: Real Chromium bridge suite (5A lifecycle + 5B.1 click): \(results.count) stages verified end to end.")
     }
 }
 
@@ -604,5 +742,46 @@ extension NativeChecks {
         }
 
         print("PASS: Phase 5A security validation: stolen session token rejected for a non-Halo process; installer refused a foreign manifest and rolled back partial writes; only abandoned Halo manifests are recoverable.")
+    }
+}
+
+extension NativeChecks {
+    /// Deterministic Phase 5B.1 protocol checks: malformed click requests and
+    /// mismatched click results fail closed before reaching the browser or Halo.
+    static func clickProtocolChecks() async throws {
+        let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let browser = BrowserIdentity(bundleID: "org.chromium.Chromium", sessionID: "7:click", pid: 7)
+        let tab = TabGenerationIdentity(browser: browser, tabID: 5, documentGenerationID: 3, url: "http://127.0.0.1/click", domain: "127.0.0.1")
+        let otherTab = TabGenerationIdentity(browser: browser, tabID: 6, documentGenerationID: 3, url: "http://127.0.0.1/click", domain: "127.0.0.1")
+        let fingerprint = BridgeElementFingerprint(tagName: "button", role: "", label: "Clicked 0 times")
+        func rejects(_ what: String, _ request: BridgeRequest) throws {
+            do { _ = try BridgeMessageFraming.encode(request) } catch { return }
+            throw Failure("Click protocol: \(what) was accepted.")
+        }
+        let valid = BridgeRequest(requestID: "click_ok", sessionNonce: nonce, type: .clickElement, targetTab: tab,
+                                  elementID: "el_3_0011aabbccddeeff", expectedElement: fingerprint)
+        _ = try BridgeMessageFraming.encode(valid)
+        try rejects("click without fingerprint", BridgeRequest(requestID: "c1", sessionNonce: nonce, type: .clickElement, targetTab: tab, elementID: "el_3_ab"))
+        try rejects("click without element", BridgeRequest(requestID: "c2", sessionNonce: nonce, type: .clickElement, targetTab: tab, expectedElement: fingerprint))
+        try rejects("click without tab", BridgeRequest(requestID: "c3", sessionNonce: nonce, type: .clickElement, elementID: "el_3_ab", expectedElement: fingerprint))
+        for bad in ["button#counter", "el_3_<script>", "EL_3_AB", "el_" + String(repeating: "a", count: 200)] {
+            try rejects("element reference \(bad.prefix(20))", BridgeRequest(requestID: "c4", sessionNonce: nonce, type: .clickElement,
+                                                                         targetTab: tab, elementID: bad, expectedElement: fingerprint))
+        }
+        try rejects("element fields on an observe request", BridgeRequest(requestID: "c5", sessionNonce: nonce, type: .observeTab,
+                                                                         targetTab: tab, elementID: "el_3_ab", expectedElement: fingerprint))
+
+        // A click result must be for the tab and document of the outstanding request.
+        let validator = BridgeSessionValidator(sessionNonce: nonce)
+        try await validator.authorizeTab(tab)
+        try await validator.authorizeTab(otherTab)
+        try await validator.validateRequest(valid)
+        let mismatched = BridgeResponse(requestID: "click_ok", sessionNonce: nonce, success: true,
+                                        actionResult: BridgeActionResult(tab: otherTab, elementID: "el_3_0011aabbccddeeff", performed: true))
+        do {
+            try await validator.validateResponse(mismatched)
+            throw Failure("Click protocol: a click result for a different tab was accepted.")
+        } catch let error as BridgeErrorDetails where error.code == .browserMismatch {}
+        print("PASS: Phase 5B.1 click protocol: incomplete or malformed click requests, element fields on observe, and mismatched click results fail closed.")
     }
 }

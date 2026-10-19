@@ -202,6 +202,8 @@ async function handleHostMessage(msg) {
     } catch (err) {
       sendError(requestID, sessionNonce, "internalError", "Failed to observe tab: " + err.message);
     }
+  } else if (msg.type === "clickElement") {
+    await handleClick(msg, requestID, sessionNonce);
   } else if (msg.type === "pauseTabs" || msg.type === "revokeTab") {
     nativePort.postMessage({
       requestID: requestID,
@@ -231,6 +233,83 @@ async function observeDocument(tabID, genID) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       if (getTabGeneration(tabID) !== genID) throw new Error("Document changed while waiting for content script");
     }
+  }
+}
+
+// Phase 5B.1: one approved click. Halo has already re-observed the element and
+// obtained the user's approval; this re-checks everything against the live
+// document, then sends a genuine mouse click through chrome.debugger attached to
+// this tab only for the duration of the click.
+async function handleClick(msg, requestID, sessionNonce) {
+  const target = msg.targetTab;
+  if (!target || !target.tabID || !msg.elementID || !msg.expectedElement) {
+    sendError(requestID, sessionNonce, "payloadMalformed", "clickElement missing target, element, or fingerprint");
+    return;
+  }
+  const tabID = target.tabID;
+  const unchanged = async () => {
+    const tab = await chrome.tabs.get(tabID);
+    return !tab.incognito && (tab.url || "") === target.url &&
+      tabGenerations.get(tabID) === target.documentGenerationID;
+  };
+  try {
+    // A click is only valid in a document Halo has observed in this session.
+    if (!tabContexts.has(tabID) || !(await unchanged())) {
+      sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before the click");
+      return;
+    }
+    if (!target.url.startsWith("http://127.0.0.1") && !target.url.startsWith("http://localhost")) {
+      sendError(requestID, sessionNonce, "tabNotAuthorized", "Host permission restricted to loopback fixture");
+      return;
+    }
+  } catch (err) {
+    sendError(requestID, sessionNonce, "tabNotAuthorized", "Tab not found");
+    return;
+  }
+
+  const debuggee = { tabId: tabID };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(debuggee, "1.3");
+    attached = true;
+    const prep = await chrome.tabs.sendMessage(tabID, {
+      action: "prepareClick", elementID: msg.elementID, expected: msg.expectedElement
+    });
+    if (!prep || prep.error) {
+      sendError(requestID, sessionNonce, (prep && prep.error) || "elementChanged", (prep && prep.message) || "The element could not be prepared");
+      return;
+    }
+    if (!(await unchanged())) {
+      await chrome.tabs.sendMessage(tabID, { action: "cancelClick" }).catch(() => {});
+      sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before the click");
+      return;
+    }
+    const point = { x: prep.x, y: prep.y };
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
+
+    let outcome = null;
+    try {
+      outcome = await chrome.tabs.sendMessage(tabID, { action: "clickOutcome" });
+    } catch (_) {
+      outcome = null; // The click replaced the document; landing cannot be confirmed.
+    }
+    if (outcome && outcome.misdirected) {
+      sendError(requestID, sessionNonce, "elementChanged", "The click did not land on the approved element and was blocked");
+      return;
+    }
+    nativePort.postMessage({
+      requestID: requestID,
+      protocolVersion: 1,
+      sessionNonce: sessionNonce,
+      success: true,
+      actionResult: { tab: target, elementID: msg.elementID, performed: Boolean(outcome && outcome.landed) }
+    });
+  } catch (err) {
+    sendError(requestID, sessionNonce, "internalError", "Click failed: " + String(err && err.message));
+  } finally {
+    if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
   }
 }
 

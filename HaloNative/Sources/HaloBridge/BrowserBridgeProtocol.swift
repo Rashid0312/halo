@@ -95,8 +95,13 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
     public let isProtected: Bool
     public let isEnabled: Bool
     public let bounds: BoundedRect
+    /// Set by the extension when the element passes the Phase 5B.1 click policy:
+    /// a plain button outside any form or link, enabled, visible, not protected.
+    /// Halo re-checks its own policy; this flag alone never authorizes a click.
+    public let isActionable: Bool?
 
-    public init(elementID: String, tagName: String, role: String, label: String, isProtected: Bool, isEnabled: Bool, bounds: BoundedRect) {
+    public init(elementID: String, tagName: String, role: String, label: String, isProtected: Bool, isEnabled: Bool,
+                bounds: BoundedRect, isActionable: Bool? = nil) {
         self.elementID = elementID
         self.tagName = tagName.lowercased()
         self.role = role.lowercased()
@@ -104,6 +109,7 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
         self.isProtected = isProtected
         self.isEnabled = isEnabled
         self.bounds = bounds
+        self.isActionable = isActionable
     }
 }
 
@@ -120,6 +126,10 @@ public enum BridgeErrorCode: String, Sendable, Codable, Equatable {
     case unknownMessageType
     case payloadMalformed
     case internalError
+    /// The element is not eligible for the requested action under bridge policy.
+    case elementNotActionable
+    /// The element is missing, changed, covered, or the action did not land on it.
+    case elementChanged
 }
 
 /// Structured error details returned across the bridge.
@@ -271,6 +281,35 @@ public enum BridgeRequestType: String, Sendable, Codable, Equatable {
     case observeTab
     case pauseTabs
     case revokeTab
+    /// Phase 5B.1: one approved click on one previously observed element.
+    case clickElement
+}
+
+/// What Halo showed the user for approval. The extension refuses the action if
+/// the live element no longer matches it exactly.
+public struct BridgeElementFingerprint: Sendable, Codable, Equatable {
+    public let tagName: String
+    public let role: String
+    public let label: String
+
+    public init(tagName: String, role: String, label: String) {
+        self.tagName = tagName.lowercased()
+        self.role = role.lowercased()
+        self.label = label
+    }
+}
+
+/// Outcome of an approved action, bound to the document it ran in.
+public struct BridgeActionResult: Sendable, Codable, Equatable {
+    public let tab: TabGenerationIdentity
+    public let elementID: String
+    public let performed: Bool
+
+    public init(tab: TabGenerationIdentity, elementID: String, performed: Bool) {
+        self.tab = tab
+        self.elementID = elementID
+        self.performed = performed
+    }
 }
 
 /// Request envelope sent from Halo to the browser bridge.
@@ -280,13 +319,19 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
     public let sessionNonce: String
     public let type: BridgeRequestType
     public let targetTab: TabGenerationIdentity?
+    public let elementID: String?
+    public let expectedElement: BridgeElementFingerprint?
 
-    public init(requestID: String, protocolVersion: UInt32 = BrowserBridgeLimits.currentProtocolVersion, sessionNonce: String, type: BridgeRequestType, targetTab: TabGenerationIdentity? = nil) {
+    public init(requestID: String, protocolVersion: UInt32 = BrowserBridgeLimits.currentProtocolVersion, sessionNonce: String,
+                type: BridgeRequestType, targetTab: TabGenerationIdentity? = nil,
+                elementID: String? = nil, expectedElement: BridgeElementFingerprint? = nil) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
         self.sessionNonce = sessionNonce
         self.type = type
         self.targetTab = targetTab
+        self.elementID = elementID
+        self.expectedElement = expectedElement
     }
 }
 
@@ -302,6 +347,7 @@ public struct BridgeResponse: Sendable, Codable, Equatable {
     public let navigation: TabNavigationEvent?
     public let tabClosed: TabClosedEvent?
     public let tabAnnouncement: BridgeTabAnnouncement?
+    public let actionResult: BridgeActionResult?
 
     public init(
         requestID: String,
@@ -313,7 +359,8 @@ public struct BridgeResponse: Sendable, Codable, Equatable {
         observation: TabObservedEvent? = nil,
         navigation: TabNavigationEvent? = nil,
         tabClosed: TabClosedEvent? = nil,
-        tabAnnouncement: BridgeTabAnnouncement? = nil
+        tabAnnouncement: BridgeTabAnnouncement? = nil,
+        actionResult: BridgeActionResult? = nil
     ) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
@@ -325,6 +372,7 @@ public struct BridgeResponse: Sendable, Codable, Equatable {
         self.navigation = navigation
         self.tabClosed = tabClosed
         self.tabAnnouncement = tabAnnouncement
+        self.actionResult = actionResult
     }
 }
 
@@ -372,8 +420,31 @@ private enum BridgeModelValidation {
         case .observeTab, .revokeTab:
             guard let target = value.targetTab else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type requires a target tab.") }
             try tab(target)
+            guard value.elementID == nil, value.expectedElement == nil else {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids element fields.")
+            }
         case .pauseTabs:
-            guard value.targetTab == nil else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids a target tab.") }
+            guard value.targetTab == nil, value.elementID == nil, value.expectedElement == nil else {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids a target tab.")
+            }
+        case .clickElement:
+            guard let target = value.targetTab, let elementID = value.elementID, let expected = value.expectedElement else {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Click requires a target tab, element, and expected fingerprint.")
+            }
+            try tab(target)
+            try elementReference(elementID)
+            try boundedUTF8(expected.tagName, max: 128, field: "expectedElement.tagName")
+            try boundedUTF8(expected.role, max: 128, field: "expectedElement.role", allowEmpty: true)
+            try boundedUTF8(expected.label, max: BrowserBridgeLimits.maxStringLength, field: "expectedElement.label", allowEmpty: true)
+        }
+    }
+
+    /// Element references are opaque extension-issued tokens: `el_` plus
+    /// lowercase alphanumerics, underscores, or hyphens, at most 128 bytes.
+    static func elementReference(_ value: String) throws {
+        guard value.hasPrefix("el_"), value.utf8.count <= 128,
+              value.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 122) || $0 == 95 || $0 == 45 }) else {
+            throw BridgeErrorDetails(code: .payloadMalformed, message: "Invalid element reference.")
         }
     }
 
@@ -391,7 +462,8 @@ private enum BridgeModelValidation {
     static func response(_ value: BridgeResponse) throws {
         try boundedUTF8(value.requestID, max: 64, field: "response.requestID")
         try nonce(value.sessionNonce, field: "response.sessionNonce")
-        let payloadCount = [value.error != nil, value.handshake != nil, value.observation != nil, value.navigation != nil, value.tabClosed != nil, value.tabAnnouncement != nil].filter { $0 }.count
+        let payloadCount = [value.error != nil, value.handshake != nil, value.observation != nil, value.navigation != nil,
+                            value.tabClosed != nil, value.tabAnnouncement != nil, value.actionResult != nil].filter { $0 }.count
         guard value.success ? (value.error == nil && payloadCount <= 1) : (value.error != nil && payloadCount == 1) else {
             throw BridgeErrorDetails(code: .payloadMalformed, message: "Response success, error, and payload fields are inconsistent.")
         }
@@ -437,6 +509,10 @@ private enum BridgeModelValidation {
         if let error = value.error {
             try boundedUTF8(error.message, max: 1_024, field: "error.message")
         }
+        if let action = value.actionResult {
+            try tab(action.tab)
+            try elementReference(action.elementID)
+        }
         if let handshake = value.handshake {
             try nonce(handshake.serverNonce, field: "handshake.serverNonce")
             try nonce(handshake.clientNonce, field: "handshake.clientNonce")
@@ -477,8 +553,8 @@ public enum BridgeMessageFraming {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope must be a JSON object.")
                 }
                 let allowed: Set<String> = type == BridgeRequest.self
-                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab"]
-                    : ["requestID", "protocolVersion", "sessionNonce", "success", "error", "handshake", "observation", "navigation", "tabClosed", "tabAnnouncement"]
+                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement"]
+                    : ["requestID", "protocolVersion", "sessionNonce", "success", "error", "handshake", "observation", "navigation", "tabClosed", "tabAnnouncement", "actionResult"]
                 guard Set(object.keys).isSubset(of: allowed) else {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope contains unknown fields.")
                 }
@@ -650,6 +726,11 @@ public actor BridgeSessionValidator {
             throw BridgeErrorDetails(code: .accessPaused, message: "Bridge access changed while the response was in flight.")
         }
         completedResponseIDs.insert(response.requestID)
+        if let action = response.actionResult {
+            guard pending.target == action.tab else {
+                throw BridgeErrorDetails(code: .browserMismatch, message: "Action result identity differs from its request.")
+            }
+        }
         if let obs = response.observation {
             guard pending.target == obs.tab else {
                 throw BridgeErrorDetails(code: .browserMismatch, message: "Response identity differs from its request.")

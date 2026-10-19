@@ -40,6 +40,40 @@ public struct BrowserTabContent: Sendable, Codable {
     public let domain: String
     public let content: String
     public let truncated: Bool
+    /// Element references from a bridge observation; empty on the AppleScript path.
+    public var elements: [BrowserTabElement] = []
+}
+
+/// An element reference the model may cite. IDs are opaque and valid only for
+/// the document they were observed in.
+public struct BrowserTabElement: Sendable, Codable, Equatable {
+    public let id: String
+    public let role: String
+    public let tagName: String
+    public let label: String
+    public let clickable: Bool
+}
+
+/// A click target re-observed immediately before approval. The approval preview
+/// shows these fields; the click is refused if any of them no longer hold.
+public struct BrowserClickTarget: Sendable, Equatable {
+    public let tabID: Int
+    public let title: String
+    public let url: String
+    public let domain: String
+    public let elementID: String
+    public let tagName: String
+    public let role: String
+    public let label: String
+    let key: AuthorizedTabKey
+    let generation: UInt64
+}
+
+public struct BrowserClickResult: Sendable {
+    /// True when the extension confirmed the genuine click reached the element.
+    public let verified: Bool
+    /// Fresh observation after the click, when the page is still readable.
+    public let after: BrowserTabContent?
 }
 
 public struct AuthorizedTabKey: Sendable, Codable, Hashable {
@@ -135,11 +169,14 @@ public actor ChromeBrowserService {
     private var bridgeValidator: BridgeSessionValidator? = nil
     private var bridgeGenerations: [AuthorizedTabKey: UInt64] = [:]
     private var bridgeReadInFlight = false
+    /// Latest bridge observation per tab, bound to the document generation it came from.
+    private var bridgeElements: [AuthorizedTabKey: (generation: UInt64, elements: [String: ObservedDOMElement])] = [:]
 
     public func attachBridgeServer(_ server: BridgeIPCServer) {
         self.bridgeServer = server
         self.bridgeValidator = BridgeSessionValidator(sessionNonce: server.sessionConfig.sessionNonce)
         self.bridgeGenerations.removeAll()
+        self.bridgeElements.removeAll()
     }
 
     private enum BridgeMessageKind { case event(AuthorizedTabKey), response }
@@ -194,6 +231,7 @@ public actor ChromeBrowserService {
         self.bridgeServer = nil
         self.bridgeValidator = nil
         self.bridgeGenerations.removeAll()
+        self.bridgeElements.removeAll()
     }
 
     public func activeBridgeServer() -> BridgeIPCServer? {
@@ -423,6 +461,128 @@ public actor ChromeBrowserService {
         return record
     }
 
+    /// Phase 5B.1 policy, enforced by Halo independently of the extension's flag:
+    /// plain, enabled, unprotected buttons only.
+    static func isClickable(_ element: ObservedDOMElement) -> Bool {
+        element.isActionable == true && element.isEnabled && !element.isProtected &&
+            (element.tagName == "button" || element.role == "button")
+    }
+
+    /// One correlated bridge exchange for an authorized tab. Pending lifecycle
+    /// events are applied first; the response is matched by request ID; any
+    /// navigation, close, pause, revoke, or epoch change in flight fails closed.
+    private func bridgeExchange(
+        id: Int, key: AuthorizedTabKey, context: BrowserContext,
+        server: BridgeIPCServer, validator: BridgeSessionValidator,
+        requiredGeneration: UInt64? = nil, timeout: TimeInterval = 5,
+        makeRequest: (TabGenerationIdentity, String, String) -> BridgeRequest
+    ) async throws -> (BridgeResponse, TabGenerationIdentity, AuthorizedTabRecord) {
+        guard !bridgeReadInFlight else {
+            throw InteractionError("Another browser operation is already in progress.")
+        }
+        bridgeReadInFlight = true
+        defer { bridgeReadInFlight = false }
+        let nonce = server.sessionConfig.sessionNonce
+        do {
+            while await server.hasPendingMessage() {
+                _ = try await applyBridgeMessage(try await server.receiveResponse(timeoutSeconds: 2), nonce: nonce, validator: validator)
+            }
+        } catch {
+            throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+        }
+        guard !isPaused, let record = authorizedTabs[key] else {
+            throw InteractionError("Tab \(id) is no longer authorized; the page navigated or closed.")
+        }
+        let generation = bridgeGenerations[key] ?? 1
+        if let requiredGeneration, requiredGeneration != generation {
+            throw InteractionError("The page changed after approval; nothing was done.")
+        }
+        let epoch = accessEpoch
+        let browserIdent = BrowserIdentity(bundleID: context.bundleID, sessionID: context.sessionID, pid: context.pid)
+        let tabIdent = TabGenerationIdentity(browser: browserIdent, tabID: id, documentGenerationID: generation, url: record.url, domain: record.domain)
+        let reqID = BridgeSocketIO.generateRandomHex(byteCount: 8)
+        let request = makeRequest(tabIdent, reqID, nonce)
+        do {
+            try await validator.authorizeTab(tabIdent)
+            try await validator.validateRequest(request)
+            try await server.sendRequest(request)
+            var changedInFlight = false
+            let deadline = Date().addingTimeInterval(timeout)
+            var resp: BridgeResponse
+            while true {
+                resp = try await server.receiveResponse(timeoutSeconds: max(0.1, deadline.timeIntervalSinceNow))
+                switch try await applyBridgeMessage(resp, nonce: nonce, validator: validator) {
+                case .event(let affected):
+                    if affected == key { changedInFlight = true }
+                    continue
+                case .response where resp.requestID != reqID:
+                    continue // Response to an earlier, abandoned request.
+                case .response:
+                    break
+                }
+                break
+            }
+            if changedInFlight {
+                throw InteractionError("The browser tab changed while the operation was in flight.")
+            }
+            try await validator.validateResponse(resp)
+            try Task.checkCancellation()
+            guard !isPaused, epoch == accessEpoch, authorizedTabs[key] == record else {
+                throw InteractionError("Browser tab access changed while the operation was in flight.")
+            }
+            guard resp.success else {
+                throw InteractionError(resp.error?.message ?? "The browser bridge refused the operation.")
+            }
+            return (resp, tabIdent, record)
+        } catch {
+            if let interError = error as? InteractionError { throw interError }
+            throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Re-observes the tab and resolves an element for a click approval preview.
+    public func describeClickTarget(tabID: Int, elementID: String, browserAppID: String? = nil) async throws -> BrowserClickTarget {
+        guard bridgeServer != nil else {
+            throw InteractionError("Clicking requires the Halo browser extension connection (Settings → Mac Access → Browser bridge).")
+        }
+        let content = try await readTab(id: tabID, browserAppID: browserAppID)
+        let context = try browserContext(browserAppID)
+        let key = tabKey(tabID, context: context)
+        guard let observed = bridgeElements[key], let element = observed.elements[elementID] else {
+            throw InteractionError("Element \(elementID) is not on the current page. Read the tab again and use a current element ID.")
+        }
+        guard Self.isClickable(element) else {
+            throw InteractionError("Only plain, enabled buttons can be clicked. Links, form submission, and protected or disabled controls are blocked.")
+        }
+        return BrowserClickTarget(tabID: tabID, title: content.title, url: content.url, domain: content.domain,
+                                  elementID: elementID, tagName: element.tagName, role: element.role,
+                                  label: element.label, key: key, generation: observed.generation)
+    }
+
+    /// Performs one approved click. The page, element, and its position are
+    /// re-verified by the extension; nothing is clicked if any of them changed.
+    public func click(_ target: BrowserClickTarget) async throws -> BrowserClickResult {
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        guard let server = bridgeServer, let validator = bridgeValidator, await server.isConnected else {
+            throw InteractionError("The Halo browser extension disconnected; nothing was clicked.")
+        }
+        let context = try browserContext(target.key.browserBundleID)
+        guard context.sessionID == target.key.browserSessionID else {
+            throw InteractionError("The browser restarted after approval; nothing was clicked.")
+        }
+        let fingerprint = BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
+        let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
+                                                    validator: validator, requiredGeneration: target.generation, timeout: 10) {
+            BridgeRequest(requestID: $1, sessionNonce: $2, type: .clickElement, targetTab: $0,
+                          elementID: target.elementID, expectedElement: fingerprint)
+        }
+        guard let action = resp.actionResult, action.elementID == target.elementID else {
+            throw InteractionError("The browser bridge returned no click result.")
+        }
+        let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
+        return BrowserClickResult(verified: action.performed, after: after)
+    }
+
     public func readTab(id: Int, browserAppID: String? = nil) async throws -> BrowserTabContent {
         guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
         let context = try browserContext(browserAppID)
@@ -434,88 +594,34 @@ public actor ChromeBrowserService {
 
         // 1. If an authenticated Native Messaging bridge is connected, route observation through the bridge:
         if let server = bridgeServer, let validator = bridgeValidator, await server.isConnected {
-            guard !bridgeReadInFlight else {
-                throw InteractionError("Another browser read is already in progress.")
+            let (resp, tabIdent, record) = try await bridgeExchange(id: id, key: key, context: context, server: server, validator: validator) {
+                BridgeRequest(requestID: $1, sessionNonce: $2, type: .observeTab, targetTab: $0)
             }
-            bridgeReadInFlight = true
-            defer { bridgeReadInFlight = false }
-            let nonce = server.sessionConfig.sessionNonce
-            do {
-                // Lifecycle events and abandoned responses that arrived while idle
-                // must be applied before the current generation is trusted.
-                while await server.hasPendingMessage() {
-                    _ = try await applyBridgeMessage(try await server.receiveResponse(timeoutSeconds: 2), nonce: nonce, validator: validator)
-                }
-            } catch {
-                throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+            guard let obs = resp.observation, obs.tab == tabIdent else {
+                throw InteractionError(resp.error?.message ?? "Bridge observation failed.")
             }
-            guard !isPaused, let record = authorizedTabs[key] else {
-                throw InteractionError("Tab \(id) is no longer authorized; the page navigated or closed.")
+            guard obs.tab.domain.lowercased() == record.domain.lowercased() else {
+                authorizedTabs.removeValue(forKey: key)
+                throw InteractionError("Tab \(id) navigated from '\(record.domain)' to '\(obs.tab.domain)'; authorization was revoked.")
             }
-            let epoch = accessEpoch
-            let browserIdent = BrowserIdentity(bundleID: context.bundleID, sessionID: context.sessionID, pid: context.pid)
-            let generation = bridgeGenerations[key] ?? 1
-            let tabIdent = TabGenerationIdentity(browser: browserIdent, tabID: id, documentGenerationID: generation, url: record.url, domain: record.domain)
-            let reqID = BridgeSocketIO.generateRandomHex(byteCount: 8)
-            let bridgeReq = BridgeRequest(
-                requestID: reqID,
-                sessionNonce: nonce,
-                type: .observeTab,
-                targetTab: tabIdent
+            bridgeElements[key] = (obs.tab.documentGenerationID, Dictionary(obs.elements.map { ($0.elementID, $0) }, uniquingKeysWith: { first, _ in first }))
+            let contentText = obs.elements.map { el in
+                el.isProtected ? "[\(el.role): (protected)]" : "\(el.role): \(el.label)"
+            }.joined(separator: "\n")
+            var content = BrowserTabContent(
+                id: id,
+                title: String(obs.title.prefix(200)),
+                url: obs.tab.url,
+                domain: obs.tab.domain,
+                content: contentText,
+                truncated: contentText.utf16.count >= 16000
             )
-            do {
-                try await validator.authorizeTab(tabIdent)
-                try await validator.validateRequest(bridgeReq)
-                try await server.sendRequest(bridgeReq)
-                var changedInFlight = false
-                let deadline = Date().addingTimeInterval(5)
-                var resp: BridgeResponse
-                while true {
-                    resp = try await server.receiveResponse(timeoutSeconds: max(0.1, deadline.timeIntervalSinceNow))
-                    switch try await applyBridgeMessage(resp, nonce: nonce, validator: validator) {
-                    case .event(let affected):
-                        if affected == key { changedInFlight = true }
-                        continue
-                    case .response where resp.requestID != reqID:
-                        continue // Response to an earlier, abandoned request.
-                    case .response:
-                        break
-                    }
-                    break
-                }
-                if changedInFlight {
-                    throw InteractionError("The browser tab changed while the read was in flight.")
-                }
-                try await validator.validateResponse(resp)
-                try Task.checkCancellation()
-                guard !isPaused, epoch == accessEpoch, authorizedTabs[key] == record else {
-                    throw InteractionError("Browser tab access changed while the read was in flight.")
-                }
-                guard resp.success, let obs = resp.observation, obs.tab == tabIdent else {
-                    let errMsg = resp.error?.message ?? "Bridge observation failed."
-                    throw InteractionError(errMsg)
-                }
-                guard obs.tab.domain.lowercased() == record.domain.lowercased() else {
-                    authorizedTabs.removeValue(forKey: key)
-                    throw InteractionError("Tab \(id) navigated from '\(record.domain)' to '\(obs.tab.domain)'; authorization was revoked.")
-                }
-                let contentText = obs.elements.map { el in
-                    el.isProtected ? "[\(el.role): (protected)]" : "\(el.role): \(el.label)"
-                }.joined(separator: "\n")
-                return BrowserTabContent(
-                    id: id,
-                    title: String(obs.title.prefix(200)),
-                    url: obs.tab.url,
-                    domain: obs.tab.domain,
-                    content: contentText,
-                    truncated: contentText.utf16.count >= 16000
-                )
-            } catch {
-                if let interError = error as? InteractionError {
-                    throw interError
-                }
-                throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+            content.elements = obs.elements.map {
+                BrowserTabElement(id: $0.elementID, role: $0.role, tagName: $0.tagName,
+                                  label: $0.isProtected ? "(protected)" : String($0.label.prefix(200)),
+                                  clickable: Self.isClickable($0))
             }
+            return content
         }
 
         // 2. Default read-only AppleScript path:

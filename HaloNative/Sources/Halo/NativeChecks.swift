@@ -675,6 +675,26 @@ enum NativeChecks {
                 // Extra routes for real-browser lifecycle checks: same-site
                 // navigation and a large document for in-flight interruption.
                 let pageB = respond("<!DOCTYPE html><html><head><title>Halo Fixture Page B</title></head><body><h1>Halo Fixture Page B</h1></body></html>")
+                // Phase 5B.1 click fixture. Counts are shown in headings so the
+                // bridge observation can verify them; synthetic clicks are marked.
+                let clickPage = respond(#"""
+                <!DOCTYPE html><html><head><title>Halo Click Fixture</title>
+                <style>#cover{position:relative;display:inline-block}#cover div{position:absolute;inset:0;background:rgba(0,0,0,0)}</style></head>
+                <body><h1>Halo Click Fixture</h1>
+                <button type="button" id="counter">Clicked 0 times</button>
+                <button type="button" id="rename">Rename me</button><h2 id="rename-count">Rename clicks: 0</h2>
+                <span id="cover"><button type="button" id="covered">Covered button</button><div></div></span><h2 id="covered-count">Covered clicks: 0</h2>
+                <form><button type="submit">Submit form</button></form>
+                <a href="/page-b">Go to page B</a>
+                <button type="button" disabled>Disabled action</button>
+                <input type="password" aria-label="Password">
+                <script>
+                let n = 0, r = 0, c = 0;
+                counter.onclick = (e) => { n++; counter.textContent = "Clicked " + n + " times" + (e.isTrusted ? "" : " (synthetic)"); };
+                rename.onclick = () => { r++; document.getElementById("rename-count").textContent = "Rename clicks: " + r; };
+                covered.onclick = () => { c++; document.getElementById("covered-count").textContent = "Covered clicks: " + c; };
+                </script></body></html>
+                """#)
                 let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
                     + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
@@ -701,7 +721,8 @@ enum NativeChecks {
                         }
                         guard !requestLine.isEmpty else { Darwin.close(client); return }
                         let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
-                        let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large : responseBytes
+                        let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large
+                            : path.hasPrefix("/click") ? clickPage : responseBytes
                         _ = bytes.withUnsafeBufferPointer { buf -> Int in
                             var written = 0
                             while written < buf.count {
@@ -2317,6 +2338,7 @@ enum NativeChecks {
 
         print("PASS: All 17 required adversarial checks passed deterministically.")
         try await runBridgeSecurityValidationChecks(helperBinaryURL: helperBinaryURL, pinnedExtensionID: pinnedExtensionID)
+        try await clickProtocolChecks()
     }
 
     private static func runBridgePerformanceBenchmarks(helperBinaryURL: URL, pinnedExtensionID: String) async throws {
