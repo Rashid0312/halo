@@ -58,7 +58,8 @@
       const isField = ["input", "select", "textarea"].includes(tagName);
       label = ((isField ? "" : el.innerText) || associated || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim();
     }
-    return { tagName, role, label: label.substring(0, 32768), isProtected };
+    // Labels are capped so large pages stay well inside the 1 MB message limit.
+    return { tagName, role, label: label.substring(0, 500), isProtected };
   }
 
   // Phase 5B.1 click policy: plain buttons only. Anything that can submit a
@@ -206,16 +207,56 @@
     return (named || (el.innerText || "").trim().split("\n")[0] || "Scrollable region").trim().substring(0, 120);
   }
 
+  // Real pages use open shadow roots (web components); search into them too.
+  function deepQueryAll(selector, root = document, out = []) {
+    out.push(...root.querySelectorAll(selector));
+    for (const host of root.querySelectorAll("*")) {
+      if (host.shadowRoot) deepQueryAll(selector, host.shadowRoot, out);
+    }
+    return out;
+  }
+
+  // elementFromPoint stops at shadow hosts; descend to the real target.
+  function deepElementFromPoint(x, y) {
+    let el = document.elementFromPoint(x, y);
+    while (el && el.shadowRoot) {
+      const inner = el.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
+    }
+    return el;
+  }
+
+  function deepActiveElement() {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+    return active;
+  }
+
+  function isRendered(el, rect) {
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== "hidden" && style.display !== "none";
+  }
+
   function observe(generationID) {
     currentGeneration = generationID;
     const elements = [];
-    const candidates = document.querySelectorAll(
-      "button, input, select, textarea, a[href], h1, h2, h3, [role='button'], [role='textbox']"
-    );
-    for (const el of candidates) {
+    // Large pages have thousands of controls: list only rendered ones, those
+    // on screen first (top to bottom), then the rest by distance from view.
+    const candidates = deepQueryAll("button, input, select, textarea, a[href], h1, h2, h3, [role='button'], [role='textbox']")
+      .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+      .filter(({ el, rect }) => isRendered(el, rect))
+      .map(({ el, rect }) => {
+        const onScreen = rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+        const distance = onScreen ? 0 : rect.top >= innerHeight ? rect.top - innerHeight : -rect.bottom;
+        return { el, rect, onScreen, distance };
+      })
+      .sort((a, b) => (a.onScreen === b.onScreen ? 0 : a.onScreen ? -1 : 1) ||
+        (a.onScreen ? a.rect.top - b.rect.top : a.distance - b.distance));
+    for (const { el, rect } of candidates) {
       if (elements.length >= 200) break; // Strict upper bound per observation
       const info = describe(el);
-      const rect = el.getBoundingClientRect();
       elements.push({
         elementID: referenceFor(el, generationID),
         tagName: info.tagName,
@@ -247,7 +288,7 @@
     }
     // Scrollable regions (lists, panes) are reported separately, at most 20.
     let regions = 0;
-    for (const el of document.querySelectorAll("div, section, main, aside, nav, article, ul, ol, pre, textarea")) {
+    for (const el of deepQueryAll("div, section, main, aside, nav, article, ul, ol, pre, textarea")) {
       if (elements.length >= 200 || regions >= 20) break;
       if (!isScrollableElement(el) || el.tagName.toLowerCase() === "textarea") continue;
       const rect = el.getBoundingClientRect();
@@ -324,7 +365,7 @@
       const rect = el.getBoundingClientRect();
       x = rect.left + rect.width / 2;
       y = rect.top + rect.height / 2;
-      const hit = document.elementFromPoint(x, y);
+      const hit = deepElementFromPoint(x, y);
       if (!hit || !el.contains(hit)) return { error: "elementChanged", message: "Another element covers the scrollable region." };
     }
     pendingScroll = { el, before: scrollPosition(el) };
@@ -355,7 +396,9 @@
     for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
       window.removeEventListener(type, armedGuard.listener, true);
     }
-    if (armedGuard.submitListener) document.removeEventListener("submit", armedGuard.submitListener, true);
+    if (armedGuard.submitListener && armedGuard.target.form) {
+      armedGuard.target.form.removeEventListener("submit", armedGuard.submitListener, true);
+    }
     clearTimeout(armedGuard.timer);
     armedGuard = null;
   }
@@ -370,11 +413,14 @@
         // The document may unload right after this; tell the worker first.
         chrome.runtime.sendMessage({ action: "haloSubmitted" }).catch(() => {});
       };
-      document.addEventListener("submit", guard.submitListener, true);
+      // submit does not cross shadow boundaries; listen on the form itself.
+      el.form.addEventListener("submit", guard.submitListener, true);
     }
     guard.listener = (event) => {
       if (!event.isTrusted) return;
-      if (el.contains(event.target)) {
+      // Events from inside shadow roots are retargeted to the host at window
+      // level; the composed path still contains the real target.
+      if (event.composedPath().includes(el)) {
         if (event.type === "click") guard.landed = true;
         return;
       }
@@ -413,7 +459,7 @@
     const rect = el.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
-    const hit = document.elementFromPoint(x, y);
+    const hit = deepElementFromPoint(x, y);
     if (!hit || !el.contains(hit)) {
       return { error: "elementChanged", message: "Another element covers the approved element at its click point." };
     }
@@ -439,7 +485,7 @@
     el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     el.focus({ preventScroll: true });
     await nextFrame();
-    if (document.activeElement !== el) return { error: "elementChanged", message: "The field could not be focused." };
+    if (deepActiveElement() !== el) return { error: "elementChanged", message: "The field could not be focused." };
     el.select();
     pendingType = el;
     return { ready: true };
@@ -463,7 +509,7 @@
       return true;
     }
     if (request.action === "typeFocusHeld") {
-      sendResponse({ held: Boolean(pendingType) && document.activeElement === pendingType });
+      sendResponse({ held: Boolean(pendingType) && deepActiveElement() === pendingType });
       return false;
     }
     if (request.action === "typeOutcome") {

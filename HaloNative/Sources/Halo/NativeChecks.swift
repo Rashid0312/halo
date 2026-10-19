@@ -774,6 +774,32 @@ enum NativeChecks {
                 document.getElementById("ext").href = "http://localhost:" + location.port + "/halo-test";
                 </script></body></html>
                 """#)
+                // Real-page robustness fixtures: an open shadow root, and a page
+                // crowded with hidden and below-the-fold controls.
+                let shadowPage = respond(#"""
+                <!DOCTYPE html><html><head><title>Halo Shadow Fixture</title></head>
+                <body><h1>Halo Shadow Fixture</h1><h2 id="sc">Shadow clicks: 0</h2><h2 id="sl">Shadow field length: 0</h2>
+                <halo-widget></halo-widget>
+                <script>
+                customElements.define("halo-widget", class extends HTMLElement {
+                  connectedCallback() {
+                    const root = this.attachShadow({ mode: "open" });
+                    root.innerHTML = '<button type="button" id="b">Shadow action</button> <input id="f" aria-label="Shadow field">';
+                    let clicks = 0;
+                    root.getElementById("b").addEventListener("click", (e) => {
+                      if (e.isTrusted) document.getElementById("sc").textContent = "Shadow clicks: " + (++clicks);
+                    });
+                    root.getElementById("f").addEventListener("input", (e) => {
+                      document.getElementById("sl").textContent = "Shadow field length: " + e.target.value.length;
+                    });
+                  }
+                });
+                </script></body></html>
+                """#)
+                let crowdedPage = respond(#"<!DOCTYPE html><html><head><title>Halo Crowded Fixture</title></head><body>"#
+                    + #"<div style="display:none">"# + (0..<300).map { "<button type=\"button\">Hidden control \($0)</button>" }.joined() + "</div>"
+                    + #"<div style="margin-top:3000px">"# + (0..<250).map { "<button type=\"button\">Below fold \($0)</button>" }.joined() + "</div>"
+                    + #"<button type="button" style="position:fixed;top:10px;left:10px">Target action</button></body></html>"#)
                 let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
                     + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
@@ -802,7 +828,8 @@ enum NativeChecks {
                         let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
                         let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large
                             : path.hasPrefix("/click") ? clickPage : path.hasPrefix("/type") ? typePage
-                            : path.hasPrefix("/select") ? selectPage : path.hasPrefix("/forms") ? formsPage : responseBytes
+                            : path.hasPrefix("/select") ? selectPage : path.hasPrefix("/forms") ? formsPage
+                            : path.hasPrefix("/shadow") ? shadowPage : path.hasPrefix("/crowded") ? crowdedPage : responseBytes
                         _ = bytes.withUnsafeBufferPointer { buf -> Int in
                             var written = 0
                             while written < buf.count {

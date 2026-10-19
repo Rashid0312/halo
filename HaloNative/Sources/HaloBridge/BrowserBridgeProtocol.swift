@@ -191,6 +191,9 @@ public enum BridgeErrorCode: String, Sendable, Codable, Equatable {
     case elementNotActionable
     /// The element is missing, changed, covered, or the action did not land on it.
     case elementChanged
+    /// Chrome does not grant the extension access to this site (user-restricted
+    /// "Site access"). Reads fall back to the AppleScript path.
+    case hostNotGranted
 }
 
 /// Structured error details returned across the bridge.

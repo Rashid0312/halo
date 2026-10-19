@@ -192,8 +192,6 @@ extension NativeChecks {
         guard let browserURL = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
             throw Failure("Phase 5A lifecycle suite requires an unbranded Chromium build (.local-tools/chromium).")
         }
-        let extPath = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("Fixtures/BrowserBridgeExtension").standardized.path
         let extensionID = BrowserBridgeController.developmentExtensionID
 
         let fixture = try DisposableTabServer()
@@ -202,6 +200,19 @@ extension NativeChecks {
         let profile = FileManager.default.temporaryDirectory.appendingPathComponent("halo-bridge-live-\(UUID().uuidString)", isDirectory: true)
         let manifestDir = profile.appendingPathComponent("NativeMessagingHosts", isDirectory: true)
         try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        // The suite loads a copy of the extension with Site access narrowed to
+        // loopback, as a user can do in Chrome; *.localhost hosts then stand in
+        // for sites the user has not granted. The shipped manifest grants all
+        // http(s) sites (checked separately).
+        let restrictedExtension = profile.appendingPathComponent("extension-restricted", isDirectory: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Fixtures/BrowserBridgeExtension"), to: restrictedExtension)
+        let restrictedManifestURL = restrictedExtension.appendingPathComponent("manifest.json")
+        var restrictedManifest = try JSONSerialization.jsonObject(with: Data(contentsOf: restrictedManifestURL)) as? [String: Any] ?? [:]
+        restrictedManifest["host_permissions"] = ["http://127.0.0.1/*", "http://localhost/*"]
+        try JSONSerialization.data(withJSONObject: restrictedManifest, options: [.prettyPrinted]).write(to: restrictedManifestURL)
+        let extPath = restrictedExtension.path
+        let uncoveredBase = "http://halo-uncovered.localhost:\(fixture.port)"
         let manifestFile = manifestDir.appendingPathComponent("\(BrowserBridgeController.hostName).json")
         let defaultsSuite = "app.halo.bridge-live-check.\(getpid())"
         let defaults = UserDefaults(suiteName: defaultsSuite)!
@@ -211,7 +222,7 @@ extension NativeChecks {
         let controller = BrowserBridgeController(service: service, helperURL: helperBinaryURL,
                                                  manifestDirectories: { [manifestDir] in [manifestDir] }, defaults: defaults)
         var browser: Process?
-        func launchBrowser(_ url: String) throws -> Process {
+        func launchBrowser(_ urls: String...) throws -> Process {
             // A stale port file from the previous browser must not be reused.
             try? FileManager.default.removeItem(at: profile.appendingPathComponent("DevToolsActivePort"))
             let process = Process()
@@ -219,8 +230,8 @@ extension NativeChecks {
             process.arguments = [
                 "--user-data-dir=\(profile.path)", "--remote-debugging-port=0",
                 "--no-first-run", "--no-default-browser-check",
-                "--disable-extensions-except=\(extPath)", "--load-extension=\(extPath)", url
-            ]
+                "--disable-extensions-except=\(extPath)", "--load-extension=\(extPath)"
+            ] + urls
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             try process.run()
@@ -273,10 +284,21 @@ extension NativeChecks {
         /// Polls Halo's production read until it satisfies `condition`.
         func readUntil(_ what: String, id: Int? = nil, _ condition: @escaping (BrowserTabContent) -> Bool) async throws -> BrowserTabContent {
             var latest: BrowserTabContent?
-            _ = try await waitUntil(what, timeout: 10) {
-                guard let content = try? await service.readTab(id: id ?? tabA), condition(content) else { return false }
-                latest = content
-                return true
+            var lastIssue = "no read attempted"
+            do {
+                _ = try await waitUntil(what, timeout: 10) {
+                    do {
+                        let content = try await service.readTab(id: id ?? tabA)
+                        guard condition(content) else { lastIssue = "read '\(content.title)' at \(content.url)"; return false }
+                        latest = content
+                        return true
+                    } catch {
+                        lastIssue = error.localizedDescription
+                        return false
+                    }
+                }
+            } catch {
+                throw Failure("\(error.localizedDescription) Last result: \(lastIssue)")
             }
             return latest!
         }
@@ -476,7 +498,7 @@ extension NativeChecks {
         // 12. Browser restart.
         if let running = browser { terminateProcessBounded(running) }
         _ = try await waitUntil("disconnect after browser exit", timeout: 10) { !isConnected() }
-        browser = try launchBrowser(base + "/halo-test")
+        browser = try launchBrowser(base + "/halo-test", uncoveredBase + "/halo-test")
         _ = try await waitUntil("reconnect after browser restart", timeout: 20) { isConnected() }
         guard await service.authorizedCount() == 0 else { throw Failure("Authorizations survived a browser restart.") }
         let tabC = try announced("/halo-test").tabID
@@ -486,7 +508,7 @@ extension NativeChecks {
 
         // 5B.1. Approved click through the production tool, approval, and bridge.
         let devtoolsC = try await DevToolsClient.attach(profile: profile)
-        let pageC = try await devtoolsC.page(urlContaining: "/halo-test")
+        let pageC = try await devtoolsC.page(urlContaining: base + "/halo-test")
         let before = await {
             guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "performance.timeOrigin", "returnByValue": true]),
                   let value = (result["result"] as? [String: Any])?["value"] as? Double else { return 0.0 }
@@ -848,20 +870,22 @@ extension NativeChecks {
         }
         pass("5B.3 cross-site navigation: approval warned it leaves the site; access to the tab ended after loading.")
 
-        // Sites the extension cannot reach keep the normal read path while the
-        // bridge is connected, and refuse browser actions with a clear reason.
-        let outsideTab = 987_654
-        runtime.setReadResponse(id: outsideTab, title: "Example Domain", url: "https://example.com/", text: "Example page text")
-        try await authorize(outsideTab, url: "https://example.com/", title: "Example Domain")
-        let outsideRead = try await service.readTab(id: outsideTab)
-        let outsideClick = try await run("click_browser_element", ["tab_id": outsideTab, "element_id": "el_1_ab"])
-        let outsideNav = try await run("navigate_browser_tab", ["tab_id": outsideTab, "url": "https://example.com/next"])
-        guard outsideRead.content == "Example page text", outsideRead.elements.isEmpty, await service.activeBridgeServer() != nil,
-              (outsideClick["error"] as? String)?.contains("local test pages") == true,
-              (outsideNav["error"] as? String)?.contains("local test pages") == true else {
-            throw Failure("Uncovered site handling failed: read=\(outsideRead.content) click=\(outsideClick) nav=\(outsideNav)")
+        // A site Chrome does not grant the extension keeps the normal read path
+        // while the bridge is connected; actions there are refused with a reason.
+        guard let uncovered = controller.announcements.first(where: { $0.url.hasPrefix(uncoveredBase) }) else {
+            throw Failure("The restricted-site tab was not announced.")
         }
-        pass("Bridge coverage: with the bridge connected, a site outside the extension's permissions is still read via the normal path; browser actions there are refused with a clear reason.")
+        runtime.setReadResponse(id: uncovered.tabID, title: "Halo Disposable Browser Fixture", url: uncovered.url, text: "Restricted site text")
+        try await authorize(uncovered.tabID, url: uncovered.url)
+        let outsideRead = try await service.readTab(id: uncovered.tabID)
+        let outsideClick = try await run("click_browser_element", ["tab_id": uncovered.tabID, "element_id": "el_1_ab"])
+        let outsideScroll = try await run("scroll_browser_tab", ["tab_id": uncovered.tabID, "direction": "down"])
+        guard outsideRead.content == "Restricted site text", outsideRead.elements.isEmpty, await service.activeBridgeServer() != nil,
+              (outsideClick["error"] as? String)?.contains("Site access") == true,
+              (outsideScroll["error"] as? String)?.contains("Site access") == true else {
+            throw Failure("Restricted-site handling failed: read=\(outsideRead.content) click=\(outsideClick) scroll=\(outsideScroll)")
+        }
+        pass("Site access: on a site Chrome withholds from the extension, Halo still reads via the normal path and refuses actions, pointing to Chrome's Site access setting.")
 
         // 5B.4. Sensitive-action policy: blocked families, ordinary form
         // submission, and following links.
@@ -952,6 +976,53 @@ extension NativeChecks {
             throw Failure("Cross-site link failed: \(leftSite) preview=\(String(describing: approvals.first))")
         }
         pass("5B.4 cross-site link: approval warned it leaves the site; followed; access to the tab ended.")
+
+        // Real-page robustness: shadow DOM and crowded pages.
+        func openFixture(_ path: String, title: String) async throws {
+            let before = await {
+                guard let r = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "performance.timeOrigin", "returnByValue": true]),
+                      let v = (r["result"] as? [String: Any])?["value"] as? Double else { return 0.0 }
+                return v
+            }()
+            try await devtoolsC.call(pageC, "Page.navigate", ["url": base + path])
+            _ = try await waitUntil("\(path) to load", timeout: 10) {
+                guard let r = try? await devtoolsC.call(pageC, "Runtime.evaluate",
+                          ["expression": "performance.timeOrigin + '|' + document.readyState", "returnByValue": true]),
+                      let v = (r["result"] as? [String: Any])?["value"] as? String else { return false }
+                let parts = v.split(separator: "|")
+                return parts.count == 2 && Double(parts[0]) != before && parts[1] == "complete"
+            }
+            try await authorize(tabC, url: base + path, title: title)
+            _ = try await readUntil("\(path) read", id: tabC) { $0.title == title }
+        }
+
+        try await openFixture("/shadow", title: "Halo Shadow Fixture")
+        map = try await elements()
+        guard map["Shadow action"]?["clickable"] as? Bool == true, map["Shadow field"]?["typable"] as? Bool == true else {
+            throw Failure("Shadow DOM controls were not observed: \(map.keys.sorted())")
+        }
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        let shadowClick = try await click(try elementID(map, "Shadow action"))
+        let shadowType = try await type(try elementID(map, "Shadow field"), "inside shadow")
+        map = try await elements()
+        guard shadowClick["verified"] as? Bool == true, shadowType["verified"] as? Bool == true,
+              map["Shadow clicks: 1"] != nil, map["Shadow field length: 13"] != nil else {
+            throw Failure("Shadow DOM actions failed: \(shadowClick) \(shadowType) page=\(map.keys.sorted())")
+        }
+        pass("Shadow DOM: controls inside an open shadow root observed; genuine click and typing landed and were verified (deep hit test, composed path, deep focus).")
+
+        try await openFixture("/crowded", title: "Halo Crowded Fixture")
+        let crowdedRead = try await run("read_browser_tab", ["tab_id": tabC])
+        let crowdedElements = crowdedRead["elements"] as? [[String: Any]] ?? []
+        let crowdedLabels = crowdedElements.compactMap { $0["label"] as? String }
+        guard crowdedElements.count <= 200, crowdedLabels.contains("Target action"),
+              crowdedElements.first(where: { $0["label"] as? String == "Target action" })?["clickable"] as? Bool == true,
+              !crowdedLabels.contains(where: { $0.hasPrefix("Hidden control") }),
+              let firstOffscreen = crowdedLabels.firstIndex(where: { $0.hasPrefix("Below fold") }),
+              let target = crowdedLabels.firstIndex(of: "Target action"), target < firstOffscreen else {
+            throw Failure("Crowded page prioritisation failed: \(crowdedElements.count) elements, first labels \(crowdedLabels.prefix(6))")
+        }
+        pass("Crowded page: hidden controls skipped, on-screen controls listed first within the 200-element limit.")
 
         // 13. Disable: no manifest, session, socket, or helper may remain.
         let finalSession = await service.activeBridgeServer()?.directoryURL
@@ -1255,10 +1326,17 @@ extension NativeChecks {
             (element("a", kind: "link", destination: "javascript:alert(1)"), nil),
             (element("a", kind: "button", actionable: true), nil),
             (element("div", kind: "link", destination: "https://example.com/"), nil),
-            (element("button", kind: nil, reason: "payment", actionable: true), nil)
+            (element("button", kind: nil, reason: "payment", actionable: true), nil),
+            (element("button", kind: "submit", destination: "http://127.0.0.1:9999/forms"), nil),
+            (element("button", kind: "submit", destination: "https://127.0.0.1/forms"), nil)
         ]
-        for (index, (candidate, expected)) in kindCases.enumerated() where ChromeBrowserService.clickKind(candidate) != expected {
-            throw Failure("Click policy case \(index) classified as \(String(describing: ChromeBrowserService.clickKind(candidate))), expected \(String(describing: expected)).")
+        let page = "http://127.0.0.1/forms"
+        for (index, (candidate, expected)) in kindCases.enumerated() where ChromeBrowserService.clickKind(candidate, pageURL: page) != expected {
+            throw Failure("Click policy case \(index) classified as \(String(describing: ChromeBrowserService.clickKind(candidate, pageURL: page))), expected \(String(describing: expected)).")
+        }
+        guard ChromeBrowserService.clickKind(element("button", kind: "submit", destination: "https://www.youtube.com/results?search_query=x"),
+                                             pageURL: "https://www.youtube.com/") == .submit else {
+            throw Failure("A same-origin submission on a real site was not allowed.")
         }
         func observationRejected(_ candidate: ObservedDOMElement) -> Bool {
             let response = BridgeResponse(requestID: "obs", sessionNonce: nonce, success: true,
@@ -1297,9 +1375,10 @@ extension NativeChecks {
         try refuses("requested browser not running") { try SystemBrowserRuntime.choose(from: [chrome], requested: "com.brave.Browser", lastActive: nil) }
         try refuses("no browser") { try SystemBrowserRuntime.choose(from: [finder], requested: nil, lastActive: nil) }
 
-        guard ChromeBrowserService.bridgeCovers("http://127.0.0.1:8080/a"), ChromeBrowserService.bridgeCovers("http://localhost/x"),
-              !ChromeBrowserService.bridgeCovers("https://127.0.0.1/a"), !ChromeBrowserService.bridgeCovers("https://example.com/"),
-              !ChromeBrowserService.bridgeCovers("http://127.0.0.1.evil.com/") else {
+        guard ChromeBrowserService.bridgeCovers("http://127.0.0.1:8080/a"), ChromeBrowserService.bridgeCovers("https://www.youtube.com/"),
+              ChromeBrowserService.bridgeCovers("https://example.com/x?y=1"),
+              !ChromeBrowserService.bridgeCovers("chrome://settings"), !ChromeBrowserService.bridgeCovers("file:///etc/passwd"),
+              !ChromeBrowserService.bridgeCovers("ftp://example.com/") else {
             throw Failure("Bridge coverage matched the wrong addresses.")
         }
         let manifestURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -1308,6 +1387,6 @@ extension NativeChecks {
               let hosts = manifest["host_permissions"] as? [String], Set(hosts) == Set(ChromeBrowserService.bridgeHostPermissions) else {
             throw Failure("Bridge coverage list does not match the extension manifest's host_permissions.")
         }
-        print("PASS: Browser selection and bridge coverage: one browser or the most recently used one is chosen, ambiguous or duplicate browsers are refused, and the bridge covers exactly the extension's host permissions.")
+        print("PASS: Browser selection and bridge coverage: one browser or the most recently used one is chosen, ambiguous or duplicate browsers are refused, and the bridge covers exactly the extension's host permissions (all http and https sites).")
     }
 }

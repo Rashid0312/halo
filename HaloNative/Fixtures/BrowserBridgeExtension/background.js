@@ -41,6 +41,18 @@ function scheduleReconnect() {
   reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000);
 }
 
+// Site access is whatever Chrome currently grants this extension: all http(s)
+// sites by default, narrowed if the user restricts "Site access" in Chrome.
+async function hasSiteAccess(url) {
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return false;
+    return await chrome.permissions.contains({ origins: [parsed.origin + "/*"] });
+  } catch (_) {
+    return false;
+  }
+}
+
 function connectToNativeHost() {
   if (typeof chrome.extension !== "undefined" && chrome.extension.inIncognitoContext) {
     console.error("[HaloBridge] Incognito context rejected.");
@@ -104,9 +116,11 @@ async function handleHostMessage(msg) {
       handshake: response
     });
     const tabs = await chrome.tabs.query({});
+    let announced = 0;
     for (const tab of tabs) {
       const url = tab.url || "";
-      if (tab.incognito || (!url.startsWith("http://127.0.0.1") && !url.startsWith("http://localhost"))) continue;
+      if (tab.incognito || !(url.startsWith("http://") || url.startsWith("https://"))) continue;
+      if (++announced > 100) break;
       let domain = "";
       try { domain = new URL(url).hostname.toLowerCase(); } catch (_) { continue; }
       nativePort.postMessage({
@@ -151,8 +165,8 @@ async function handleHostMessage(msg) {
 
       // Check URL bounds (fixture restricted to loopback)
       const currentURL = tab.url || "";
-      if (!currentURL.startsWith("http://127.0.0.1") && !currentURL.startsWith("http://localhost")) {
-        sendError(requestID, sessionNonce, "tabNotAuthorized", "Host permission restricted to loopback fixture");
+      if (!(await hasSiteAccess(currentURL))) {
+        sendError(requestID, sessionNonce, "hostNotGranted", "The extension does not have access to this site");
         return;
       }
 
@@ -270,8 +284,8 @@ async function handleClick(msg, requestID, sessionNonce) {
       sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before the click");
       return;
     }
-    if (!target.url.startsWith("http://127.0.0.1") && !target.url.startsWith("http://localhost")) {
-      sendError(requestID, sessionNonce, "tabNotAuthorized", "Host permission restricted to loopback fixture");
+    if (!(await hasSiteAccess(target.url))) {
+      sendError(requestID, sessionNonce, "hostNotGranted", "The extension does not have access to this site");
       return;
     }
   } catch (err) {
@@ -363,8 +377,8 @@ async function handleType(msg, requestID, sessionNonce) {
       sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before typing");
       return;
     }
-    if (!target.url.startsWith("http://127.0.0.1") && !target.url.startsWith("http://localhost")) {
-      sendError(requestID, sessionNonce, "tabNotAuthorized", "Host permission restricted to loopback fixture");
+    if (!(await hasSiteAccess(target.url))) {
+      sendError(requestID, sessionNonce, "hostNotGranted", "The extension does not have access to this site");
       return;
     }
   } catch (err) {
@@ -427,6 +441,10 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
   try {
     if (!tabContexts.has(tabID) || !(await unchanged())) {
       sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before the action");
+      return;
+    }
+    if (!(await hasSiteAccess(target.url))) {
+      sendError(requestID, sessionNonce, "hostNotGranted", "The extension does not have access to this site");
       return;
     }
   } catch (err) {

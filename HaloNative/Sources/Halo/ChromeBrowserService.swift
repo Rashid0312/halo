@@ -252,6 +252,8 @@ public actor ChromeBrowserService {
     private var bridgeValidator: BridgeSessionValidator? = nil
     private var bridgeGenerations: [AuthorizedTabKey: UInt64] = [:]
     private var bridgeReadInFlight = false
+    /// Origins where Chrome withheld the extension's access at the last read.
+    private var siteAccessWithheld = Set<String>()
     /// Latest bridge observation per tab, bound to the document generation it came from.
     private var bridgeElements: [AuthorizedTabKey: (generation: UInt64, elements: [String: ObservedDOMElement])] = [:]
     /// Text Halo typed per document, shown in submit approvals. Values the user
@@ -549,20 +551,30 @@ public actor ChromeBrowserService {
 
     /// Phase 5B.1 policy, enforced by Halo independently of the extension's flag:
     /// plain, enabled, unprotected buttons only.
-    static func isClickable(_ element: ObservedDOMElement) -> Bool {
-        clickKind(element) != nil
+    static func isClickable(_ element: ObservedDOMElement, pageURL: String) -> Bool {
+        clickKind(element, pageURL: pageURL) != nil
+    }
+
+    /// Scheme, host, and port of an http(s) address.
+    static func origin(of url: String) -> String? {
+        guard let components = URLComponents(string: url), let scheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(scheme), let host = components.host?.lowercased() else { return nil }
+        let port = components.port ?? (scheme == "https" ? 443 : 80)
+        return "\(scheme)://\(host):\(port)"
     }
 
     /// Phase 5B.4: Halo's own check of what a click would do. The extension's
     /// classification must agree with the element's tag and destination.
-    static func clickKind(_ element: ObservedDOMElement) -> BridgeClickKind? {
+    static func clickKind(_ element: ObservedDOMElement, pageURL: String) -> BridgeClickKind? {
         guard element.isEnabled, !element.isProtected, element.blockedReason == nil else { return nil }
         switch element.actionKind.flatMap(BridgeClickKind.init(rawValue:)) {
         case .button?:
             return element.isActionable == true && (element.tagName == "button" || element.role == "button") ? .button : nil
         case .submit?:
+            // Ordinary submissions stay on the page's own origin.
             guard ["button", "input"].contains(element.tagName), let destination = element.destinationURL,
-                  navigationRefusal(destination) == nil, bridgeCovers(destination) else { return nil }
+                  navigationRefusal(destination) == nil, let destinationOrigin = origin(of: destination),
+                  destinationOrigin == origin(of: pageURL) else { return nil }
             return .submit
         case .link?:
             guard element.tagName == "a", let destination = element.destinationURL, navigationRefusal(destination) == nil else { return nil }
@@ -600,7 +612,7 @@ public actor ChromeBrowserService {
     /// The development extension's `host_permissions` (Fixtures manifest). The
     /// bridge can only see these sites; every other site is read through the
     /// AppleScript path, and browser actions are unavailable there.
-    static let bridgeHostPermissions = ["http://127.0.0.1/*", "http://localhost/*"]
+    static let bridgeHostPermissions = ["http://*/*", "https://*/*"]
 
     static func bridgeCovers(_ url: String) -> Bool {
         guard let components = URLComponents(string: url), let scheme = components.scheme?.lowercased(),
@@ -610,7 +622,13 @@ public actor ChromeBrowserService {
             let patternScheme = String(pattern[..<separator.lowerBound])
             let patternHost = pattern[separator.upperBound...].split(separator: "/").first.map(String.init) ?? ""
             let schemeMatches = patternScheme == "*" ? ["http", "https"].contains(scheme) : patternScheme == scheme
-            return schemeMatches && patternHost == host
+            return schemeMatches && (patternHost == "*" || patternHost == host)
+        }
+    }
+
+    private func requireSiteAccess(_ url: String) throws {
+        guard let origin = Self.origin(of: url), !siteAccessWithheld.contains(origin) else {
+            throw InteractionError("Chrome does not give the Halo extension access to this site, so Halo can read it but not act on it. Allow the site under the extension's Site access in Chrome to enable actions.")
         }
     }
 
@@ -621,7 +639,7 @@ public actor ChromeBrowserService {
             throw InteractionError("Tab \(tabID) is not authorized for this browser session.")
         }
         guard Self.bridgeCovers(record.url) else {
-            throw InteractionError("Browser actions are only available on sites the Halo browser extension covers (currently local test pages on 127.0.0.1 and localhost). Reading this tab still works.")
+            throw InteractionError("Browser actions are only available on http and https pages. Reading this tab still works.")
         }
     }
 
@@ -751,12 +769,36 @@ public actor ChromeBrowserService {
                 throw InteractionError("Browser tab access changed while the operation was in flight.")
             }
             guard resp.success else {
+                if resp.error?.code == .hostNotGranted { throw SiteAccessWithheld() }
                 throw InteractionError(resp.error?.message ?? "The browser bridge refused the operation.")
             }
             return (resp, tabIdent, record)
         } catch {
             if let interError = error as? InteractionError { throw interError }
+            if error is SiteAccessWithheld { throw error }
             throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Chrome withholds the extension's access to this site (user-restricted).
+    struct SiteAccessWithheld: Error {}
+
+    /// Observes through the bridge, or returns nil when Chrome withholds the
+    /// extension's access to this site so the caller falls back to AppleScript.
+    private func bridgeObservation(id: Int, key: AuthorizedTabKey, context: BrowserContext,
+                                   server: BridgeIPCServer, validator: BridgeSessionValidator) async throws
+        -> (BridgeResponse, TabGenerationIdentity, AuthorizedTabRecord)? {
+        let origin = authorizedTabs[key].flatMap { Self.origin(of: $0.url) } ?? ""
+        do {
+            let result = try await bridgeExchange(id: id, key: key, context: context, server: server, validator: validator) {
+                BridgeRequest(requestID: $1, sessionNonce: $2, type: .observeTab, targetTab: $0)
+            }
+            siteAccessWithheld.remove(origin)
+            return result
+        } catch is SiteAccessWithheld {
+            siteAccessWithheld.insert(origin)
+            bridgeElements.removeValue(forKey: key)
+            return nil
         }
     }
 
@@ -768,6 +810,7 @@ public actor ChromeBrowserService {
         }
         try requireBridgeCoverage(tabID: tabID, browserAppID: browserAppID)
         let content = try await readTab(id: tabID, browserAppID: browserAppID)
+        try requireSiteAccess(content.url)
         let context = try browserContext(browserAppID)
         let key = tabKey(tabID, context: context)
         guard let observed = bridgeElements[key], let element = observed.elements[elementID] else {
@@ -780,7 +823,7 @@ public actor ChromeBrowserService {
             throw InteractionError("That element is not a scrollable region. Omit element_id to scroll the page.")
         case .click where element.blockedReason != nil:
             throw InteractionError("Blocked: \(Self.blockedReasonText(element.blockedReason!)). Halo does not perform this kind of action yet.")
-        case .click where !Self.isClickable(element):
+        case .click where !Self.isClickable(element, pageURL: content.url):
             throw InteractionError("This element cannot be clicked. Plain buttons, ordinary same-site form submissions, and same-tab links can; protected, disabled, and hidden controls cannot.")
         case .type where !Self.isTypable(element):
             throw InteractionError("Only enabled plain text fields can be typed into. Password, one-time-code, payment, read-only, and disabled fields are blocked.")
@@ -792,7 +835,7 @@ public actor ChromeBrowserService {
                                           label: element.label, key: key, generation: observed.generation)
         target.options = element.options ?? []
         if action == .click {
-            target.clickKind = Self.clickKind(element)
+            target.clickKind = Self.clickKind(element, pageURL: content.url)
             target.destination = element.destinationURL
             target.formFields = element.formFields ?? []
         }
@@ -807,6 +850,7 @@ public actor ChromeBrowserService {
         }
         try requireBridgeCoverage(tabID: tabID, browserAppID: browserAppID)
         let content = try await readTab(id: tabID, browserAppID: browserAppID)
+        try requireSiteAccess(content.url)
         let context = try browserContext(browserAppID)
         let key = tabKey(tabID, context: context)
         guard let observed = bridgeElements[key] else { throw InteractionError("Tab \(tabID) has no current observation.") }
@@ -982,10 +1026,8 @@ public actor ChromeBrowserService {
         // 1. If an authenticated Native Messaging bridge is connected, route observation through the bridge:
         // Only sites the extension can reach go through the bridge; others keep
         // the AppleScript read path, so enabling the bridge never breaks reading.
-        if let server = bridgeServer, let validator = bridgeValidator, Self.bridgeCovers(record.url), await server.isConnected {
-            let (resp, tabIdent, record) = try await bridgeExchange(id: id, key: key, context: context, server: server, validator: validator) {
-                BridgeRequest(requestID: $1, sessionNonce: $2, type: .observeTab, targetTab: $0)
-            }
+        if let server = bridgeServer, let validator = bridgeValidator, Self.bridgeCovers(record.url), await server.isConnected,
+           let (resp, tabIdent, record) = try await bridgeObservation(id: id, key: key, context: context, server: server, validator: validator) {
             guard let obs = resp.observation, obs.tab == tabIdent else {
                 throw InteractionError(resp.error?.message ?? "Bridge observation failed.")
             }
@@ -1008,10 +1050,10 @@ public actor ChromeBrowserService {
             content.elements = obs.elements.map {
                 var element = BrowserTabElement(id: $0.elementID, role: $0.role, tagName: $0.tagName,
                                                 label: $0.isProtected ? "(protected)" : String($0.label.prefix(200)),
-                                                clickable: Self.isClickable($0), typable: Self.isTypable($0))
+                                                clickable: Self.isClickable($0, pageURL: obs.tab.url), typable: Self.isTypable($0))
                 element.selectable = Self.isSelectable($0)
                 element.scrollable = Self.isScrollable($0)
-                element.clickKind = Self.clickKind($0)?.rawValue
+                element.clickKind = Self.clickKind($0, pageURL: obs.tab.url)?.rawValue
                 element.blocked = $0.blockedReason.map(Self.blockedReasonText)
                 if element.selectable { element.options = $0.options ?? [] }
                 return element
