@@ -78,6 +78,7 @@ final class BrowserBridgeController {
 
     private func start() {
         guard loop == nil else { return }
+        BridgeSessionConfig.removeAbandonedSessionDirectories()
         do {
             guard FileManager.default.isExecutableFile(atPath: helperURL.path) else {
                 throw BridgeErrorDetails(code: .internalError, message: "HaloNativeHost is missing from the app bundle.")

@@ -69,6 +69,29 @@ public struct BridgeSessionConfig: Sendable, Codable, Equatable {
             .appendingPathComponent(sessionFileName, isDirectory: false)
     }
 
+    /// Removes session directories left by a Halo process that exited without
+    /// cleanup (crash, kill, or failure exit). A directory is removed only when
+    /// its session file is unreadable or names a process that no longer exists.
+    @discardableResult
+    public static func removeAbandonedSessionDirectories() -> Int {
+        let temp = FileManager.default.temporaryDirectory
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: temp.path) else { return 0 }
+        var removed = 0
+        for entry in entries where entry.hasPrefix("hb_") {
+            let dir = temp.appendingPathComponent(entry, isDirectory: true)
+            if let data = try? Data(contentsOf: dir.appendingPathComponent(sessionFileName)),
+               let session = try? JSONDecoder().decode(BridgeSessionConfig.self, from: data) {
+                if session.hostPID == getpid() { continue }
+                if kill(session.hostPID, 0) == 0 || errno != ESRCH { continue }
+            } else if let created = (try? FileManager.default.attributesOfItem(atPath: dir.path))?[.creationDate] as? Date,
+                      Date().timeIntervalSince(created) < 60 {
+                continue // Possibly a session still being written.
+            }
+            if (try? FileManager.default.removeItem(at: dir)) != nil { removed += 1 }
+        }
+        return removed
+    }
+
     /// Creates an unguessable private directory (mode 0700) for a single session.
     public static func createUniqueSessionDirectory() throws -> URL {
         let token = BridgeSocketIO.generateRandomHex(byteCount: 8)

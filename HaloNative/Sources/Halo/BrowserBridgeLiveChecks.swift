@@ -39,7 +39,7 @@ extension NativeChecks {
     }
 
     /// Minimal Chrome DevTools Protocol client for the disposable test browser.
-    struct DevToolsClient {
+    @MainActor struct DevToolsClient {
         let port: Int
 
         static func attach(profile: URL, timeout: TimeInterval = 15) async throws -> DevToolsClient {
@@ -146,6 +146,7 @@ extension NativeChecks {
     /// user's browser, then remove those profiles.
     static func reapOrphanedTestBrowsers() async {
         let temp = FileManager.default.temporaryDirectory.path
+        BridgeSessionConfig.removeAbandonedSessionDirectories()
         for prefix in ["halo-bridge-live-", "halo-browser-probe-"] {
             let orphans = pids(matching: "user-data-dir=\(temp)/?\(prefix)")
             for pid in orphans { kill(pid, SIGTERM) }
@@ -236,6 +237,44 @@ extension NativeChecks {
             do { try await body() } catch { return error.localizedDescription }
             throw Failure("\(what) was not rejected.")
         }
+        /// Bounded wait for a page target to finish loading a document newer than
+        /// `previous` (its performance.timeOrigin), instead of a fixed delay.
+        func documentOrigin(_ page: [String: Any]) async -> (origin: Double, complete: Bool)? {
+            guard let result = try? await devtools.call(page, "Runtime.evaluate",
+                      ["expression": "performance.timeOrigin + '|' + document.readyState", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? String else { return nil }
+            let parts = value.split(separator: "|")
+            guard parts.count == 2, let origin = Double(parts[0]) else { return nil }
+            return (origin, parts[1] == "complete")
+        }
+        func navigate(_ page: [String: Any], _ method: String, _ params: [String: Any] = [:]) async throws {
+            let before = await documentOrigin(page)?.origin ?? 0
+            try await devtools.call(page, method, params)
+            _ = try await waitUntil("\(method) to load a new document", timeout: 10) {
+                guard let now = await documentOrigin(page) else { return false }
+                return now.origin != before && now.complete
+            }
+        }
+        /// Polls Halo's production read until it satisfies `condition`.
+        func readUntil(_ what: String, _ condition: @escaping (BrowserTabContent) -> Bool) async throws -> BrowserTabContent {
+            var latest: BrowserTabContent?
+            _ = try await waitUntil(what, timeout: 10) {
+                guard let content = try? await service.readTab(id: tabA), condition(content) else { return false }
+                latest = content
+                return true
+            }
+            return latest!
+        }
+        /// Polls until Halo rejects reads of the tab and no longer lists it authorized.
+        func rejectedEventually(_ what: String, id: Int) async throws -> String {
+            var message = ""
+            _ = try await waitUntil(what, timeout: 10) {
+                do { _ = try await service.readTab(id: id); return false }
+                catch { message = error.localizedDescription }
+                return await !service.isAuthorized(tabID: id)
+            }
+            return message
+        }
         /// Sends an observe request for a deliberately stale generation directly over
         /// the authenticated bridge and returns the extension's error code.
         func staleGenerationCode(tabID: Int, generation: UInt64, url: String) async throws -> String {
@@ -282,20 +321,16 @@ extension NativeChecks {
         }
 
         // 2. Same-site navigation advances the generation; the old one is rejected.
-        try await devtools.call(try await devtools.page(urlContaining: "/halo-test"), "Page.navigate", ["url": base + "/large"])
-        try await Task.sleep(for: .milliseconds(800))
-        let afterNav = try await service.readTab(id: tabA)
-        guard afterNav.url.hasSuffix("/large"), afterNav.content.contains("Fixture control") else {
-            throw Failure("Read after same-site navigation did not follow the new document.")
-        }
+        let pageA = try await devtools.page(urlContaining: "/halo-test")
+        try await navigate(pageA, "Page.navigate", ["url": base + "/large"])
+        _ = try await readUntil("read of the navigated document") { $0.url.hasSuffix("/large") && $0.content.contains("Fixture control") }
         let navCode = try await staleGenerationCode(tabID: tabA, generation: 1, url: base + "/large")
         guard navCode.localizedCaseInsensitiveContains("stale") else { throw Failure("Pre-navigation generation returned \(navCode).") }
         pass("Navigation: authorization followed same-site navigation to the new document; pre-navigation generation rejected (\(navCode)).")
 
         // 3. Reload is a new document generation too.
-        try await devtools.call(try await devtools.page(urlContaining: "/large"), "Page.reload")
-        try await Task.sleep(for: .milliseconds(800))
-        _ = try await service.readTab(id: tabA)
+        try await navigate(pageA, "Page.reload")
+        _ = try await readUntil("read of the reloaded document") { $0.url.hasSuffix("/large") }
         let reloadCode = try await staleGenerationCode(tabID: tabA, generation: 2, url: base + "/large")
         guard reloadCode.localizedCaseInsensitiveContains("stale") else { throw Failure("Pre-reload generation returned \(reloadCode).") }
         pass("Reload: new document generation required; pre-reload generation rejected (\(reloadCode)).")
@@ -351,25 +386,22 @@ extension NativeChecks {
         pass("Cancellation during observation: abandoned in-flight response discarded (caught after \(cancelAttempts) attempt(s)); next read correlated correctly.")
 
         // 7. Cross-domain navigation revokes.
-        try await devtools.call(try await devtools.page(urlContaining: "/large"), "Page.navigate",
-                                ["url": "http://localhost:\(fixture.port)/halo-test"])
-        try await Task.sleep(for: .milliseconds(800))
-        let crossMessage = try await expectRejected("Read after cross-domain navigation") { _ = try await service.readTab(id: tabA) }
-        guard await !service.isAuthorized(tabID: tabA) else { throw Failure("Cross-domain navigation kept the authorization.") }
+        try await navigate(pageA, "Page.navigate", ["url": "http://localhost:\(fixture.port)/halo-test"])
+        let crossMessage = try await rejectedEventually("cross-domain navigation to revoke authorization", id: tabA)
         pass("Cross-domain navigation revoked authorization (\(crossMessage)).")
 
         // 8. Tab closure.
-        try await devtools.call(try await devtools.page(urlContaining: "localhost"), "Page.navigate", ["url": base + "/halo-test"])
-        try await Task.sleep(for: .milliseconds(800))
+        try await navigate(pageA, "Page.navigate", ["url": base + "/halo-test"])
         try await authorize(tabA, url: base + "/halo-test")
-        _ = try await service.readTab(id: tabA)
+        _ = try await readUntil("read after returning to the loopback page") { $0.url.hasSuffix("/halo-test") }
         try await devtools.openTab(base + "/page-b")
-        try await Task.sleep(for: .milliseconds(800))
-        try await devtools.close(page: try await devtools.page(urlContaining: "/halo-test"))
-        try await Task.sleep(for: .milliseconds(500))
+        _ = try await waitUntil("second tab to load", timeout: 10) {
+            guard let page = try? await devtools.page(urlContaining: "/page-b") else { return false }
+            return await documentOrigin(page)?.complete == true
+        }
+        try await devtools.close(page: pageA)
         runtime.removeTab(id: tabA)
-        _ = try await expectRejected("Read of closed tab") { _ = try await service.readTab(id: tabA) }
-        guard await !service.isAuthorized(tabID: tabA) else { throw Failure("Closed tab kept its authorization.") }
+        _ = try await rejectedEventually("tab closure to revoke authorization", id: tabA)
         pass("Tab closure removed authorization and rejected further reads.")
 
         // 9. Helper crash and warm reconnection.
@@ -486,4 +518,91 @@ extension NativeChecks {
 
 extension NativeChecks.AnnouncedTabsRuntime {
     var pidForChecks: pid_t { (try? resolveBrowserContext(nil).pid) ?? 0 }
+}
+
+extension NativeChecks {
+    /// Final Phase 5A security validation: a stolen session token is not enough to
+    /// impersonate the helper, and manifest installation never overwrites a
+    /// manifest it does not own while rolling back its own partial writes.
+    static func runBridgeSecurityValidationChecks(helperBinaryURL: URL, pinnedExtensionID: String) async throws {
+        // 1. Impostor process holding the real auth token.
+        let server = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+        let sessionData = try Data(contentsOf: server.directoryURL.appendingPathComponent(BridgeSessionConfig.sessionFileName))
+        let session = try JSONDecoder().decode(BridgeSessionConfig.self, from: sessionData)
+        let impostor = Process()
+        impostor.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        impostor.arguments = ["-I", "-c", """
+            import json, os, socket, struct, sys, time
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(sys.argv[1])
+            body = json.dumps({"authToken": sys.argv[2], "clientPID": os.getpid(), "origin": sys.argv[3]}).encode()
+            s.sendall(struct.pack("<I", len(body)) + body)
+            time.sleep(3)
+            """, session.socketPath, session.authToken, "chrome-extension://\(pinnedExtensionID)/"]
+        impostor.standardOutput = FileHandle.nullDevice
+        impostor.standardError = FileHandle.nullDevice
+        try impostor.run()
+        var impostorRejected = false
+        do {
+            try await server.acceptConnection(timeoutSeconds: 10)
+        } catch let error as BridgeErrorDetails where error.code == .authenticationFailed {
+            impostorRejected = true
+        } catch {}
+        let impostorAttached = await server.isConnected
+        terminateProcessBounded(impostor)
+        await server.close()
+        guard impostorRejected, !impostorAttached else {
+            throw Failure("Security validation: a non-Halo process holding the real session token was not rejected.")
+        }
+
+        // 2. Installer refuses a foreign manifest and rolls back its own writes.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("halo-installer-check-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dirs = ["first", "foreign", "third"].map { root.appendingPathComponent($0, isDirectory: true) }
+        for dir in dirs { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        let hostName = BrowserBridgeController.hostName
+        let foreignFile = dirs[1].appendingPathComponent("\(hostName).json")
+        let foreignBytes = Data(#"{"name":"app.halo.browser_bridge","path":"/usr/bin/true","type":"stdio","allowed_origins":["chrome-extension://someoneelse/"]}"#.utf8)
+        try foreignBytes.write(to: foreignFile)
+        let origins = ["chrome-extension://\(pinnedExtensionID)/"]
+        var refused = false
+        do {
+            _ = try NativeMessagingInstaller.install(hostName: hostName, launcherPath: "/bin/sh", allowedOrigins: origins, targetDirectories: dirs)
+        } catch {
+            refused = true
+        }
+        let leftovers = [dirs[0], dirs[2]].filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("\(hostName).json").path) }
+        guard refused, leftovers.isEmpty, (try? Data(contentsOf: foreignFile)) == foreignBytes else {
+            throw Failure("Security validation: installer overwrote a foreign manifest or left partial manifests behind.")
+        }
+
+        // 3. Abandoned Halo manifests are recoverable; live ones are not.
+        let abandonedDir = root.appendingPathComponent("abandoned", isDirectory: true)
+        try FileManager.default.createDirectory(at: abandonedDir, withIntermediateDirectories: true)
+        let deadLauncher = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hb_\(BridgeSocketIO.generateRandomHex(byteCount: 8))/halo_host_launcher.sh")
+        let abandoned = try JSONSerialization.data(withJSONObject: ["name": hostName, "path": deadLauncher.path, "type": "stdio", "allowed_origins": origins])
+        try abandoned.write(to: abandonedDir.appendingPathComponent("\(hostName).json"))
+        let replaced = try NativeMessagingInstaller.install(hostName: hostName, launcherPath: "/bin/sh", allowedOrigins: origins, targetDirectories: [abandonedDir])
+        NativeMessagingInstaller.uninstall(manifestURLs: replaced)
+
+        let liveServer = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+        defer { Task { await liveServer.close() } }
+        let liveDir = root.appendingPathComponent("live", isDirectory: true)
+        let liveBytes = try JSONSerialization.data(withJSONObject: ["name": hostName, "path": liveServer.launcherURL!.path, "type": "stdio", "allowed_origins": origins])
+        try FileManager.default.createDirectory(at: liveDir, withIntermediateDirectories: true)
+        try liveBytes.write(to: liveDir.appendingPathComponent("\(hostName).json"))
+        var liveRefused = false
+        do {
+            _ = try NativeMessagingInstaller.install(hostName: hostName, launcherPath: "/bin/sh", allowedOrigins: origins, targetDirectories: [liveDir])
+        } catch {
+            liveRefused = true
+        }
+        guard replaced.count == 1, liveRefused,
+              (try? Data(contentsOf: liveDir.appendingPathComponent("\(hostName).json"))) == liveBytes else {
+            throw Failure("Security validation: abandoned-manifest recovery replaced a live session or failed to recover a dead one.")
+        }
+
+        print("PASS: Phase 5A security validation: stolen session token rejected for a non-Halo process; installer refused a foreign manifest and rolled back partial writes; only abandoned Halo manifests are recoverable.")
+    }
 }

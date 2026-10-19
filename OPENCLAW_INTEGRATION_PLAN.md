@@ -49,7 +49,7 @@ The integration will not initially import:
 | 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Complete | Exact-target execution, approvals, secure-field protection, and post-action verification pass across both drivers |
 | 4. Chrome tab integration | Complete | Browser-session authorization, approval revalidation, injection-safe metadata framing, and in-flight killswitch checks pass |
-| 5. Browser actions | In progress: read-only bridge slice | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added |
+| 5. Browser actions | In progress: 5A read-only bridge complete; 5B (mutations) not started | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
 | 6. Legacy automation retirement | Not started | Replaced Halo implementations are removed only after parity and rollback validation |
 | 7. Release hardening | Not started | Security, permissions, signing, notarization, clean-install, and recovery checks pass |
 
@@ -188,9 +188,9 @@ Choose using measured reliability, shipped size, update burden, attack surface, 
 
 - **Architecture decision:** Adopted Chromium Native Messaging extension plus a dedicated signed Swift helper as the candidate production architecture (`BrowserBridgeProtocol`). CDP remote-debugging port is rejected for user signed-in tabs due to ambient credential exposure, cross-tab privilege escalation, and lack of per-tab security boundaries. AppleScript-injected JavaScript remains strictly read-only. Extension permissions, incognito rejection, helper registration/signature verification, and authenticated helper-to-Halo IPC remain release gates.
 - **Transport model foundation (COMPLETE; production transport still blocked):** `BrowserBridgeProtocol` defines bounded `Codable`/`Sendable` models, Native Messaging length framing, pinned-origin channel binding, full browser-session/tab/document identities, correlated request/response validation, strict navigation invalidation, and zero mutation commands. Validated by deterministic `browserBridgeProtocolChecks()`.
-- **Browser mutation gate (BLOCKED / FUTURE WORK):** Browser mutation tools (click, type, select, submit, navigate, upload, download) remain strictly blocked and are not implemented. Production Native Messaging host registration, extension installation, and background transport loops remain inert until downstream verification passes.
+- **Browser mutation gate (BLOCKED / FUTURE WORK):** Browser mutation tools (click, type, select, submit, navigate, upload, download) remain strictly blocked and are not implemented. Native Messaging host registration is opt-in (Settings → Mac Access → Browser bridge, off by default) and removed when disabled or on quit. The extension remains a loopback-only development fixture.
 
-### Phase 5A — Real read-only bridge vertical slice (in progress)
+### Phase 5A — Real read-only bridge vertical slice (complete, 2026-10-19)
 
 The next milestone is not another transport simulation and not browser mutation. It is one real, end-to-end observation through Chromium Native Messaging on a disposable local page, with Halo still owning authorization and delivery policy.
 
@@ -216,14 +216,28 @@ The next milestone is not another transport simulation and not browser mutation.
 
 #### Phase 5A acceptance criteria
 
-- [ ] A real Chromium process launches the dedicated helper through Native Messaging and completes the pinned-origin handshake. (BLOCKED: Official consumer Google Chrome ignores '--load-extension' per extension_service.cc:423; requires Chrome for Testing, Chromium, or Brave).
-- [ ] One explicitly approved, non-incognito loopback tab returns a bounded semantic observation to Halo through the complete transport. (BLOCKED: awaiting compatible Chromium fixture executable).
-- [x] An unauthorized tab, colliding tab ID from another browser/session, incognito context, unknown extension origin, stale generation, and oversized/malformed frame all fail closed. (PASS: all 17 required adversarial checks pass deterministically in `runAll17AdversarialBridgeChecks`).
-- [ ] Navigation, close, browser restart, pause, revoke, helper crash, and cancellation suppress in-flight content after the invalidation point. (PARTIAL: deterministic validator and helper-lifecycle checks pass; real extension lifecycle delivery remains blocked on the live fixture).
-- [x] Installation is explicit and reversible; tests leave no manifest, extension, browser profile, helper process, socket, or temporary artifact behind. (PASS: verified zero residual helper processes, sockets, or temp files).
-- [ ] Latency and idle-resource results are recorded here with sample counts, p50, p95, maximum, command, machine/build context, and pass/fail against each gate. (PARTIAL: helper/IPC and synthetic 50-element transport measurements pass; real browser DOM observation and first-visible-feedback latency remain unmeasured).
-- [x] Production build, core checks, signing, browser checks, default legacy checks, opt-in Peekaboo checks, and `git diff --check` pass. (PASS: exact exit codes 0 across all verification commands).
-- [x] No browser mutation message, tool, JavaScript evaluator, CDP debugging port, credential API, or broad permission is introduced. (PASS: strict read-only observation slice).
+- [x] A real Chromium process launches the dedicated helper through Native Messaging and completes the pinned-origin handshake. (PASS: Chromium 158 snapshot with the manifest in the disposable profile's `NativeMessagingHosts/`; consumer Chrome ignores `--load-extension`.)
+- [x] One explicitly approved, non-incognito loopback tab returns a bounded semantic observation to Halo through the complete transport. (PASS: production `ChromeBrowserService.readTab` over the bridge, `--check-browser-bridge-live` stage 1.)
+- [x] An unauthorized tab, colliding tab ID from another browser/session, incognito context, unknown extension origin, stale generation, and oversized/malformed frame all fail closed. (PASS: 17 adversarial checks; Case 10 now requires an explicit authentication rejection; a non-Halo process holding the real session token is rejected.)
+- [x] Navigation, close, browser restart, pause, revoke, helper crash, and cancellation suppress in-flight content after the invalidation point. (PASS: real-Chromium stages 2–12; pause, revoke, and cancel are each proven to land while a read is in flight.)
+- [x] Installation is explicit and reversible; tests leave no manifest, extension, browser profile, helper process, socket, or temporary artifact behind. (PASS: opt-in toggle; installer refuses foreign manifests and rolls back; abandoned sessions and manifests from crashed runs are swept; zero residue after back-to-back runs.)
+- [x] Latency and idle-resource results are recorded here with sample counts, p50, p95, maximum, command, machine/build context, and pass/fail against each gate. (PASS: see Phase 5A results below and design doc §16.11.)
+- [x] Production build, core checks, signing, browser checks, default legacy checks, opt-in Peekaboo checks, and `git diff --check` pass. (PASS for build, `HaloCoreChecks`, `--check-commands`, `check-signing.sh`, both browser checks, `git diff --check`. `--check-safe-actions` was not rerun: it drives the desktop and no Mac-action code changed.)
+- [x] No browser mutation message, tool, JavaScript evaluator, CDP debugging port, credential API, or broad permission is introduced. (PASS: read-only. The test harness drives its disposable Chromium over DevTools; production never opens a debugging port. `scripting` is used only to inject the read-only content script on loopback pages.)
+
+#### Phase 5A results (2026-10-19, Apple M1, macOS 26.5.1, Chromium 158.0.8113.0)
+
+| Metric | Samples | p50 | p95 | Max | Gate | Result |
+|---|---|---|---|---|---|---|
+| DOM observation via production `readTab` | 30 | 1.24 ms | 1.85 ms | 2.01 ms | p50 ≤ 300 ms, p95 ≤ 1000 ms | PASS |
+| First visible Halo activity | 10 | 0.031 ms | 0.051 ms | 0.066 ms | ≤ 500 ms | PASS |
+| Warm bridge round trip | 30 | 0.20 ms | 0.25 ms | 0.52 ms | p50 ≤ 100 ms, p95 ≤ 250 ms | PASS |
+| Helper cold start | 10 | 13.96 ms | 15.32 ms | 15.77 ms | p95 ≤ 750 ms | PASS |
+| Pause/revoke propagation | 1 | 0.02 ms | – | – | ≤ 100 ms | PASS |
+| Helper idle CPU (connected, 65 s) | 1 | 0.00% | – | – | rounds to 0.0% | PASS |
+| Helper idle RSS (connected) | 1 | 5.2 MiB | – | – | Recorded | – |
+
+Commands: `Halo --check-browser-tabs` and `Halo --check-browser-bridge-live`, built from `bash HaloNative/scripts/build-app.sh`.
 
 #### Mandatory review stop
 
@@ -487,3 +501,20 @@ Implementation boundary: Transport foundation (`BrowserBridgeProtocol.swift`) im
   - `git diff --check` (Exit code: 0)
 - **Zero Orphan Artifacts**: Zero residual helper processes, zero lingering bridge files in temporary directories.
 - **Boundaries Preserved**: Zero mutation tools, zero browser-injected JavaScript mutations, zero remote debugging ports, Halo remains sole policy/approval owner, legacy Mac driver remains default.
+
+### 2026-10-19 (Phase 5A — Completed against a real browser)
+
+- Root cause of the real-browser failure: on macOS, Chromium reads user-level native hosts from `<user-data-dir>/NativeMessagingHosts/`. The probe had written manifests into real browser profiles instead. Test manifests now live only in the disposable profile.
+- Added `BrowserBridgeController` with an opt-in settings toggle. It registers manifests for installed browsers, rotates helper credentials while waiting, runs the accept/handshake/attach loop, reconnects, revokes on helper loss, and cleans up on disable and quit.
+- Fixed production defects found by the real-browser suite:
+  - helper exited after 60 s of idle
+  - helper lingered after Halo closed the socket
+  - lifecycle events left unread desynchronized later reads
+  - cancelled reads desynchronized the stream
+  - re-approval after navigation targeted a stale generation
+  - navigation events reported `host:port`
+  - no content script on pages loaded before the extension started
+  - `clientNonce` echoed `serverNonce`
+  - crashed sessions left `hb_*` directories and manifests behind
+- Added `--check-browser-bridge-live` (13 real-Chromium stages) and Phase 5A security validation (impostor process with a stolen token, installer rollback, abandoned-manifest recovery).
+- Phase 5A is complete. Next: Phase 5B.1 (approved click), planned separately per the mandatory review stop.

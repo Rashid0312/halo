@@ -98,11 +98,12 @@ Halo adopts **Chromium Native Messaging with a pinned-origin, signed native Swif
      "path": "/Applications/Halo.app/Contents/MacOS/HaloNativeHost",
      "type": "stdio",
      "allowed_origins": [
-       "chrome-extension://knldjmfmopnpolahpmmgbagdohdnhkik/"
+       "chrome-extension://mfnoiamhnajnnieagdpagkebabpnkdmc/"
      ]
    }
    ```
    The absolute `path` is generated only during an explicit opt-in install and must be refreshed if the app moves. The browser launches a dedicated helper executable, not the GUI application binary.
+   As built in Phase 5A (§16.5), `path` points to the per-session launcher `$TMPDIR/hb_<random>/halo_host_launcher.sh`, which `exec`s the bundled helper with the session directory. Edge is not registered yet.
 3. **Code Signing**: The helper is signed and notarized with Halo. Chromium's manifest lookup does not itself verify the macOS signature, so Halo's installer/updater must verify the helper's designated requirement and Team ID before registration and use.
 
 ---
@@ -256,50 +257,123 @@ Before any mutation tool (`click_browser_element`, `type_browser_text`, `navigat
 
 ## 16. Phase 5A Engineering Specification: Real Read-Only Bridge Vertical Slice
 
-### 16.1 Dedicated Helper Executable & Packaging
-- **Target Name**: `HaloNativeHost` defined as an independent Swift executable target in `HaloNative/Package.swift`.
-- **Packaged Path**: Placed alongside the main executable in `Halo.app/Contents/MacOS/HaloNativeHost`.
-- **Development Path**: Built into `.build/release/HaloNativeHost` during build scripts and packaged into the bundle via `ditto`.
-- **Packaging Script**: Updated in `HaloNative/scripts/build-app.sh` to compile, stage, and sign `HaloNativeHost`.
+Status: **complete** (2026-10-19). Everything in this section describes the code as built and verified against a real Chromium browser.
 
-### 16.2 Code Signing & Identity
-- **Signing Identity**: Signed using the same `$SIGN_IDENTITY` (`Mercy Local Signing` or configured identity) with `--timestamp=none`.
-- **Designated Requirement**: Both `Halo.app` and `HaloNativeHost` share the same certificate leaf and team identity, satisfying the designated requirement verified by `check-signing.sh`.
-- **Chromium Native Messaging Clarification**: Chromium does NOT verify the macOS code signature of native messaging helpers; it merely executes the binary path specified in the host manifest. Therefore, code signature verification and peer identity verification are performed strictly by Halo when the helper connects.
+### 16.1 Components
+| Component | Location | Role |
+|---|---|---|
+| Protocol | `HaloNative/Sources/HaloBridge/BrowserBridgeProtocol.swift` | Bounded `Codable` envelopes, handshake, identities, validators. No mutation messages. |
+| IPC + installer | `HaloNative/Sources/HaloBridge/BrowserBridgeIPC.swift` | `BridgeIPCServer`, `BridgeIPCClient`, peer verification, `NativeMessagingInstaller`, abandoned-session sweep. |
+| Helper | `HaloNative/Sources/HaloNativeHost/main.swift` → `Halo.app/Contents/MacOS/HaloNativeHost` | Browser-launched stdio relay to Halo's socket. Signed with Halo's identity by `scripts/build-app.sh`. |
+| Controller | `HaloNative/Sources/Halo/BrowserBridgeController.swift` | Opt-in lifecycle: register, accept, handshake, attach, reconnect, tear down. |
+| Policy | `HaloNative/Sources/Halo/ChromeBrowserService.swift` | Halo remains the only authority for tab authorization; `readTab` routes through the bridge when attached. |
+| Extension fixture | `HaloNative/Fixtures/BrowserBridgeExtension/` | Minimal MV3 development extension. |
+| Checks | `NativeChecks.swift`, `BrowserBridgeLiveChecks.swift` | `--check-browser-tabs` and `--check-browser-bridge-live`. |
 
-### 16.3 Development Extension Identity Strategy
-- **Deterministic Extension ID**: Derived by Chromium from a fixed 2048-bit RSA public key embedded in the `"key"` field of `manifest.json`.
-- **Pinned Origin**: Fixed extension ID `knldjmfmopnpolahpmmgbagdohdnhkik` (matches `chrome-extension://knldjmfmopnpolahpmmgbagdohdnhkik/`).
-- **Origin Enforcement**: The native messaging host manifest specifies `allowed_origins: ["chrome-extension://knldjmfmopnpolahpmmgbagdohdnhkik/"]`. Chromium verifies this origin before launching the helper.
+### 16.2 Code Signing & Peer Identity
+- `HaloNativeHost` is signed with the same identity as `Halo.app`.
+- Chromium does **not** verify a native host's signature; it only executes the manifest path. Halo therefore verifies every connecting peer itself, in this order:
+  1. UID: `getpeereid`.
+  2. Kernel PID: `LOCAL_PEERPID`.
+  3. Canonical executable path equals the bundled helper.
+  4. The running code satisfies the helper's designated requirement.
+- A non-Halo process holding a valid session token is rejected (security validation check).
 
-### 16.4 Chromium Browser for Fixture
-- **Browser Executable**: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (Google Chrome 155).
-- **Isolation**: Launched with `--user-data-dir=<disposable-temp-dir>`, `--no-first-run`, `--no-default-browser-check`, `--load-extension=<disposable-ext-dir>`, and the loopback fixture URL.
+### 16.3 Development Extension Identity
+- Extension ID `mfnoiamhnajnnieagdpagkebabpnkdmc`, derived from the fixed public key in `manifest.json` (`BrowserBridgeController.developmentExtensionID`).
+- Manifests set `allowed_origins` to exactly `chrome-extension://mfnoiamhnajnnieagdpagkebabpnkdmc/`.
+- The helper forwards the origin Chromium passes it. Halo rejects any other origin at authentication.
+- The handshake rejects a mismatched `extensionID` and a `clientNonce` that echoes the `serverNonce`. The extension generates a random 32-byte client nonce.
+
+### 16.4 Browser for Verification
+- Consumer Google Chrome ignores `--load-extension`, and Chrome for Testing did not start the MV3 worker in our configuration.
+- Verification uses an unbranded Chromium snapshot at `.local-tools/chromium/` (git-ignored). Verified with Chromium 158.0.8113.0.
+- It must run headful: the extension worker does not start headless.
+- Each run uses a disposable `--user-data-dir`.
 
 ### 16.5 Manifest Installation & Removal
-- **Manifest Path**: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/app.halo.browser_bridge.json`.
-- **Lifecycle**: Installed dynamically by the test fixture and unlinked in a guaranteed `defer` block.
-- **Contents**: JSON specifying host name `app.halo.browser_bridge`, absolute path to `HaloNativeHost`, `type: "stdio"`, and `allowed_origins`.
+- **Tests:** on macOS, Chromium looks up user-level native hosts in `<user-data-dir>/NativeMessagingHosts/`, so test manifests live only inside the disposable profile and never touch real browser profiles.
+- **Production:** the manifest is written only while the opt-in is on. It goes into `~/Library/Application Support/{Google/Chrome, Chromium, BraveSoftware/Brave-Browser}/NativeMessagingHosts/`, and only for browsers that have a profile folder.
+- **No overwrite:** an existing manifest is never overwritten. If any directory fails, every manifest already written in this attempt is removed.
+- **Abandoned-manifest recovery:** a manifest is replaced only when it is provably Halo's own and abandoned. That means it launches `$TMPDIR/hb_*/halo_host_launcher.sh`, and that session's Halo process no longer exists.
+- **Removal:** manifests are removed when the bridge is disabled and on app quit (`shutdownForTermination`).
 
-### 16.6 Extension Permission Strategy
-- **Permissions**: Restricted to `["activeTab", "tabs"]` and host permission `["http://127.0.0.1/*", "http://localhost/*"]`.
-- **Forbidden Permissions**: Zero `cookies`, `storage`, `history`, `downloads`, `webRequest`, `nativeMessaging` beyond the bridge, or broad `<all_urls>`.
-- **Incognito Policy**: `"incognito": "not_allowed"`. Runtime checks in both background service worker and content script explicitly reject incognito tabs.
+### 16.6 Extension Permissions
+- Permissions: `activeTab`, `tabs`, `nativeMessaging`, `scripting`.
+- Host permissions: `http://127.0.0.1/*` and `http://localhost/*` only.
+- `scripting` is used solely to inject the read-only `content.js` into a page that has none. That happens for pages loaded before the extension started, and host permissions still confine it to loopback.
+- Not used: `cookies`, `storage`, `history`, `downloads`, `webRequest`, `<all_urls>`.
+- `"incognito": "not_allowed"`, plus runtime rejection.
 
-### 16.7 Authenticated Helper-to-Halo IPC Mechanism
-- **Transport**: Ephemeral local Unix Domain Socket (`AF_UNIX`, `SOCK_STREAM`).
-- **Socket Path**: Placed in an isolated user directory with mode `0700` (e.g. `~/Library/Application Support/Halo/bridge/bridge_<session>.sock` or `$TMPDIR/halo-bridge-<uid>/`).
-- **Peer Identity Verification**:
-  1. `getpeereid(fd, &euid, &egid)`: Asserts peer UID matches current effective UID (`geteuid()`).
-  2. `getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peerPID, &len)`: Retrieves connecting peer's PID from the macOS kernel.
-  3. Peer binary verification: Checks `proc_pidpath(peerPID, ...)` to ensure the peer process binary is `HaloNativeHost` inside the signed bundle or build tree.
-- **Per-Launch Freshness**:
-  - Halo generates a cryptographically secure 32-byte random hex string (`sessionAuthToken`).
-  - Stored in a mode `0600` file (`session_<session>.json`) in the private `0700` directory.
-  - Upon connection, `HaloNativeHost` sends `sessionAuthToken` as the initial message.
-  - Halo verifies `sessionAuthToken` using constant-time string comparison before processing any bridge requests.
-- **No Background Listener**: The socket listener is activated only during an active browser session and terminated immediately upon completion or cancellation.
+### 16.7 Helper-to-Halo IPC
+- **Session directory:** a per-session `$TMPDIR/hb_<random>` directory with mode `0700`. It holds:
+  - the socket `s.sock` (`0600`)
+  - the launcher `halo_host_launcher.sh` (`0700`)
+  - `session.json` (`0600`), written atomically.
+- **Credential rotation:** the helper rejects a `session.json` older than 60 s. While the bridge waits for a browser, the controller rotates the auth token and timestamp every 30 s, so a lazily launched helper always finds fresh credentials. The session nonce does not change.
+- **Accept loop:** the controller accepts in 2 s slices, because `acceptConnection` holds the server actor while it waits.
+- **Helper lifetime:** the helper's lifetime is bound to Halo's socket.
+  - An idle connection never times out: the helper waits for readability, then reads each frame with a 10 s bound.
+  - When Halo closes the socket, the helper exits even if its stdin read is still blocked.
 
-### 16.8 Cleanup & Rollback Behavior
-- Every resource (native messaging manifest, extension files, temporary browser profiles, Unix domain sockets, session credential files, and child processes) is tracked and cleaned up in `defer` blocks.
-- If a test times out or fails, `kill` is sent to both the browser and helper child processes, and all filesystem artifacts are removed.
+### 16.8 Lifecycle and Policy Rules
+- **Connection:** handshake, then the extension announces eligible tabs, then the controller attaches the server to `ChromeBrowserService`.
+- **Helper loss:** detected by a non-consuming hang-up check every 500 ms. On loss Halo:
+  1. detaches the server
+  2. revokes **all** authorizations (a new worker or browser restarts generation counting)
+  3. rotates credentials
+  4. waits for the extension's capped-backoff reconnect (1 s doubling to 30 s).
+- **Reads:** `readTab` first applies pending navigation and close events, then sends a single request and reads until the response with the matching `requestID` arrives. Events and abandoned responses met along the way are applied or discarded, so cancellation never desynchronizes the stream. Only one bridge read runs at a time.
+- **Generations:** document generations are tracked for every tab the extension has bound, whether or not it is authorized, so re-approving a tab after navigation targets the live document.
+- **Navigation:** authorization is domain-bound, as in Phase 4. Same-site navigation updates the recorded URL; a cross-domain move revokes. Navigation events report `hostname`, not `host:port`.
+- **Extension-side check:** after observing, the extension re-checks the generation and URL, and returns a stale-generation error if the document changed during the observation.
+
+### 16.9 Cleanup
+- **Normal exit:** every run removes its manifest, profile, session directory, socket and processes.
+- **Crash recovery:** a crash cannot run cleanup, so:
+  - `BridgeSessionConfig.removeAbandonedSessionDirectories()` removes `hb_*` directories whose owner process is gone. It runs when the bridge starts and before the browser checks.
+  - the checks also stop any test Chromium still using a disposable `halo-bridge-live-*` or `halo-browser-probe-*` profile.
+
+### 16.10 Verification
+| Command | Covers |
+|---|---|
+| `HaloNative/build/Halo.app/Contents/MacOS/Halo --check-browser-tabs` | Protocol checks; helper relay; 17 adversarial cases; security validation (impostor process, installer rollback, manifest recovery); helper benchmarks; real-Chromium smoke handshake and observation; Phase 4 integration including the first-visible-activity measurement |
+| `HaloNative/build/Halo.app/Contents/MacOS/Halo --check-browser-bridge-live` | 13-stage real-Chromium lifecycle through production code |
+
+The 13 stages are:
+1. opt-in connect and observe
+2. same-site navigation
+3. reload
+4. pause during a read
+5. revoke during a read
+6. cancel during a read
+7. cross-domain navigation
+8. tab close
+9. helper SIGKILL and reconnect
+10. extension service-worker restart
+11. 65 s connected idle
+12. browser restart
+13. disable, with a residue check.
+
+- **What is real and what is stubbed:** in the lifecycle suite only the AppleScript tab listing is stubbed, fed from the extension's own announcements. The test browser is driven over the DevTools protocol, on a disposable profile, by the test harness only. Production never opens a debugging port.
+- **Waits:** waits are bounded condition polls, not fixed sleeps.
+- **Interruption tests:** pause, revoke and cancel are retried at staggered offsets until each one lands while a read is actually in flight.
+
+### 16.11 Measured Results (2026-10-19, Apple M1, macOS 26.5.1, Chromium 158.0.8113.0)
+| Metric | Samples | p50 | p95 | Max | Gate | Result |
+|---|---|---|---|---|---|---|
+| DOM observation via production `readTab` (round trip) | 30 | 1.24 ms | 1.85 ms | 2.01 ms | p50 ≤ 300 ms, p95 ≤ 1000 ms | PASS |
+| First visible Halo activity after request accepted | 10 | 0.031 ms | 0.051 ms | 0.066 ms | ≤ 500 ms | PASS |
+| Warm bridge round trip (helper IPC) | 30 | 0.20 ms | 0.25 ms | 0.52 ms | p50 ≤ 100 ms, p95 ≤ 250 ms | PASS |
+| Helper cold start | 10 | 13.96 ms | 15.32 ms | 15.77 ms | p95 ≤ 750 ms | PASS |
+| Pause/revoke propagation (deterministic) | 1 | 0.02 ms | – | – | ≤ 100 ms | PASS |
+| Cold connect (browser launch → connected) | 1 | 1.3–3.0 s across runs | – | – | Recorded | – |
+| Helper loss detection | 1 | 0.2–0.5 s (500 ms poll) | – | – | ≤ 1 s | PASS |
+| Warm reconnection (helper killed → re-handshaked) | 1 | 1.35 s | – | – | ≤ 5 s | PASS |
+| Connected idle, helper | 65 s | 0.00% CPU | 5.2 MiB RSS | – | CPU < 1% | PASS |
+| Connected idle, Halo | 65 s | 0.01% CPU | – | – | CPU < 2% | PASS |
+
+### 16.12 Known Limits Carried Forward
+- **Loopback only:** the development extension only covers loopback pages. A production extension identity, its distribution, and broader host permissions are release-hardening decisions.
+- **Ambiguous default browser:** when no browser is named, Phase 4's `SystemBrowserRuntime` picks the *active* Chromium-family browser, which is ambiguous when several are running. Tracked as a Phase 4 follow-up.
+- **No mutations:** none are implemented. Clicks start in Phase 5B.1.

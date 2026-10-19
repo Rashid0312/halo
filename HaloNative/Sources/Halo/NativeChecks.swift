@@ -602,6 +602,24 @@ enum NativeChecks {
         print("PASS: \(expectedDriver) driver Safe Mac actions: focus, stale ID rejection, approval preview/denial/cancellation, control click, typing, shortcut, scroll, menu selection, dialog operation, and window layout verified with post-action observation")
     }
 
+    /// Time from accepting a read_browser_tab request to Halo's first visible
+    /// activity callback, which drives the panel's status text.
+    @MainActor
+    static func measureFirstVisibleActivity(_ tools: MacTools, tabID: Int, samples: Int = 10) async throws -> [Double] {
+        let previous = tools.onActivity
+        defer { tools.onActivity = previous }
+        var results: [Double] = []
+        for _ in 0..<samples {
+            let clock = ContinuousClock(), accepted = clock.now
+            var first: Duration?
+            tools.onActivity = { text in if first == nil, !text.isEmpty { first = accepted.duration(to: clock.now) } }
+            _ = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
+            guard let elapsed = first else { throw Failure("read_browser_tab produced no visible activity.") }
+            results.append(Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15)
+        }
+        return results
+    }
+
     final class DisposableTabServer: @unchecked Sendable {
         let port: UInt16
         let url: URL
@@ -932,7 +950,11 @@ enum NativeChecks {
             throw Failure("Authorized tab listed with is_authorized == false")
         }
 
-        // 11. Test reading authorized tab content
+        // 11. Test reading authorized tab content, timing Halo's first visible
+        // activity from the moment the tool request is accepted.
+        let feedback = try await measureFirstVisibleActivity(tools, tabID: tabID)
+        print("| First visible Halo activity after read_browser_tab accepted | 10 | \(String(format: "%.3f ms", percentile(feedback, 0.5))) | \(String(format: "%.3f ms", percentile(feedback, 0.95))) | \(String(format: "%.3f ms", feedback.max() ?? 0)) | <= 500 ms | \(percentile(feedback, 0.95) <= 500 ? "PASS" : "FAIL") |")
+        guard percentile(feedback, 0.95) <= 500 else { throw Failure("First visible activity exceeded 500 ms.") }
         let readRaw = try await tools.execute(name: "read_browser_tab", arguments: #"{"tab_id":\#(tabID)}"#)
         guard let readObj = try? JSONSerialization.jsonObject(with: Data(readRaw.utf8)) as? [String: Any],
               readObj["ok"] as? Bool == true,
@@ -2186,14 +2208,14 @@ enum NativeChecks {
             defer {
                 if proc10.isRunning { proc10.terminate(); proc10.waitUntilExit() }
             }
+            // Only an explicit authentication rejection counts; a timeout would
+            // mean the helper never reached Halo, which proves nothing.
             var c10Caught = false
             do {
                 try await server10.acceptConnection(timeoutSeconds: 3)
             } catch let e as BridgeErrorDetails where e.code == .authenticationFailed {
                 c10Caught = true
-            } catch {
-                c10Caught = true
-            }
+            } catch {}
             guard c10Caught else { throw Failure("Adversarial Case 10: Unknown extension origin was accepted by Halo.") }
             await server10.close()
         }
@@ -2294,6 +2316,7 @@ enum NativeChecks {
         }
 
         print("PASS: All 17 required adversarial checks passed deterministically.")
+        try await runBridgeSecurityValidationChecks(helperBinaryURL: helperBinaryURL, pinnedExtensionID: pinnedExtensionID)
     }
 
     private static func runBridgePerformanceBenchmarks(helperBinaryURL: URL, pinnedExtensionID: String) async throws {
