@@ -53,7 +53,10 @@
       // Form values are user data, not labels. Never read `.value`. Fields are
       // named by their associated <label>, then aria-label, then placeholder.
       const associated = el.labels && el.labels.length ? el.labels[0].innerText : "";
-      label = (el.innerText || associated || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim();
+      // A form field's own text is its contents (select options, textarea
+      // text), which is user data: name fields only by their labels.
+      const isField = ["input", "select", "textarea"].includes(tagName);
+      label = ((isField ? "" : el.innerText) || associated || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim();
     }
     return { tagName, role, label: label.substring(0, 32768), isProtected };
   }
@@ -92,6 +95,35 @@
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
   }
 
+  // Phase 5B.3 select policy: single-choice, enabled, visible, not payment or
+  // credential related.
+  function isSelectable(el, info) {
+    if (info.tagName !== "select" || el.multiple || el.disabled || info.isProtected) return false;
+    if ((el.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-")) return false;
+    const hints = [el.getAttribute("name"), el.id, el.getAttribute("aria-label"), info.label].join(" ");
+    if (SENSITIVE_HINT.test(hints) || /(expir|exp.?month|exp.?year)/i.test(hints)) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== "hidden";
+  }
+
+  function optionLabels(el) {
+    return Array.from(el.options).filter((o) => !o.disabled).slice(0, 100)
+      .map((o) => (o.label || o.text || "").trim().substring(0, 200));
+  }
+
+  function isScrollableElement(el) {
+    const style = getComputedStyle(el);
+    const y = /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 1;
+    const x = /(auto|scroll)/.test(style.overflowX) && el.scrollWidth > el.clientWidth + 1;
+    const rect = el.getBoundingClientRect();
+    return (x || y) && rect.width > 0 && rect.height > 0;
+  }
+
+  function scrollRegionLabel(el) {
+    const named = el.getAttribute("aria-label") || (el.labels && el.labels[0] && el.labels[0].innerText);
+    return (named || (el.innerText || "").trim().split("\n")[0] || "Scrollable region").trim().substring(0, 120);
+  }
+
   function observe(generationID) {
     const elements = [];
     const candidates = document.querySelectorAll(
@@ -110,6 +142,9 @@
         isEnabled: !el.disabled,
         isActionable: isActionable(el, info),
         isEditable: isEditable(el, info),
+        isSelectable: isSelectable(el, info),
+        isScrollable: false,
+        options: info.tagName === "select" && isSelectable(el, info) ? optionLabels(el) : undefined,
         bounds: {
           x: Math.max(0, rect.x),
           y: Math.max(0, rect.y),
@@ -118,7 +153,102 @@
         }
       });
     }
+    // Scrollable regions (lists, panes) are reported separately, at most 20.
+    let regions = 0;
+    for (const el of document.querySelectorAll("div, section, main, aside, nav, article, ul, ol, pre, textarea")) {
+      if (elements.length >= 200 || regions >= 20) break;
+      if (!isScrollableElement(el) || el.tagName.toLowerCase() === "textarea") continue;
+      const rect = el.getBoundingClientRect();
+      elements.push({
+        elementID: referenceFor(el, generationID),
+        tagName: el.tagName.toLowerCase(),
+        role: "scrollable region",
+        label: scrollRegionLabel(el),
+        isProtected: false,
+        isEnabled: true,
+        isActionable: false,
+        isEditable: false,
+        isSelectable: false,
+        isScrollable: true,
+        bounds: { x: Math.max(0, rect.x), y: Math.max(0, rect.y), width: Math.max(0, rect.width), height: Math.max(0, rect.height) }
+      });
+      regions++;
+    }
     return elements;
+  }
+
+  function fingerprintMatches(el, expected) {
+    const info = describe(el);
+    const role = isScrollableElement(el) && expected.role === "scrollable region" ? "scrollable region" : info.role;
+    const label = role === "scrollable region" ? scrollRegionLabel(el) : info.label;
+    return info.tagName === expected.tagName && role === expected.role && label === expected.label;
+  }
+
+  // Select: set the approved option and dispatch input/change, as browser
+  // automation frameworks do (native select popups are not reliably drivable
+  // with input events). Only a match/no-match result leaves the page.
+  function applySelect(request) {
+    const ref = elementsByID.get(request.elementID);
+    const el = ref && ref.deref();
+    if (!el || !el.isConnected) return { error: "elementChanged", message: "The dropdown is no longer on the page." };
+    const info = describe(el);
+    if (!fingerprintMatches(el, request.expected || {})) return { error: "elementChanged", message: "The dropdown changed after approval." };
+    if (!isSelectable(el, info)) return { error: "elementNotActionable", message: "The dropdown is not an enabled single-choice dropdown." };
+    const index = Array.from(el.options).findIndex((o) => !o.disabled && (o.label || o.text || "").trim() === request.option);
+    if (index < 0) return { error: "elementChanged", message: "The approved option is no longer offered." };
+    el.selectedIndex = index;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    const selected = el.selectedOptions[0];
+    return { matched: Boolean(selected) && (selected.label || selected.text || "").trim() === request.option };
+  }
+
+  // Scroll: report the wheel point for the page (viewport centre) or for one
+  // approved scrollable region, after a hit test; then compare positions.
+  let pendingScroll = null;
+
+  function scrollPosition(el) {
+    return el ? [el.scrollLeft, el.scrollTop] : [window.scrollX, window.scrollY];
+  }
+
+  async function prepareScroll(request) {
+    let el = null;
+    if (request.elementID) {
+      const ref = elementsByID.get(request.elementID);
+      el = ref && ref.deref();
+      if (!el || !el.isConnected) return { error: "elementChanged", message: "The scrollable region is no longer on the page." };
+      if (!fingerprintMatches(el, request.expected || {}) || !isScrollableElement(el)) {
+        return { error: "elementChanged", message: "The scrollable region changed after approval." };
+      }
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) {
+        el.scrollIntoView({ block: "center", behavior: "instant" });
+      }
+    }
+    await nextFrame();
+    await nextFrame();
+    let x = innerWidth / 2, y = innerHeight / 2;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      x = rect.left + rect.width / 2;
+      y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !el.contains(hit)) return { error: "elementChanged", message: "Another element covers the scrollable region." };
+    }
+    pendingScroll = { el, before: scrollPosition(el) };
+    return { x, y };
+  }
+
+  async function scrollOutcome() {
+    const pending = pendingScroll;
+    pendingScroll = null;
+    if (!pending) return { moved: false };
+    for (let i = 0; i < 30; i++) {
+      const now = scrollPosition(pending.el);
+      if (now[0] !== pending.before[0] || now[1] !== pending.before[1]) return { moved: true };
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return { moved: false };
   }
 
   const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -208,6 +338,18 @@
   }
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "applySelect") {
+      sendResponse(applySelect(request));
+      return false;
+    }
+    if (request.action === "prepareScroll") {
+      prepareScroll(request).then(sendResponse, (err) => sendResponse({ error: "internalError", message: String(err && err.message) }));
+      return true;
+    }
+    if (request.action === "scrollOutcome") {
+      scrollOutcome().then(sendResponse);
+      return true;
+    }
     if (request.action === "prepareType") {
       prepareType(request).then(sendResponse, (err) => sendResponse({ error: "internalError", message: String(err && err.message) }));
       return true;

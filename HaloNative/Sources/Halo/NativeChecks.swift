@@ -723,6 +723,35 @@ enum NativeChecks {
                 rn.addEventListener("input", () => { document.getElementById("rnlen").textContent = "Rename field length: " + rn.value.length; });
                 </script></body></html>
                 """#)
+                // Phase 5B.3 select/scroll fixture. The scroll list sits well below
+                // the viewport centre so a page scroll never lands on it.
+                let messages = (1...50).map { "<p>Message \($0)</p>" }.joined()
+                let selectPage = respond(#"""
+                <!DOCTYPE html><html><head><title>Halo Select Fixture</title>
+                <style>body{min-height:3200px}#list{height:120px;overflow:auto;border:1px solid #888}</style></head>
+                <body><h1>Halo Select Fixture</h1>
+                <form id="f">
+                <label for="size">Size</label><select id="size"><option>Small</option><option>Medium</option><option>Large</option><option disabled>Huge</option></select>
+                <label for="multi">Toppings</label><select id="multi" multiple><option>Cheese</option><option>Olives</option></select>
+                <label for="dsel">Locked choice</label><select id="dsel" disabled><option>Only</option></select>
+                <label for="exp">Expiry month</label><select id="exp" name="exp-month" autocomplete="cc-exp-month"><option>01</option><option>02</option></select>
+                <label for="rsel">Rename dropdown</label><select id="rsel"><option>One</option><option>Two</option></select>
+                </form>
+                <h2 id="sz">Size: Small</h2><h2 id="rs">Rename dropdown: One</h2>
+                <h2 id="ps">Page scrolled: no</h2><h2 id="ls">List scrolled: no</h2><h2 id="subs">Form submissions: 0</h2>
+                <div style="height:1400px"></div>
+                <div id="list" aria-label="Message list">
+                """# + messages + #"""
+                </div>
+                <script>
+                let subs = 0;
+                f.onsubmit = (e) => { e.preventDefault(); subs++; document.getElementById("subs").textContent = "Form submissions: " + subs; };
+                document.getElementById("size").onchange = (e) => { document.getElementById("sz").textContent = "Size: " + e.target.value; };
+                rsel.onchange = () => { document.getElementById("rs").textContent = "Rename dropdown: " + rsel.value; };
+                addEventListener("scroll", () => { document.getElementById("ps").textContent = "Page scrolled: yes"; });
+                document.getElementById("list").addEventListener("scroll", () => { document.getElementById("ls").textContent = "List scrolled: yes"; });
+                </script></body></html>
+                """#)
                 let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
                     + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
@@ -750,7 +779,8 @@ enum NativeChecks {
                         guard !requestLine.isEmpty else { Darwin.close(client); return }
                         let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
                         let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large
-                            : path.hasPrefix("/click") ? clickPage : path.hasPrefix("/type") ? typePage : responseBytes
+                            : path.hasPrefix("/click") ? clickPage : path.hasPrefix("/type") ? typePage
+                            : path.hasPrefix("/select") ? selectPage : responseBytes
                         _ = bytes.withUnsafeBufferPointer { buf -> Int in
                             var written = 0
                             while written < buf.count {

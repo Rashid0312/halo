@@ -206,6 +206,8 @@ async function handleHostMessage(msg) {
     await handleClick(msg, requestID, sessionNonce);
   } else if (msg.type === "typeText") {
     await handleType(msg, requestID, sessionNonce);
+  } else if (msg.type === "selectOption" || msg.type === "scrollTab" || msg.type === "navigateTab") {
+    await handlePhase5B3(msg, requestID, sessionNonce);
   } else if (msg.type === "pauseTabs" || msg.type === "revokeTab") {
     nativePort.postMessage({
       requestID: requestID,
@@ -374,6 +376,115 @@ async function handleType(msg, requestID, sessionNonce) {
     });
   } catch (err) {
     sendError(requestID, sessionNonce, "internalError", "Typing failed: " + String(err && err.message));
+  } finally {
+    if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
+  }
+}
+
+// Phase 5B.3: select an option, scroll, or navigate. Each re-checks the
+// approved document first; scroll uses a trusted wheel event through
+// chrome.debugger attached to this tab only for the action.
+async function handlePhase5B3(msg, requestID, sessionNonce) {
+  const target = msg.targetTab;
+  if (!target || !target.tabID) {
+    sendError(requestID, sessionNonce, "payloadMalformed", msg.type + " requires a target tab");
+    return;
+  }
+  const tabID = target.tabID;
+  const unchanged = async () => {
+    const tab = await chrome.tabs.get(tabID);
+    return !tab.incognito && (tab.url || "") === target.url &&
+      tabGenerations.get(tabID) === target.documentGenerationID;
+  };
+  const respond = (performed) => nativePort.postMessage({
+    requestID: requestID, protocolVersion: 1, sessionNonce: sessionNonce, success: true,
+    actionResult: { tab: target, elementID: msg.elementID || "el_page", performed: performed }
+  });
+  try {
+    if (!tabContexts.has(tabID) || !(await unchanged())) {
+      sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before the action");
+      return;
+    }
+  } catch (err) {
+    sendError(requestID, sessionNonce, "tabNotAuthorized", "Tab not found");
+    return;
+  }
+
+  if (msg.type === "navigateTab") {
+    let url;
+    try { url = new URL(msg.url); } catch (_) { url = null; }
+    if (!url || !["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+      sendError(requestID, sessionNonce, "payloadMalformed", "Navigation URL must be http(s) without credentials");
+      return;
+    }
+    try {
+      const before = target.documentGenerationID;
+      await chrome.tabs.update(tabID, { url: url.href });
+      // Respond once the new document has started loading, so Halo applies the
+      // navigation event (and invalidates old references) before the result.
+      for (let i = 0; i < 100 && tabGenerations.get(tabID) === before; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      respond(tabGenerations.get(tabID) !== before);
+    } catch (err) {
+      sendError(requestID, sessionNonce, "internalError", "Navigation failed: " + String(err && err.message));
+    }
+    return;
+  }
+
+  if (msg.type === "selectOption") {
+    if (!msg.elementID || !msg.expectedElement || typeof msg.option !== "string") {
+      sendError(requestID, sessionNonce, "payloadMalformed", "selectOption requires a dropdown, fingerprint, and option");
+      return;
+    }
+    try {
+      const result = await chrome.tabs.sendMessage(tabID, {
+        action: "applySelect", elementID: msg.elementID, expected: msg.expectedElement, option: msg.option
+      });
+      if (!result || result.error) {
+        sendError(requestID, sessionNonce, (result && result.error) || "elementChanged", (result && result.message) || "The dropdown could not be changed");
+        return;
+      }
+      respond(Boolean(result.matched));
+    } catch (err) {
+      sendError(requestID, sessionNonce, "internalError", "Selection failed: " + String(err && err.message));
+    }
+    return;
+  }
+
+  // scrollTab
+  const scroll = msg.scroll || {};
+  const steps = Number(scroll.amount);
+  if (!["up", "down", "left", "right"].includes(scroll.direction) || !(steps >= 1 && steps <= 20)) {
+    sendError(requestID, sessionNonce, "payloadMalformed", "scrollTab requires a direction and 1-20 steps");
+    return;
+  }
+  const debuggee = { tabId: tabID };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(debuggee, "1.3");
+    attached = true;
+    const prep = await chrome.tabs.sendMessage(tabID, {
+      action: "prepareScroll", elementID: msg.elementID || null, expected: msg.expectedElement || null
+    });
+    if (!prep || prep.error) {
+      sendError(requestID, sessionNonce, (prep && prep.error) || "elementChanged", (prep && prep.message) || "The scroll target could not be prepared");
+      return;
+    }
+    if (!(await unchanged())) {
+      sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before scrolling");
+      return;
+    }
+    const delta = 120 * steps;
+    const deltaX = scroll.direction === "left" ? -delta : scroll.direction === "right" ? delta : 0;
+    const deltaY = scroll.direction === "up" ? -delta : scroll.direction === "down" ? delta : 0;
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+      type: "mouseWheel", x: prep.x, y: prep.y, deltaX: deltaX, deltaY: deltaY
+    });
+    const outcome = await chrome.tabs.sendMessage(tabID, { action: "scrollOutcome" }).catch(() => null);
+    respond(Boolean(outcome && outcome.moved));
+  } catch (err) {
+    sendError(requestID, sessionNonce, "internalError", "Scroll failed: " + String(err && err.message));
   } finally {
     if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
   }

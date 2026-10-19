@@ -49,7 +49,7 @@ The integration will not initially import:
 | 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Complete | Exact-target execution, approvals, secure-field protection, and post-action verification pass across both drivers |
 | 4. Chrome tab integration | Complete | Browser-session authorization, approval revalidation, injection-safe metadata framing, and in-flight killswitch checks pass |
-| 5. Browser actions | In progress: 5A read-only bridge, 5B.1 approved click, and 5B.2 safe text entry complete; 5B.3 (select, scroll, navigation) next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
+| 5. Browser actions | In progress: 5A read-only bridge and 5B.1–5B.3 (click, text entry, select/scroll/navigation) complete; 5B.4 (sensitive-action policy) next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
 | 6. Legacy automation retirement | Not started | Replaced Halo implementations are removed only after parity and rollback validation |
 | 7. Release hardening | Not started | Security, permissions, signing, notarization, clean-install, and recovery checks pass |
 
@@ -263,9 +263,17 @@ Evidence: design doc §17. `--check-browser-tabs` (click protocol) and `--check-
 
 Evidence: design doc §18. `--check-browser-tabs` (text protocol and policy) and `--check-browser-bridge-live` (7 typing stages) pass.
 
+### Phase 5B.3 — Select, scroll, and navigation (complete, 2026-10-19)
+
+- [x] Select dropdown options (single-choice; payment and credential dropdowns refused).
+- [x] Scroll the page or a named scrollable region with a genuine wheel event.
+- [x] Navigate only to explicitly approved http(s) addresses; leaving the site ends access.
+- [x] Invalidate all old element references after navigation.
+
+Evidence: design doc §19. `--check-browser-tabs` (5B.3 protocol) and `--check-browser-bridge-live` (8 stages) pass.
+
 ### Remaining Phase 5B slices
 
-- **5B.3:** select, scroll, and navigation.
 - **5B.4:** the sensitive-action policy (forms, messages, purchases, accounts, uploads, downloads, credentials).
 - Original scope still to cover:
 
@@ -568,3 +576,16 @@ Implementation boundary: Transport foundation (`BrowserBridgeProtocol.swift`) im
   - focus/select preparation and a focus-held check
   - match-only outcome.
 - Tests: protocol and policy checks, plus 7 real-Chromium typing stages.
+
+### 2026-10-19 (Phase 5B.3 — Select, scroll, and navigation)
+
+- New tools: `select_browser_option`, `scroll_browser_tab` and `navigate_browser_tab`, each with an exact approval and post-action verification.
+- Protocol:
+  - `selectOption`, `scrollTab` and `navigateTab`, with per-action fields
+  - option lists and selectable/scrollable flags on observed elements
+  - validation restructured so each request carries exactly its own payload.
+- Validator: navigation requests survive only their own navigation events (`navigationEpoch`).
+- Halo: `bridgeExchange` navigation mode, address policy, element-cache invalidation after navigation, and a shared page target.
+- Extension: select policy and scripted selection, scroll-region detection, trusted wheel scrolling, and bounded navigation.
+- Fix: form fields are labelled only by `<label>`, `aria-label` or `placeholder`. Select options and textarea text had been leaking into labels.
+- Tests: protocol and validator checks, plus 8 real-Chromium stages.

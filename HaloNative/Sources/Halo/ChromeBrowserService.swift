@@ -53,9 +53,19 @@ public struct BrowserTabElement: Sendable, Codable, Equatable {
     public let label: String
     public let clickable: Bool
     public let typable: Bool
+    public var selectable = false
+    public var scrollable = false
+    public var options: [String] = []
 }
 
-public enum BrowserElementAction: Sendable { case click, type }
+/// Outcome of an approved navigation.
+public struct BrowserNavigationResult: Sendable {
+    public let url: String
+    /// False when the destination left the authorized domain: access ended.
+    public let stillAuthorized: Bool
+}
+
+public enum BrowserElementAction: Sendable { case click, type, select, scroll }
 
 /// An element re-observed immediately before approval. The approval preview
 /// shows these fields; the action is refused if any of them no longer hold.
@@ -68,8 +78,14 @@ public struct BrowserElementTarget: Sendable, Equatable {
     public let tagName: String
     public let role: String
     public let label: String
+    /// Offered option labels when the target is a dropdown.
+    public var options: [String] = []
     let key: AuthorizedTabKey
     let generation: UInt64
+
+    /// Reference used for actions on the whole page rather than one element.
+    static let pageReference = "el_page"
+    var isPage: Bool { elementID == Self.pageReference }
 }
 
 public struct BrowserClickResult: Sendable {
@@ -478,6 +494,30 @@ public actor ChromeBrowserService {
             ["input", "textarea"].contains(element.tagName)
     }
 
+    /// Phase 5B.3: enabled, unprotected single-choice dropdowns with options.
+    static func isSelectable(_ element: ObservedDOMElement) -> Bool {
+        element.isSelectable == true && element.isEnabled && !element.isProtected &&
+            element.tagName == "select" && !(element.options ?? []).isEmpty
+    }
+
+    /// Phase 5B.3: scrollable regions reported by the extension.
+    static func isScrollable(_ element: ObservedDOMElement) -> Bool {
+        element.isScrollable == true && !element.isProtected
+    }
+
+    /// Why Halo refuses to navigate to `url`, or nil when it may be offered.
+    static func navigationRefusal(_ url: String) -> String? {
+        guard url.utf8.count <= 2_048 else { return "The address is longer than 2,048 characters." }
+        guard !url.unicodeScalars.contains(where: { $0.properties.generalCategory == .control || $0 == " " }),
+              let components = URLComponents(string: url), let scheme = components.scheme?.lowercased() else {
+            return "That is not a valid web address."
+        }
+        guard ["http", "https"].contains(scheme) else { return "Only http and https addresses can be opened (not \(scheme):)." }
+        guard let host = components.host, !host.isEmpty else { return "The address has no host." }
+        guard components.user == nil, components.password == nil else { return "Addresses containing a username or password are refused." }
+        return nil
+    }
+
     /// Why Halo refuses to type `text`, or nil when it may be offered for approval.
     /// Text that looks like a credential is never typed, even if requested.
     static func textRefusal(_ text: String) -> String? {
@@ -522,7 +562,7 @@ public actor ChromeBrowserService {
     private func bridgeExchange(
         id: Int, key: AuthorizedTabKey, context: BrowserContext,
         server: BridgeIPCServer, validator: BridgeSessionValidator,
-        requiredGeneration: UInt64? = nil, timeout: TimeInterval = 5,
+        requiredGeneration: UInt64? = nil, timeout: TimeInterval = 5, allowsNavigation: Bool = false,
         makeRequest: (TabGenerationIdentity, String, String) -> BridgeRequest
     ) async throws -> (BridgeResponse, TabGenerationIdentity, AuthorizedTabRecord) {
         guard !bridgeReadInFlight else {
@@ -561,7 +601,7 @@ public actor ChromeBrowserService {
                 resp = try await server.receiveResponse(timeoutSeconds: max(0.1, deadline.timeIntervalSinceNow))
                 switch try await applyBridgeMessage(resp, nonce: nonce, validator: validator) {
                 case .event(let affected):
-                    if affected == key { changedInFlight = true }
+                    if affected == key && !allowsNavigation { changedInFlight = true }
                     continue
                 case .response where resp.requestID != reqID:
                     continue // Response to an earlier, abandoned request.
@@ -575,7 +615,8 @@ public actor ChromeBrowserService {
             }
             try await validator.validateResponse(resp)
             try Task.checkCancellation()
-            guard !isPaused, epoch == accessEpoch, authorizedTabs[key] == record else {
+            // A requested navigation legitimately changes the record and epoch.
+            guard !isPaused, allowsNavigation || (epoch == accessEpoch && authorizedTabs[key] == record) else {
                 throw InteractionError("Browser tab access changed while the operation was in flight.")
             }
             guard resp.success else {
@@ -601,6 +642,10 @@ public actor ChromeBrowserService {
             throw InteractionError("Element \(elementID) is not on the current page. Read the tab again and use a current element ID.")
         }
         switch action {
+        case .select where !Self.isSelectable(element):
+            throw InteractionError("Only enabled single-choice dropdowns can be changed. Multi-select, disabled, and payment or credential dropdowns are blocked.")
+        case .scroll where !Self.isScrollable(element):
+            throw InteractionError("That element is not a scrollable region. Omit element_id to scroll the page.")
         case .click where !Self.isClickable(element):
             throw InteractionError("Only plain, enabled buttons can be clicked. Links, form submission, and protected or disabled controls are blocked.")
         case .type where !Self.isTypable(element):
@@ -608,9 +653,26 @@ public actor ChromeBrowserService {
         default:
             break
         }
+        var target = BrowserElementTarget(tabID: tabID, title: content.title, url: content.url, domain: content.domain,
+                                          elementID: elementID, tagName: element.tagName, role: element.role,
+                                          label: element.label, key: key, generation: observed.generation)
+        target.options = element.options ?? []
+        return target
+    }
+
+    /// Re-observes the tab and describes the whole page as an action target
+    /// (page scroll and navigation).
+    public func describePageTarget(tabID: Int, browserAppID: String? = nil) async throws -> BrowserElementTarget {
+        guard bridgeServer != nil else {
+            throw InteractionError("Browser actions require the Halo browser extension connection (Settings → Mac Access → Browser bridge).")
+        }
+        let content = try await readTab(id: tabID, browserAppID: browserAppID)
+        let context = try browserContext(browserAppID)
+        let key = tabKey(tabID, context: context)
+        guard let observed = bridgeElements[key] else { throw InteractionError("Tab \(tabID) has no current observation.") }
         return BrowserElementTarget(tabID: tabID, title: content.title, url: content.url, domain: content.domain,
-                                  elementID: elementID, tagName: element.tagName, role: element.role,
-                                  label: element.label, key: key, generation: observed.generation)
+                                    elementID: BrowserElementTarget.pageReference, tagName: "html", role: "page",
+                                    label: content.title, key: key, generation: observed.generation)
     }
 
     /// Performs one approved click. The page, element, and its position are
@@ -663,6 +725,81 @@ public actor ChromeBrowserService {
         return BrowserClickResult(verified: action.performed, after: after)
     }
 
+    /// Common preconditions for an approved action on `target`.
+    private func actionChannel(_ target: BrowserElementTarget, verb: String) async throws
+        -> (BridgeIPCServer, BridgeSessionValidator, BrowserContext) {
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        guard let server = bridgeServer, let validator = bridgeValidator, await server.isConnected else {
+            throw InteractionError("The Halo browser extension disconnected; nothing was \(verb).")
+        }
+        let context = try browserContext(target.key.browserBundleID)
+        guard context.sessionID == target.key.browserSessionID else {
+            throw InteractionError("The browser restarted after approval; nothing was \(verb).")
+        }
+        return (server, validator, context)
+    }
+
+    /// Chooses one approved option in an approved dropdown.
+    public func select(_ target: BrowserElementTarget, option: String) async throws -> BrowserClickResult {
+        guard target.options.contains(option) else {
+            throw InteractionError("“\(option)” is not one of the dropdown's options.")
+        }
+        let (server, validator, context) = try await actionChannel(target, verb: "selected")
+        let fingerprint = BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
+        let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
+                                                    validator: validator, requiredGeneration: target.generation) {
+            BridgeRequest(requestID: $1, sessionNonce: $2, type: .selectOption, targetTab: $0,
+                          elementID: target.elementID, expectedElement: fingerprint, option: option)
+        }
+        guard let action = resp.actionResult, action.elementID == target.elementID else {
+            throw InteractionError("The browser bridge returned no selection result.")
+        }
+        let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
+        return BrowserClickResult(verified: action.performed, after: after)
+    }
+
+    /// Scrolls the page or one approved scrollable region with a trusted wheel event.
+    public func scroll(_ target: BrowserElementTarget, direction: BridgeScrollDirection, amount: Int) async throws -> BrowserClickResult {
+        guard (1...20).contains(amount) else { throw InteractionError("Scroll amount must be 1–20 steps.") }
+        let (server, validator, context) = try await actionChannel(target, verb: "scrolled")
+        let fingerprint = target.isPage ? nil : BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
+        let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
+                                                    validator: validator, requiredGeneration: target.generation, timeout: 10) {
+            BridgeRequest(requestID: $1, sessionNonce: $2, type: .scrollTab, targetTab: $0,
+                          elementID: target.isPage ? nil : target.elementID, expectedElement: fingerprint,
+                          scroll: BridgeScroll(direction: direction, amount: amount))
+        }
+        guard let action = resp.actionResult, action.elementID == target.elementID else {
+            throw InteractionError("The browser bridge returned no scroll result.")
+        }
+        return BrowserClickResult(verified: action.performed, after: nil)
+    }
+
+    /// Navigates the tab to one approved address. Old element references die
+    /// with the old document; leaving the authorized domain ends access.
+    public func navigate(_ target: BrowserElementTarget, to url: String) async throws -> BrowserNavigationResult {
+        if let refusal = Self.navigationRefusal(url) { throw InteractionError(refusal) }
+        let (server, validator, context) = try await actionChannel(target, verb: "opened")
+        let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
+                                                    validator: validator, requiredGeneration: target.generation,
+                                                    timeout: 10, allowsNavigation: true) {
+            BridgeRequest(requestID: $1, sessionNonce: $2, type: .navigateTab, targetTab: $0, url: url)
+        }
+        guard let action = resp.actionResult, action.performed else {
+            throw InteractionError("The browser did not start loading the address.")
+        }
+        // Apply the navigation event if it arrived just after the result.
+        if let server = bridgeServer, let validator = bridgeValidator {
+            while await server.hasPendingMessage() {
+                guard let message = try? await server.receiveResponse(timeoutSeconds: 2) else { break }
+                _ = try? await applyBridgeMessage(message, nonce: server.sessionConfig.sessionNonce, validator: validator)
+            }
+        }
+        bridgeElements.removeValue(forKey: target.key)
+        let record = authorizedTabs[target.key]
+        return BrowserNavigationResult(url: record?.url ?? url, stillAuthorized: record != nil)
+    }
+
     public func readTab(id: Int, browserAppID: String? = nil) async throws -> BrowserTabContent {
         guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
         let context = try browserContext(browserAppID)
@@ -697,9 +834,13 @@ public actor ChromeBrowserService {
                 truncated: contentText.utf16.count >= 16000
             )
             content.elements = obs.elements.map {
-                BrowserTabElement(id: $0.elementID, role: $0.role, tagName: $0.tagName,
-                                  label: $0.isProtected ? "(protected)" : String($0.label.prefix(200)),
-                                  clickable: Self.isClickable($0), typable: Self.isTypable($0))
+                var element = BrowserTabElement(id: $0.elementID, role: $0.role, tagName: $0.tagName,
+                                                label: $0.isProtected ? "(protected)" : String($0.label.prefix(200)),
+                                                clickable: Self.isClickable($0), typable: Self.isTypable($0))
+                element.selectable = Self.isSelectable($0)
+                element.scrollable = Self.isScrollable($0)
+                if element.selectable { element.options = $0.options ?? [] }
+                return element
             }
             return content
         }

@@ -717,6 +717,124 @@ extension NativeChecks {
         }
         pass("5B.2 page reloaded during approval: refused, nothing typed (\(reloadedType["error"] as? String ?? "")).")
 
+        // 5B.3. Select, scroll, and navigation through the production tools.
+        let beforeSelect = await {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "performance.timeOrigin", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? Double else { return 0.0 }
+            return value
+        }()
+        try await devtoolsC.call(pageC, "Page.navigate", ["url": base + "/select"])
+        _ = try await waitUntil("select fixture to load", timeout: 10) {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate",
+                      ["expression": "performance.timeOrigin + '|' + document.readyState", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? String else { return false }
+            let parts = value.split(separator: "|")
+            return parts.count == 2 && Double(parts[0]) != beforeSelect && parts[1] == "complete"
+        }
+        _ = try await readUntil("select fixture read", id: tabC) { $0.title == "Halo Select Fixture" }
+
+        map = try await elements()
+        guard map["Size"]?["selectable"] as? Bool == true, map["Size"]?["options"] as? [String] == ["Small", "Medium", "Large"],
+              map["Message list"]?["scrollable"] as? Bool == true,
+              ["Toppings", "Locked choice", "Expiry month"].allSatisfy({ map[$0] != nil && map[$0]?["selectable"] == nil }) else {
+            throw Failure("5B.3 flags wrong: \(map.filter { ["Size", "Toppings", "Locked choice", "Expiry month", "Message list"].contains($0.key) })")
+        }
+        pass("5B.3 observation: single-choice dropdown selectable with its enabled options; multi-select, disabled, and card-expiry dropdowns are not; scrollable region reported.")
+
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        approvals = []
+        let selected = try await run("select_browser_option", ["tab_id": tabC, "element_id": try elementID(map, "Size"), "option": "Large"])
+        map = try await elements()
+        guard selected["verified"] as? Bool == true, let selectPreview = approvals.first,
+              selectPreview.preview.contains("Size"), selectPreview.preview.contains("Large"),
+              map["Size: Large"] != nil, map["Form submissions: 0"] != nil else {
+            throw Failure("Approved selection failed: \(selected) page=\(map.keys.sorted())")
+        }
+        pass("5B.3 approved selection: preview named the dropdown and option; option selected and verified; nothing submitted.")
+
+        approvals = []
+        var refusals: [[String: Any]] = [
+            try await run("select_browser_option", ["tab_id": tabC, "element_id": try elementID(map, "Size"), "option": "Huge"])
+        ]
+        for label in ["Toppings", "Locked choice", "Expiry month"] {
+            refusals.append(try await run("select_browser_option", ["tab_id": tabC, "element_id": try elementID(map, label), "option": "Cheese"]))
+        }
+        decide = { tools.resolve(id: $0.id, allow: false) }
+        let deniedSelect = try await run("select_browser_option", ["tab_id": tabC, "element_id": try elementID(map, "Size"), "option": "Medium"])
+        map = try await elements()
+        guard refusals.allSatisfy({ $0["ok"] as? Bool == false }), approvals.count == 1,
+              deniedSelect["denied"] as? Bool == true, map["Size: Large"] != nil else {
+            throw Failure("Selection refusals or denial failed: \(refusals) \(deniedSelect)")
+        }
+        pass("5B.3 selection policy: disabled option and multi-select, disabled, and card-expiry dropdowns refused before approval; denial changed nothing.")
+
+        decide = { approval in
+            Task { @MainActor in
+                _ = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "document.querySelector('label[for=rsel]').textContent = 'Renamed dropdown'"])
+                tools.resolve(id: approval.id, allow: true)
+            }
+        }
+        let relabeledSelect = try await run("select_browser_option", ["tab_id": tabC, "element_id": try elementID(map, "Rename dropdown"), "option": "Two"])
+        map = try await elements()
+        guard relabeledSelect["ok"] as? Bool == false, map["Rename dropdown: One"] != nil else {
+            throw Failure("Selection on a dropdown changed during approval was not refused: \(relabeledSelect)")
+        }
+        pass("5B.3 dropdown changed during approval: refused, nothing selected (\(relabeledSelect["error"] as? String ?? "")).")
+
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        approvals = []
+        let pageScroll = try await run("scroll_browser_tab", ["tab_id": tabC, "direction": "down", "amount": 3])
+        map = try await elements()
+        guard pageScroll["verified"] as? Bool == true, approvals.first?.preview.contains("the page down by 3 steps") == true,
+              map["Page scrolled: yes"] != nil, map["List scrolled: no"] != nil else {
+            throw Failure("Page scroll failed: \(pageScroll) page=\(map.keys.sorted())")
+        }
+        let listScroll = try await run("scroll_browser_tab", ["tab_id": tabC, "direction": "down", "amount": 2,
+                                                              "element_id": try elementID(map, "Message list")])
+        map = try await elements()
+        guard listScroll["verified"] as? Bool == true, map["List scrolled: yes"] != nil else {
+            throw Failure("Region scroll failed: \(listScroll) page=\(map.keys.sorted())")
+        }
+        pass("5B.3 scrolling: genuine wheel scrolled the page, then the named region; both verified by position change.")
+
+        approvals = []
+        var badURLs: [[String: Any]] = []
+        for url in ["javascript:alert(1)", "file:///etc/passwd", "http://user:pw@127.0.0.1/", "data:text/html,hi", "not a url", "ftp://127.0.0.1/"] {
+            badURLs.append(try await run("navigate_browser_tab", ["tab_id": tabC, "url": url]))
+        }
+        decide = { tools.resolve(id: $0.id, allow: false) }
+        let deniedNav = try await run("navigate_browser_tab", ["tab_id": tabC, "url": base + "/page-b"])
+        let stillSelect = try await service.readTab(id: tabC)
+        guard badURLs.allSatisfy({ $0["ok"] as? Bool == false }), approvals.count == 1,
+              deniedNav["denied"] as? Bool == true, stillSelect.title == "Halo Select Fixture" else {
+            throw Failure("Navigation refusals or denial failed: \(badURLs) \(deniedNav)")
+        }
+        pass("5B.3 navigation policy: javascript:, file:, data:, ftp:, credential, and invalid addresses refused before approval; denial stayed on the page.")
+
+        let staleSize = try elementID(map, "Size")
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        approvals = []
+        let sameSite = try await run("navigate_browser_tab", ["tab_id": tabC, "url": base + "/page-b"])
+        guard sameSite["ok"] as? Bool == true, sameSite["still_authorized"] as? Bool == true,
+              let navPreview = approvals.first, navPreview.preview.contains("From: \(base)/select"), navPreview.preview.contains("To: \(base)/page-b"),
+              !navPreview.preview.contains("leaves") else {
+            throw Failure("Same-site navigation failed: \(sameSite) preview=\(String(describing: approvals.first))")
+        }
+        _ = try await readUntil("page B after navigation", id: tabC) { $0.title == "Halo Fixture Page B" }
+        approvals = []
+        let staleSelect = try await run("select_browser_option", ["tab_id": tabC, "element_id": staleSize, "option": "Small"])
+        guard staleSelect["ok"] as? Bool == false, approvals.isEmpty else {
+            throw Failure("Element reference from before navigation was accepted: \(staleSelect)")
+        }
+        pass("5B.3 same-site navigation: preview showed exact From/To; tab stayed authorized; old element references invalid.")
+
+        let crossSite = try await run("navigate_browser_tab", ["tab_id": tabC, "url": "http://localhost:\(fixture.port)/halo-test"])
+        guard crossSite["ok"] as? Bool == true, crossSite["still_authorized"] as? Bool == false,
+              approvals.first?.preview.contains("This leaves 127.0.0.1") == true, await !service.isAuthorized(tabID: tabC) else {
+            throw Failure("Cross-site navigation failed: \(crossSite) preview=\(String(describing: approvals.first))")
+        }
+        pass("5B.3 cross-site navigation: approval warned it leaves the site; access to the tab ended after loading.")
+
         // 13. Disable: no manifest, session, socket, or helper may remain.
         let finalSession = await service.activeBridgeServer()?.directoryURL
         controller.enabled = false
@@ -760,7 +878,7 @@ extension NativeChecks {
               milliseconds(detectCrash) <= 1000, milliseconds(warmReconnect) <= 5000, helperCPU < 1, haloCPU < 2 else {
             throw Failure("Real-browser performance thresholds not met.")
         }
-        print("PASS: Real Chromium bridge suite (5A lifecycle, 5B.1 click, 5B.2 typing): \(results.count) stages verified end to end.")
+        print("PASS: Real Chromium bridge suite (5A lifecycle, 5B.1 click, 5B.2 typing, 5B.3 select/scroll/navigate): \(results.count) stages verified end to end.")
     }
 }
 
@@ -920,5 +1038,79 @@ extension NativeChecks {
             throw Failure("Text policy allowed secret-like text: \(refusedTexts.filter { ChromeBrowserService.textRefusal($0) == nil })")
         }
         print("PASS: Phase 5B.2 text protocol and policy: unsafe text rejected on the wire; keys, tokens, card numbers, and line breaks refused before approval; ordinary text allowed.")
+
+        // Phase 5B.3: each action carries only its own fields, within bounds.
+        _ = try BridgeMessageFraming.encode(BridgeRequest(requestID: "s_ok", sessionNonce: nonce, type: .selectOption, targetTab: tab,
+                                                          elementID: "el_3_ab", expectedElement: fingerprint, option: "Large"))
+        _ = try BridgeMessageFraming.encode(BridgeRequest(requestID: "sc_ok", sessionNonce: nonce, type: .scrollTab, targetTab: tab,
+                                                          scroll: BridgeScroll(direction: .down, amount: 3)))
+        _ = try BridgeMessageFraming.encode(BridgeRequest(requestID: "n_ok", sessionNonce: nonce, type: .navigateTab, targetTab: tab,
+                                                          url: "https://example.com/docs?q=1"))
+        try rejects("select without option", BridgeRequest(requestID: "s1", sessionNonce: nonce, type: .selectOption, targetTab: tab,
+                                                           elementID: "el_3_ab", expectedElement: fingerprint))
+        try rejects("option on a click", BridgeRequest(requestID: "s2", sessionNonce: nonce, type: .clickElement, targetTab: tab,
+                                                       elementID: "el_3_ab", expectedElement: fingerprint, option: "x"))
+        for amount in [0, 21, -1] {
+            try rejects("scroll amount \(amount)", BridgeRequest(requestID: "sc1", sessionNonce: nonce, type: .scrollTab, targetTab: tab,
+                                                                 scroll: BridgeScroll(direction: .down, amount: amount)))
+        }
+        try rejects("scroll with text", BridgeRequest(requestID: "sc2", sessionNonce: nonce, type: .scrollTab, targetTab: tab,
+                                                      text: "hi", scroll: BridgeScroll(direction: .up, amount: 1)))
+        try rejects("navigation with an element", BridgeRequest(requestID: "n1", sessionNonce: nonce, type: .navigateTab, targetTab: tab,
+                                                                elementID: "el_3_ab", expectedElement: fingerprint, url: "https://example.com/"))
+        for url in ["javascript:alert(1)", "file:///etc/passwd", "https://user:pw@example.com/", "data:text/html,x", "example.com", "https://exa mple.com/"] {
+            try rejects("navigation to \(url)", BridgeRequest(requestID: "n2", sessionNonce: nonce, type: .navigateTab, targetTab: tab, url: url))
+        }
+        try rejects("url on an observe", BridgeRequest(requestID: "n3", sessionNonce: nonce, type: .observeTab, targetTab: tab, url: "https://example.com/"))
+        guard ChromeBrowserService.navigationRefusal("https://example.com/a?b=c#d") == nil,
+              ["javascript:alert(1)", "file:///x", "http://u:p@h/", "ftp://h/", "nope"].allSatisfy({ ChromeBrowserService.navigationRefusal($0) != nil }) else {
+            throw Failure("Navigation policy accepted an unsafe address or refused a normal one.")
+        }
+        // A navigation request's result survives its own navigation, but not a
+        // pause in flight; any other request fails on any navigation.
+        func navigationEvent(from generation: UInt64) -> TabNavigationEvent {
+            TabNavigationEvent(browser: browser, tabID: 5, previousDocumentGenerationID: generation,
+                               newDocumentGenerationID: generation + 1, newURL: "http://127.0.0.1/next", newDomain: "127.0.0.1")
+        }
+        func navigateRequest(_ id: String, generation: UInt64) -> BridgeRequest {
+            BridgeRequest(requestID: id, sessionNonce: nonce, type: .navigateTab,
+                          targetTab: TabGenerationIdentity(browser: browser, tabID: 5, documentGenerationID: generation,
+                                                           url: "http://127.0.0.1/click", domain: "127.0.0.1"),
+                          url: "http://127.0.0.1/next")
+        }
+        func result(_ request: BridgeRequest) -> BridgeResponse {
+            BridgeResponse(requestID: request.requestID, sessionNonce: nonce, success: true,
+                           actionResult: BridgeActionResult(tab: request.targetTab!, elementID: "el_page", performed: true))
+        }
+        let navValidator = BridgeSessionValidator(sessionNonce: nonce)
+        try await navValidator.authorizeTab(tab)
+        let nav1 = navigateRequest("nav1", generation: 3)
+        try await navValidator.validateRequest(nav1)
+        try await navValidator.notifyNavigation(event: navigationEvent(from: 3))
+        try await navValidator.validateResponse(result(nav1))
+
+        let nav2 = navigateRequest("nav2", generation: 4)
+        try await navValidator.authorizeTab(nav2.targetTab!)
+        try await navValidator.validateRequest(nav2)
+        try await navValidator.notifyNavigation(event: navigationEvent(from: 4))
+        await navValidator.setPaused(true)
+        await navValidator.setPaused(false)
+        do {
+            try await navValidator.validateResponse(result(nav2))
+            throw Failure("Navigation protocol: a navigation result survived a pause in flight.")
+        } catch let error as BridgeErrorDetails where error.code == .accessPaused {}
+
+        let clickTab = TabGenerationIdentity(browser: browser, tabID: 5, documentGenerationID: 5, url: "http://127.0.0.1/next", domain: "127.0.0.1")
+        try await navValidator.authorizeTab(clickTab)
+        let click5 = BridgeRequest(requestID: "click5", sessionNonce: nonce, type: .clickElement, targetTab: clickTab,
+                                   elementID: "el_5_ab", expectedElement: fingerprint)
+        try await navValidator.validateRequest(click5)
+        try await navValidator.notifyNavigation(event: navigationEvent(from: 5))
+        do {
+            try await navValidator.validateResponse(BridgeResponse(requestID: "click5", sessionNonce: nonce, success: true,
+                                                                   actionResult: BridgeActionResult(tab: clickTab, elementID: "el_5_ab", performed: true)))
+            throw Failure("Navigation protocol: a click result survived a navigation in flight.")
+        } catch let error as BridgeErrorDetails where error.code == .accessPaused {}
+        print("PASS: Phase 5B.3 select/scroll/navigate protocol: each action carries only its own fields; scroll bounds and unsafe or credentialed addresses rejected; navigation results survive only their own navigation.")
     }
 }

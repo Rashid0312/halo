@@ -513,3 +513,75 @@ The 7 live stages:
 - **Main frame only.**
 - **Not supported yet:** `contenteditable` editors, selects and checkboxes (5B.3).
 - **Ordinary pasted secrets:** the detector is heuristic. It is a safety net, not a guarantee, and the approval preview showing the exact text is the primary control.
+
+## 19. Phase 5B.3: Select, Scroll, and Navigation
+
+Status: **complete** (2026-10-19). Each action is approved, re-verified against the live document, and checked afterward.
+
+### 19.1 Select (`select_browser_option`)
+- **Eligible:**
+  - single-choice `<select>`, enabled, visible, not protected
+  - not payment (`autocomplete="cc-*"`, expiry names) or credential-related.
+- **What the model sees:** the observation lists up to 100 enabled option labels.
+- **Before asking:** Halo checks that the requested option is one of them.
+- **Approval:** `Dropdown: “<label>” / Option: “<option>”`, and "Nothing is submitted."
+- **Mechanism:** the content script re-matches the fingerprint and re-applies the policy, finds the option by exact label, sets `selectedIndex`, and dispatches `input` and `change`.
+  - This is the same approach as browser automation frameworks such as Playwright: native select popups cannot be driven reliably with input events.
+  - The events are therefore untrusted. That is documented, not hidden.
+- **Verification:** match/no-match on the selected option's label.
+
+### 19.2 Scroll (`scroll_browser_tab`)
+- **Targets:** the page, or one region marked `scrollable`. The observation reports up to 20 regions with `overflow` auto/scroll and overflowing content, named by `aria-label` or their first line of text.
+- **Approval:** "Scroll the page / the region “…” <direction> by <n> steps" (1–20 steps of 120 CSS px).
+- **Mechanism:**
+  1. Attach `chrome.debugger`.
+  2. The content script picks the point: the viewport centre for the page, or the region's centre for a region, after bringing it into view and checking that nothing covers it.
+  3. Send a trusted `Input.dispatchMouseEvent` `mouseWheel`.
+  4. Detach.
+- **Verification:** the scroll position changed (polled briefly, since wheel scrolling is asynchronous).
+- **Element references:** they stay valid, because scrolling does not change the document. Only the elements' positions change.
+
+### 19.3 Navigation (`navigate_browser_tab`)
+- **Address policy:** checked by Halo, by the protocol and by the extension.
+  - absolute `http`/`https` only, with a host
+  - no embedded username or password
+  - no spaces or control characters
+  - at most 2,048 bytes.
+- **Approval:** the full `From:` and `To:` addresses. If the destination host differs, it adds "This leaves <domain>. Halo's access to this tab ends when the new site loads."
+- **Mechanism:**
+  1. `chrome.tabs.update`.
+  2. The extension responds only after the new document has started loading, so the navigation event reaches Halo first.
+  3. The validator accepts a navigation request's result across navigation events only. A pause, revoke or close in flight still invalidates it; other request types fail on any navigation.
+- **After navigating:**
+  - Halo drops the element cache. Old references cannot resolve: the new document has a new content script.
+  - Same-site navigation keeps the authorization, following the record's URL.
+  - Cross-site navigation ends it (domain-bound rule).
+- **Exfiltration:** a hostile page could steer the model to put page data into an address. The tool description forbids building addresses from page content, and the approval always shows the complete destination.
+
+### 19.4 Label correction
+Form fields (`input`, `select`, `textarea`) are now named only by their associated `<label>`, `aria-label` or `placeholder`, never by their own text.
+- Before this change, a `<select>`'s option list and a `<textarea>`'s content could appear as its label.
+- That was a correctness bug, and a minor disclosure of field contents.
+
+### 19.5 Verification
+| Check | Covers |
+|---|---|
+| `--check-browser-tabs` → "Phase 5B.3 …" | Each action carries only its own fields; scroll bounds; unsafe and credentialed addresses rejected on the wire and by Halo's policy; navigation results survive only their own navigation (and not a pause in flight); other results fail on any navigation. |
+| `--check-browser-bridge-live` → 8 "5B.3" stages | The model-facing tools, with real approvals, against real Chromium. |
+
+The 8 live stages:
+1. the dropdown and region flags are correct
+2. an approved selection is verified and submits nothing
+3. a disabled option and the multi-select, disabled and card-expiry dropdowns are refused, and denial changes nothing
+4. a dropdown relabelled during approval is refused
+5. a page scroll and then a region scroll both move, with a genuine wheel event
+6. six unsafe addresses are refused with no prompt, and denial stays on the page
+7. same-site navigation shows exact From/To, stays authorized, and old references fail
+8. cross-site navigation warns and ends access.
+
+### 19.6 Limits
+- **Loopback only** (development extension).
+- **Main frame only.**
+- **Untrusted selection events:** select uses scripted events, which a page could in principle treat differently.
+- **Native dialogs:** a page `beforeunload` dialog could block navigation. The extension times out after about 5 s and reports that the navigation did not start.
+- **Not yet supported:** back, forward and reload.

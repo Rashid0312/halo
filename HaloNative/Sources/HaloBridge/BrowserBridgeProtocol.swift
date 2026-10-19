@@ -106,9 +106,16 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
     /// policy: an enabled, editable, visible plain text field that is not a
     /// password, one-time-code, or payment field. Halo re-checks its own policy.
     public let isEditable: Bool?
+    /// Phase 5B.3: a single-choice `<select>` eligible for option selection.
+    public let isSelectable: Bool?
+    /// Phase 5B.3: an element whose content scrolls.
+    public let isScrollable: Bool?
+    /// Phase 5B.3: enabled option labels of a selectable `<select>` (bounded).
+    public let options: [String]?
 
     public init(elementID: String, tagName: String, role: String, label: String, isProtected: Bool, isEnabled: Bool,
-                bounds: BoundedRect, isActionable: Bool? = nil, isEditable: Bool? = nil) {
+                bounds: BoundedRect, isActionable: Bool? = nil, isEditable: Bool? = nil,
+                isSelectable: Bool? = nil, isScrollable: Bool? = nil, options: [String]? = nil) {
         self.elementID = elementID
         self.tagName = tagName.lowercased()
         self.role = role.lowercased()
@@ -118,6 +125,9 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
         self.bounds = bounds
         self.isActionable = isActionable
         self.isEditable = isEditable
+        self.isSelectable = isSelectable
+        self.isScrollable = isScrollable
+        self.options = options
     }
 }
 
@@ -293,6 +303,27 @@ public enum BridgeRequestType: String, Sendable, Codable, Equatable {
     case clickElement
     /// Phase 5B.2: replace one observed text field's contents with approved text.
     case typeText
+    /// Phase 5B.3: choose one option, by its visible label, in an observed `<select>`.
+    case selectOption
+    /// Phase 5B.3: scroll the page, or one observed scrollable element.
+    case scrollTab
+    /// Phase 5B.3: navigate the tab to one approved http(s) URL.
+    case navigateTab
+}
+
+public enum BridgeScrollDirection: String, Sendable, Codable, Equatable {
+    case up, down, left, right
+}
+
+public struct BridgeScroll: Sendable, Codable, Equatable {
+    public let direction: BridgeScrollDirection
+    /// Wheel steps of 120 CSS pixels, 1–20.
+    public let amount: Int
+
+    public init(direction: BridgeScrollDirection, amount: Int) {
+        self.direction = direction
+        self.amount = amount
+    }
 }
 
 /// What Halo showed the user for approval. The extension refuses the action if
@@ -333,10 +364,17 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
     public let expectedElement: BridgeElementFingerprint?
     /// Approved text for `typeText` only.
     public let text: String?
+    /// Approved option label for `selectOption` only.
+    public let option: String?
+    /// Approved scroll for `scrollTab` only.
+    public let scroll: BridgeScroll?
+    /// Approved destination for `navigateTab` only.
+    public let url: String?
 
     public init(requestID: String, protocolVersion: UInt32 = BrowserBridgeLimits.currentProtocolVersion, sessionNonce: String,
                 type: BridgeRequestType, targetTab: TabGenerationIdentity? = nil,
-                elementID: String? = nil, expectedElement: BridgeElementFingerprint? = nil, text: String? = nil) {
+                elementID: String? = nil, expectedElement: BridgeElementFingerprint? = nil, text: String? = nil,
+                option: String? = nil, scroll: BridgeScroll? = nil, url: String? = nil) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
         self.sessionNonce = sessionNonce
@@ -345,6 +383,9 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
         self.elementID = elementID
         self.expectedElement = expectedElement
         self.text = text
+        self.option = option
+        self.scroll = scroll
+        self.url = url
     }
 }
 
@@ -429,32 +470,74 @@ private enum BridgeModelValidation {
     static func request(_ value: BridgeRequest) throws {
         try boundedUTF8(value.requestID, max: 64, field: "requestID")
         try nonce(value.sessionNonce, field: "sessionNonce")
-        switch value.type {
-        case .observeTab, .revokeTab:
-            guard let target = value.targetTab else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type requires a target tab.") }
-            try tab(target)
-            guard value.elementID == nil, value.expectedElement == nil, value.text == nil else {
-                throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids element fields.")
+        // Each action carries exactly its own payload fields and nothing else.
+        let hasElement = value.elementID != nil || value.expectedElement != nil
+        let payloads = (text: value.text != nil, option: value.option != nil, scroll: value.scroll != nil, url: value.url != nil)
+        func forbidPayloads(except allowed: String? = nil) throws {
+            let present = [("text", payloads.text), ("option", payloads.option), ("scroll", payloads.scroll), ("url", payloads.url)]
+                .filter { $0.1 && $0.0 != allowed }
+            guard present.isEmpty else {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids \(present.map(\.0).joined(separator: ", ")).")
             }
-        case .pauseTabs:
-            guard value.targetTab == nil, value.elementID == nil, value.expectedElement == nil, value.text == nil else {
-                throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids a target tab.")
-            }
-        case .clickElement, .typeText:
-            guard let target = value.targetTab, let elementID = value.elementID, let expected = value.expectedElement else {
+        }
+        func requireElement() throws {
+            guard let elementID = value.elementID, let expected = value.expectedElement else {
                 throw BridgeErrorDetails(code: .payloadMalformed, message: "Element action requires a target tab, element, and expected fingerprint.")
             }
-            if value.type == .typeText {
-                guard let text = value.text else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Text entry requires text.") }
-                try typedText(text)
-            } else if value.text != nil {
-                throw BridgeErrorDetails(code: .payloadMalformed, message: "Click forbids text.")
-            }
-            try tab(target)
             try elementReference(elementID)
             try boundedUTF8(expected.tagName, max: 128, field: "expectedElement.tagName")
             try boundedUTF8(expected.role, max: 128, field: "expectedElement.role", allowEmpty: true)
             try boundedUTF8(expected.label, max: BrowserBridgeLimits.maxStringLength, field: "expectedElement.label", allowEmpty: true)
+        }
+        if value.type != .pauseTabs {
+            guard let target = value.targetTab else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type requires a target tab.") }
+            try tab(target)
+        }
+        switch value.type {
+        case .observeTab, .revokeTab:
+            guard !hasElement else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids element fields.") }
+            try forbidPayloads()
+        case .pauseTabs:
+            guard value.targetTab == nil, !hasElement else {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids a target tab.")
+            }
+            try forbidPayloads()
+        case .clickElement:
+            try requireElement()
+            try forbidPayloads()
+        case .typeText:
+            try requireElement()
+            try forbidPayloads(except: "text")
+            guard let text = value.text else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Text entry requires text.") }
+            try typedText(text)
+        case .selectOption:
+            try requireElement()
+            try forbidPayloads(except: "option")
+            guard let option = value.option else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Selection requires an option.") }
+            try boundedUTF8(option, max: 200, field: "option")
+        case .scrollTab:
+            // The page itself (no element) or one observed scrollable element.
+            if hasElement { try requireElement() }
+            try forbidPayloads(except: "scroll")
+            guard let scroll = value.scroll, (1...20).contains(scroll.amount) else {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Scroll requires a direction and 1–20 steps.")
+            }
+        case .navigateTab:
+            guard !hasElement else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Navigation forbids element fields.") }
+            try forbidPayloads(except: "url")
+            guard let url = value.url else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Navigation requires a URL.") }
+            try navigationURL(url)
+        }
+    }
+
+    /// Navigation targets are absolute http(s) URLs with a host, no embedded
+    /// credentials, at most 2,048 bytes.
+    static func navigationURL(_ value: String) throws {
+        guard value.utf8.count <= 2_048, let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = components.host, !host.isEmpty, components.user == nil, components.password == nil,
+              !value.unicodeScalars.contains(where: { $0.properties.generalCategory == .control || $0 == " " }) else {
+            throw BridgeErrorDetails(code: .payloadMalformed, message: "Navigation URL must be an absolute http(s) URL without credentials.")
         }
     }
 
@@ -482,6 +565,10 @@ private enum BridgeModelValidation {
         try boundedUTF8(value.tagName, max: 128, field: "element.tagName")
         try boundedUTF8(value.role, max: 128, field: "element.role", allowEmpty: true)
         try boundedUTF8(value.label, max: BrowserBridgeLimits.maxStringLength, field: "element.label", allowEmpty: true)
+        if let options = value.options {
+            guard options.count <= 100 else { throw BridgeErrorDetails(code: .oversizedPayload, message: "Too many select options.") }
+            try options.forEach { try boundedUTF8($0, max: 200, field: "element.option", allowEmpty: true) }
+        }
         let values = [value.bounds.x, value.bounds.y, value.bounds.width, value.bounds.height]
         guard values.allSatisfy(\.isFinite), value.bounds.width >= 0, value.bounds.height >= 0 else {
             throw BridgeErrorDetails(code: .payloadMalformed, message: "Element bounds must be finite with nonnegative dimensions.")
@@ -582,7 +669,7 @@ public enum BridgeMessageFraming {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope must be a JSON object.")
                 }
                 let allowed: Set<String> = type == BridgeRequest.self
-                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement", "text"]
+                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement", "text", "option", "scroll", "url"]
                     : ["requestID", "protocolVersion", "sessionNonce", "success", "error", "handshake", "observation", "navigation", "tabClosed", "tabAnnouncement", "actionResult"]
                 guard Set(object.keys).isSubset(of: allowed) else {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope contains unknown fields.")
@@ -632,6 +719,8 @@ public actor BridgeSessionValidator {
     private struct PendingRequest: Sendable {
         let target: TabGenerationIdentity?
         let epoch: UInt64
+        let navigationEpoch: UInt64
+        let expectsNavigation: Bool
     }
 
     private let expectedSessionNonce: String
@@ -642,6 +731,9 @@ public actor BridgeSessionValidator {
     private var isPaused = false
     private var authorizedTabs = Set<TabKey>()
     private var accessEpoch: UInt64 = 0
+    /// Counts only navigation events, so a navigation request can tell its own
+    /// navigation apart from a pause, revoke, or close in flight.
+    private var navigationEpoch: UInt64 = 0
 
     public init(sessionNonce: String) {
         self.expectedSessionNonce = sessionNonce
@@ -689,6 +781,7 @@ public actor BridgeSessionValidator {
         }
         activeDocumentGenerations[key] = event.newDocumentGenerationID
         accessEpoch &+= 1
+        navigationEpoch &+= 1
     }
 
     public func notifyClosed(event: TabClosedEvent) throws {
@@ -732,7 +825,9 @@ public actor BridgeSessionValidator {
             }
         }
         seenRequestIDs.insert(request.requestID)
-        pendingRequests[request.requestID] = PendingRequest(target: request.targetTab, epoch: accessEpoch)
+        pendingRequests[request.requestID] = PendingRequest(target: request.targetTab, epoch: accessEpoch,
+                                                            navigationEpoch: navigationEpoch,
+                                                            expectsNavigation: request.type == .navigateTab)
     }
 
     /// Validates an incoming response against session nonce and pause status.
@@ -751,7 +846,11 @@ public actor BridgeSessionValidator {
               let pending = pendingRequests.removeValue(forKey: response.requestID) else {
             throw BridgeErrorDetails(code: .replayedRequest, message: "Response does not match one outstanding request.")
         }
-        guard pending.epoch == accessEpoch else {
+        // Any access change in flight invalidates the response, except that a
+        // navigation request's result survives navigation events (only).
+        let changes = accessEpoch &- pending.epoch
+        let navigations = navigationEpoch &- pending.navigationEpoch
+        guard changes == 0 || (pending.expectsNavigation && changes == navigations) else {
             throw BridgeErrorDetails(code: .accessPaused, message: "Bridge access changed while the response was in flight.")
         }
         completedResponseIDs.insert(response.requestID)
