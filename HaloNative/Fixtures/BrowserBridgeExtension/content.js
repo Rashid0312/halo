@@ -50,8 +50,10 @@
       // Only accessible descriptions; a protected element's value is never read.
       label = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim();
     } else {
-      // Form values are user data, not labels. Never read `.value`.
-      label = (el.innerText || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim();
+      // Form values are user data, not labels. Never read `.value`. Fields are
+      // named by their associated <label>, then aria-label, then placeholder.
+      const associated = el.labels && el.labels.length ? el.labels[0].innerText : "";
+      label = (el.innerText || associated || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").trim();
     }
     return { tagName, role, label: label.substring(0, 32768), isProtected };
   }
@@ -64,6 +66,27 @@
     const isPlainButton = info.tagName === "button" && (el.getAttribute("type") || "").toLowerCase() === "button";
     const isRoleButton = info.role === "button" && !["a", "input", "select", "textarea", "form"].includes(info.tagName);
     if (!isPlainButton && !isRoleButton) return false;
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
+
+  // Phase 5B.2 text-entry policy: plain text fields only. Credentials,
+  // one-time codes, and payment fields are never typed into.
+  const TEXT_INPUT_TYPES = ["", "text", "search", "email", "url", "tel", "number"];
+  const SENSITIVE_HINT = /(otp|one.?time|verification.?code|2fa|mfa|totp|cvv|cvc|card.?num|cc.?num|credit.?card|iban|ssn|social.?security|pin\b|security.?code)/i;
+
+  function isEditable(el, info) {
+    if (info.isProtected || el.disabled || el.readOnly || el.getAttribute("aria-disabled") === "true") return false;
+    if (info.tagName === "input") {
+      if (!TEXT_INPUT_TYPES.includes((el.getAttribute("type") || "").toLowerCase())) return false;
+    } else if (info.tagName !== "textarea") {
+      return false;
+    }
+    const autocomplete = (el.getAttribute("autocomplete") || "").toLowerCase();
+    if (autocomplete.startsWith("cc-") || autocomplete.includes("one-time-code")) return false;
+    const hints = [el.getAttribute("name"), el.id, el.getAttribute("aria-label"), el.getAttribute("placeholder"), info.label].join(" ");
+    if (SENSITIVE_HINT.test(hints)) return false;
     const rect = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
@@ -86,6 +109,7 @@
         isProtected: info.isProtected,
         isEnabled: !el.disabled,
         isActionable: isActionable(el, info),
+        isEditable: isEditable(el, info),
         bounds: {
           x: Math.max(0, rect.x),
           y: Math.max(0, rect.y),
@@ -159,7 +183,45 @@
     return { x, y };
   }
 
+  // Text entry: focus and select the approved field, then let the trusted
+  // Input.insertText replace the selection. Afterwards only a match/no-match
+  // result is reported; the field's value never leaves the page.
+  let pendingType = null;
+
+  async function prepareType(request) {
+    const ref = elementsByID.get(request.elementID);
+    const el = ref && ref.deref();
+    if (!el || !el.isConnected) return { error: "elementChanged", message: "The field is no longer on the page." };
+    const info = describe(el);
+    const expected = request.expected || {};
+    if (info.tagName !== expected.tagName || info.role !== expected.role || info.label !== expected.label) {
+      return { error: "elementChanged", message: "The field changed after approval." };
+    }
+    if (!isEditable(el, info)) return { error: "elementNotActionable", message: "The field is not an editable plain text field." };
+    el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    el.focus({ preventScroll: true });
+    await nextFrame();
+    if (document.activeElement !== el) return { error: "elementChanged", message: "The field could not be focused." };
+    el.select();
+    pendingType = el;
+    return { ready: true };
+  }
+
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "prepareType") {
+      prepareType(request).then(sendResponse, (err) => sendResponse({ error: "internalError", message: String(err && err.message) }));
+      return true;
+    }
+    if (request.action === "typeFocusHeld") {
+      sendResponse({ held: Boolean(pendingType) && document.activeElement === pendingType });
+      return false;
+    }
+    if (request.action === "typeOutcome") {
+      const el = pendingType;
+      pendingType = null;
+      sendResponse({ matched: Boolean(el) && el.isConnected && el.value === request.text });
+      return false;
+    }
     if (request.action === "observe") {
       sendResponse({ elements: observe(request.generationID || 1) });
       return false;

@@ -695,6 +695,34 @@ enum NativeChecks {
                 covered.onclick = () => { c++; document.getElementById("covered-count").textContent = "Covered clicks: " + c; };
                 </script></body></html>
                 """#)
+                // Phase 5B.2 text-entry fixture. The page reports lengths, input
+                // trust, and submissions so checks never need the field values.
+                let typePage = respond(#"""
+                <!DOCTYPE html><html><head><title>Halo Type Fixture</title></head>
+                <body><h1>Halo Type Fixture</h1>
+                <form id="f">
+                <label for="q">Search query</label><input id="q" type="text">
+                <label for="notes">Notes</label><textarea id="notes"></textarea>
+                <input type="password" aria-label="Password">
+                <input id="otp" autocomplete="one-time-code" aria-label="Verification code">
+                <input id="card" name="card_number" autocomplete="cc-number" aria-label="Card number">
+                <input id="ro" readonly aria-label="Read only field" value="fixed">
+                <input id="dis" disabled aria-label="Disabled field">
+                <label for="rn">Rename field</label><input id="rn" type="text">
+                </form>
+                <h2 id="qlen">Query length: 0</h2><h2 id="qtrusted">Query input trusted: none</h2>
+                <h2 id="nlen">Notes length: 0</h2><h2 id="subs">Form submissions: 0</h2><h2 id="rnlen">Rename field length: 0</h2>
+                <script>
+                let subs = 0;
+                f.onsubmit = (e) => { e.preventDefault(); subs++; document.getElementById("subs").textContent = "Form submissions: " + subs; };
+                q.addEventListener("input", (e) => {
+                  document.getElementById("qlen").textContent = "Query length: " + q.value.length;
+                  document.getElementById("qtrusted").textContent = "Query input trusted: " + (e.isTrusted ? "yes" : "no");
+                });
+                notes.addEventListener("input", () => { document.getElementById("nlen").textContent = "Notes length: " + notes.value.length; });
+                rn.addEventListener("input", () => { document.getElementById("rnlen").textContent = "Rename field length: " + rn.value.length; });
+                </script></body></html>
+                """#)
                 let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
                     + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
@@ -722,7 +750,7 @@ enum NativeChecks {
                         guard !requestLine.isEmpty else { Darwin.close(client); return }
                         let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
                         let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large
-                            : path.hasPrefix("/click") ? clickPage : responseBytes
+                            : path.hasPrefix("/click") ? clickPage : path.hasPrefix("/type") ? typePage : responseBytes
                         _ = bytes.withUnsafeBufferPointer { buf -> Int in
                             var written = 0
                             while written < buf.count {

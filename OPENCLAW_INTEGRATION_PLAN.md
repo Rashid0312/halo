@@ -49,7 +49,7 @@ The integration will not initially import:
 | 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Complete | Exact-target execution, approvals, secure-field protection, and post-action verification pass across both drivers |
 | 4. Chrome tab integration | Complete | Browser-session authorization, approval revalidation, injection-safe metadata framing, and in-flight killswitch checks pass |
-| 5. Browser actions | In progress: 5A read-only bridge and 5B.1 approved click complete; 5B.2 (text entry) next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
+| 5. Browser actions | In progress: 5A read-only bridge, 5B.1 approved click, and 5B.2 safe text entry complete; 5B.3 (select, scroll, navigation) next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
 | 6. Legacy automation retirement | Not started | Replaced Halo implementations are removed only after parity and rollback validation |
 | 7. Release hardening | Not started | Security, permissions, signing, notarization, clean-install, and recovery checks pass |
 
@@ -253,9 +253,18 @@ After Phase 5A evidence is complete, stop for primary-engineer review. Do not pr
 
 Evidence: design doc §17. `--check-browser-tabs` (click protocol) and `--check-browser-bridge-live` (8 click stages) pass on Chromium 158.
 
+### Phase 5B.2 — Safe text entry (complete, 2026-10-19)
+
+- [x] Type only into freshly verified, non-protected plain text fields.
+- [x] Show the exact destination and proposed text.
+- [x] Never type passwords, one-time codes, payment details, or detected secrets.
+- [x] Typing is separate from submission (no Enter or key events; the fixture form's submit count stays 0).
+- [x] Verify the field afterward without its value leaving the page (match/no-match only).
+
+Evidence: design doc §18. `--check-browser-tabs` (text protocol and policy) and `--check-browser-bridge-live` (7 typing stages) pass.
+
 ### Remaining Phase 5B slices
 
-- **5B.2:** safe text entry.
 - **5B.3:** select, scroll, and navigation.
 - **5B.4:** the sensitive-action policy (forms, messages, purchases, accounts, uploads, downloads, credentials).
 - Original scope still to cover:
@@ -547,3 +556,15 @@ Implementation boundary: Transport foundation (`BrowserBridgeProtocol.swift`) im
   - re-injection guard
   - `debugger` permission.
 - Tests: deterministic click protocol checks, and 8 real-Chromium click stages, including hidden-overlay and reload-during-approval refusals.
+
+### 2026-10-19 (Phase 5B.2 — Safe text entry)
+
+- New tool `type_in_browser_field`: text policy first; re-observe; approval showing the field and exact text; genuine `Input.insertText` via `chrome.debugger`; match-only verification.
+- Protocol: a `typeText` request with bounded single-line `text`; an `isEditable` element flag; text rejected on every other request type.
+- Halo: `isTypable` field policy and `textRefusal` (control characters, key and token formats, JWTs, long tokens, Luhn-valid card numbers). Element targets are shared between click and type.
+- Extension:
+  - field labels come from the associated `<label>`
+  - text-field policy, with credential, OTP and payment heuristics
+  - focus/select preparation and a focus-held check
+  - match-only outcome.
+- Tests: protocol and policy checks, plus 7 real-Chromium typing stages.

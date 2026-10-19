@@ -508,7 +508,12 @@ extension NativeChecks {
                 throw Failure("read_browser_tab returned no element references: \(read)")
             }
             var byLabel: [String: [String: Any]] = [:]
-            for element in list { if let label = element["label"] as? String { byLabel[label] = element } }
+            for element in list {
+                guard let label = element["label"] as? String else { continue }
+                var key = label, copy = 2
+                while byLabel[key] != nil { key = "\(label) #\(copy)"; copy += 1 }
+                byLabel[key] = element
+            }
             return byLabel
         }
         func elementID(_ map: [String: [String: Any]], _ label: String) throws -> String {
@@ -607,6 +612,111 @@ extension NativeChecks {
         guard stale["ok"] as? Bool == false, approvals.isEmpty else { throw Failure("Stale element reference was accepted: \(stale)") }
         pass("5B.1 stale element reference from the previous document refused before approval.")
 
+        // 5B.2. Safe text entry through the production tool, approval, and bridge.
+        let beforeType = await {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "performance.timeOrigin", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? Double else { return 0.0 }
+            return value
+        }()
+        try await devtoolsC.call(pageC, "Page.navigate", ["url": base + "/type"])
+        _ = try await waitUntil("type fixture to load", timeout: 10) {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate",
+                      ["expression": "performance.timeOrigin + '|' + document.readyState", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? String else { return false }
+            let parts = value.split(separator: "|")
+            return parts.count == 2 && Double(parts[0]) != beforeType && parts[1] == "complete"
+        }
+        _ = try await readUntil("type fixture read", id: tabC) { $0.title == "Halo Type Fixture" }
+        func type(_ id: String, _ text: String) async throws -> [String: Any] {
+            try await run("type_in_browser_field", ["tab_id": tabC, "element_id": id, "text": text])
+        }
+
+        map = try await elements()
+        // Password and one-time-code fields are both protected; their labels are withheld.
+        for (label, typable) in [("Search query", true), ("Notes", true), ("Rename field", true), ("(protected)", false),
+                                 ("(protected) #2", false), ("Card number", false), ("Read only field", false), ("Disabled field", false)] {
+            guard map[label]?["typable"] as? Bool == typable else {
+                throw Failure("Field '\(label)' typable flag should be \(typable); got \(String(describing: map[label])).")
+            }
+        }
+        pass("5B.2 observation: plain text fields typable; password, one-time-code, payment, read-only, and disabled fields are not.")
+
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        approvals = []
+        let typed = try await type(try elementID(map, "Search query"), "hello halo")
+        map = try await elements()
+        guard typed["ok"] as? Bool == true, typed["verified"] as? Bool == true,
+              let typePreview = approvals.first, approvals.count == 1,
+              typePreview.path.contains("Halo Type Fixture"), typePreview.preview.contains("Search query"), typePreview.preview.contains("hello halo"),
+              map["Query length: 10"] != nil, map["Query input trusted: yes"] != nil, map["Form submissions: 0"] != nil else {
+            throw Failure("Approved typing failed: \(typed) preview=\(String(describing: approvals.first)) page=\(map.keys.sorted())")
+        }
+        pass("5B.2 approved typing: preview showed site, field, and exact text; genuine input landed and was verified without reading the field; nothing submitted.")
+
+        let replaced = try await type(try elementID(map, "Search query"), "second")
+        let note = try await type(try elementID(map, "Notes"), "a short note")
+        map = try await elements()
+        guard replaced["verified"] as? Bool == true, note["verified"] as? Bool == true,
+              map["Query length: 6"] != nil, map["Notes length: 12"] != nil, map["Form submissions: 0"] != nil else {
+            throw Failure("Replacement or textarea typing failed: \(replaced) \(note) page=\(map.keys.sorted())")
+        }
+        pass("5B.2 replacement: typing replaced the field's previous text; textarea entry verified; still no submission.")
+
+        decide = { tools.resolve(id: $0.id, allow: false) }
+        let deniedType = try await type(try elementID(map, "Search query"), "should not appear")
+        map = try await elements()
+        guard deniedType["denied"] as? Bool == true, map["Query length: 6"] != nil else {
+            throw Failure("Denied typing changed the field: \(deniedType)")
+        }
+        pass("5B.2 denied typing: nothing typed.")
+
+        approvals = []
+        for label in ["(protected)", "(protected) #2", "Card number", "Read only field", "Disabled field"] {
+            let refused = try await type(try elementID(map, label), "hello")
+            guard refused["ok"] as? Bool == false else { throw Failure("Field '\(label)' was not refused: \(refused)") }
+        }
+        for text in ["line one\nline two", "tab\tseparated", "sk-abcdefghijklmnopqrstuvwxyz012345", "4111 1111 1111 1111",
+                     "-----BEGIN PRIVATE KEY-----", ""] {
+            let refused = try await type(try elementID(map, "Search query"), text)
+            guard refused["ok"] as? Bool == false else { throw Failure("Text '\(text.prefix(12))' was not refused: \(refused)") }
+        }
+        map = try await elements()
+        guard approvals.isEmpty, map["Query length: 6"] != nil, map["Form submissions: 0"] != nil else {
+            throw Failure("A refused field or text reached approval or changed the page.")
+        }
+        pass("5B.2 policy: password, one-time-code, card, read-only, and disabled fields, and line breaks, tabs, keys, card numbers, and empty text, refused before any approval prompt.")
+
+        decide = { approval in
+            Task { @MainActor in
+                _ = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "document.querySelector('label[for=rn]').textContent = 'Renamed field'"])
+                tools.resolve(id: approval.id, allow: true)
+            }
+        }
+        let relabeled = try await type(try elementID(map, "Rename field"), "hello")
+        map = try await elements()
+        guard relabeled["ok"] as? Bool == false, map["Rename field length: 0"] != nil else {
+            throw Failure("Typing into a field relabeled during approval was not refused: \(relabeled)")
+        }
+        pass("5B.2 field changed during approval: refused, nothing typed (\(relabeled["error"] as? String ?? "")).")
+
+        decide = { approval in
+            Task { @MainActor in
+                _ = try? await devtoolsC.call(pageC, "Page.reload")
+                _ = try? await waitUntil("reload during typing approval", timeout: 10) {
+                    guard let r = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "document.readyState + '|' + q.value.length", "returnByValue": true]),
+                          let text = (r["result"] as? [String: Any])?["value"] as? String else { return false }
+                    return text == "complete|0"
+                }
+                tools.resolve(id: approval.id, allow: true)
+            }
+        }
+        let reloadedType = try await type(try elementID(map, "Search query"), "after reload")
+        map = try await elements()
+        guard reloadedType["ok"] as? Bool == false, map["Query length: 0"] != nil else {
+            throw Failure("Typing after a reload during approval was not refused: \(reloadedType)")
+        }
+        pass("5B.2 page reloaded during approval: refused, nothing typed (\(reloadedType["error"] as? String ?? "")).")
+
         // 13. Disable: no manifest, session, socket, or helper may remain.
         let finalSession = await service.activeBridgeServer()?.directoryURL
         controller.enabled = false
@@ -650,7 +760,7 @@ extension NativeChecks {
               milliseconds(detectCrash) <= 1000, milliseconds(warmReconnect) <= 5000, helperCPU < 1, haloCPU < 2 else {
             throw Failure("Real-browser performance thresholds not met.")
         }
-        print("PASS: Real Chromium bridge suite (5A lifecycle + 5B.1 click): \(results.count) stages verified end to end.")
+        print("PASS: Real Chromium bridge suite (5A lifecycle, 5B.1 click, 5B.2 typing): \(results.count) stages verified end to end.")
     }
 }
 
@@ -783,5 +893,32 @@ extension NativeChecks {
             throw Failure("Click protocol: a click result for a different tab was accepted.")
         } catch let error as BridgeErrorDetails where error.code == .browserMismatch {}
         print("PASS: Phase 5B.1 click protocol: incomplete or malformed click requests, element fields on observe, and mismatched click results fail closed.")
+
+        // Phase 5B.2: text travels only in typeText, single-line and bounded.
+        let typeOK = BridgeRequest(requestID: "type_ok", sessionNonce: nonce, type: .typeText, targetTab: tab,
+                                   elementID: "el_3_0011aabbccddeeff", expectedElement: fingerprint, text: "hello")
+        _ = try BridgeMessageFraming.encode(typeOK)
+        try rejects("typeText without text", BridgeRequest(requestID: "t1", sessionNonce: nonce, type: .typeText, targetTab: tab,
+                                                           elementID: "el_3_ab", expectedElement: fingerprint))
+        for bad in ["", "line\nbreak", "tab\there", "nul\u{0}", "sep\u{2028}", String(repeating: "a", count: 4_001)] {
+            try rejects("typeText with unsafe text", BridgeRequest(requestID: "t2", sessionNonce: nonce, type: .typeText, targetTab: tab,
+                                                                   elementID: "el_3_ab", expectedElement: fingerprint, text: bad))
+        }
+        try rejects("text on a click", BridgeRequest(requestID: "t3", sessionNonce: nonce, type: .clickElement, targetTab: tab,
+                                                     elementID: "el_3_ab", expectedElement: fingerprint, text: "hi"))
+        try rejects("text on an observe", BridgeRequest(requestID: "t4", sessionNonce: nonce, type: .observeTab, targetTab: tab, text: "hi"))
+
+        // Halo's own text policy, applied before any approval prompt.
+        let allowed = ["hello halo", "Order #12345 for Jane", "https://example.com/docs", "Café crème — 2 cups", "1234 5678"]
+        let refusedTexts = ["a\nb", "sk-abcdefghijklmnopqrstuvwxyz", "AKIAABCDEFGHIJKLMNOP", "ghp_" + String(repeating: "a1", count: 18),
+                            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.sig", "4111 1111 1111 1111", "5555-5555-5555-4444",
+                            "-----BEGIN RSA PRIVATE KEY-----", "Zx9" + String(repeating: "k3Q", count: 14)]
+        guard allowed.allSatisfy({ ChromeBrowserService.textRefusal($0) == nil }) else {
+            throw Failure("Text policy refused ordinary text: \(allowed.filter { ChromeBrowserService.textRefusal($0) != nil })")
+        }
+        guard refusedTexts.allSatisfy({ ChromeBrowserService.textRefusal($0) != nil }) else {
+            throw Failure("Text policy allowed secret-like text: \(refusedTexts.filter { ChromeBrowserService.textRefusal($0) == nil })")
+        }
+        print("PASS: Phase 5B.2 text protocol and policy: unsafe text rejected on the wire; keys, tokens, card numbers, and line breaks refused before approval; ordinary text allowed.")
     }
 }

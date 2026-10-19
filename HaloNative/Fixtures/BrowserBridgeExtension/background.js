@@ -204,6 +204,8 @@ async function handleHostMessage(msg) {
     }
   } else if (msg.type === "clickElement") {
     await handleClick(msg, requestID, sessionNonce);
+  } else if (msg.type === "typeText") {
+    await handleType(msg, requestID, sessionNonce);
   } else if (msg.type === "pauseTabs" || msg.type === "revokeTab") {
     nativePort.postMessage({
       requestID: requestID,
@@ -308,6 +310,70 @@ async function handleClick(msg, requestID, sessionNonce) {
     });
   } catch (err) {
     sendError(requestID, sessionNonce, "internalError", "Click failed: " + String(err && err.message));
+  } finally {
+    if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
+  }
+}
+
+// Phase 5B.2: replace one approved field's contents with approved text using
+// trusted input. Input.insertText inserts text only; it never presses Enter, so
+// typing cannot submit a form. The field value is never sent to Halo.
+async function handleType(msg, requestID, sessionNonce) {
+  const target = msg.targetTab;
+  const text = msg.text;
+  if (!target || !target.tabID || !msg.elementID || !msg.expectedElement || typeof text !== "string" ||
+      text.length === 0 || text.length > 4000 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(text)) {
+    sendError(requestID, sessionNonce, "payloadMalformed", "typeText requires a target, field, fingerprint, and plain single-line text");
+    return;
+  }
+  const tabID = target.tabID;
+  const unchanged = async () => {
+    const tab = await chrome.tabs.get(tabID);
+    return !tab.incognito && (tab.url || "") === target.url &&
+      tabGenerations.get(tabID) === target.documentGenerationID;
+  };
+  try {
+    if (!tabContexts.has(tabID) || !(await unchanged())) {
+      sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before typing");
+      return;
+    }
+    if (!target.url.startsWith("http://127.0.0.1") && !target.url.startsWith("http://localhost")) {
+      sendError(requestID, sessionNonce, "tabNotAuthorized", "Host permission restricted to loopback fixture");
+      return;
+    }
+  } catch (err) {
+    sendError(requestID, sessionNonce, "tabNotAuthorized", "Tab not found");
+    return;
+  }
+
+  const debuggee = { tabId: tabID };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(debuggee, "1.3");
+    attached = true;
+    const prep = await chrome.tabs.sendMessage(tabID, {
+      action: "prepareType", elementID: msg.elementID, expected: msg.expectedElement
+    });
+    if (!prep || prep.error) {
+      sendError(requestID, sessionNonce, (prep && prep.error) || "elementChanged", (prep && prep.message) || "The field could not be prepared");
+      return;
+    }
+    const focus = await chrome.tabs.sendMessage(tabID, { action: "typeFocusHeld" });
+    if (!(await unchanged()) || !focus || !focus.held) {
+      sendError(requestID, sessionNonce, "elementChanged", "The page or field focus changed before typing");
+      return;
+    }
+    await chrome.debugger.sendCommand(debuggee, "Input.insertText", { text: text });
+    const outcome = await chrome.tabs.sendMessage(tabID, { action: "typeOutcome", text: text }).catch(() => null);
+    nativePort.postMessage({
+      requestID: requestID,
+      protocolVersion: 1,
+      sessionNonce: sessionNonce,
+      success: true,
+      actionResult: { tab: target, elementID: msg.elementID, performed: Boolean(outcome && outcome.matched) }
+    });
+  } catch (err) {
+    sendError(requestID, sessionNonce, "internalError", "Typing failed: " + String(err && err.message));
   } finally {
     if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
   }

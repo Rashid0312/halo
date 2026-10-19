@@ -52,11 +52,14 @@ public struct BrowserTabElement: Sendable, Codable, Equatable {
     public let tagName: String
     public let label: String
     public let clickable: Bool
+    public let typable: Bool
 }
 
-/// A click target re-observed immediately before approval. The approval preview
-/// shows these fields; the click is refused if any of them no longer hold.
-public struct BrowserClickTarget: Sendable, Equatable {
+public enum BrowserElementAction: Sendable { case click, type }
+
+/// An element re-observed immediately before approval. The approval preview
+/// shows these fields; the action is refused if any of them no longer hold.
+public struct BrowserElementTarget: Sendable, Equatable {
     public let tabID: Int
     public let title: String
     public let url: String
@@ -468,6 +471,51 @@ public actor ChromeBrowserService {
             (element.tagName == "button" || element.role == "button")
     }
 
+    /// Phase 5B.2 policy, enforced by Halo independently of the extension's flag:
+    /// enabled, unprotected plain text inputs and textareas only.
+    static func isTypable(_ element: ObservedDOMElement) -> Bool {
+        element.isEditable == true && element.isEnabled && !element.isProtected &&
+            ["input", "textarea"].contains(element.tagName)
+    }
+
+    /// Why Halo refuses to type `text`, or nil when it may be offered for approval.
+    /// Text that looks like a credential is never typed, even if requested.
+    static func textRefusal(_ text: String) -> String? {
+        if text.isEmpty { return "There is no text to type." }
+        if text.utf16.count > BrowserBridgeLimits.maxTypedTextLength { return "Text is longer than 4,000 characters." }
+        if text.unicodeScalars.contains(where: { $0.properties.generalCategory == .control || $0.value == 0x2028 || $0.value == 0x2029 }) {
+            return "Text with line breaks, tabs, or control characters is refused: it could submit a form. Submitting is a separate, later step."
+        }
+        let secretPatterns = [
+            #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#,
+            #"\bsk-[A-Za-z0-9_\-]{16,}"#,
+            #"\bAKIA[0-9A-Z]{16}\b"#,
+            #"\bgh[pousr]_[A-Za-z0-9]{30,}"#,
+            #"\bxox[abprs]-[A-Za-z0-9\-]{10,}"#,
+            #"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\."#,
+            #"\b(?=[A-Za-z0-9+/_\-]*[0-9])(?=[A-Za-z0-9+/_\-]*[A-Za-z])[A-Za-z0-9+/_\-]{40,}\b"#
+        ]
+        if secretPatterns.contains(where: { text.range(of: $0, options: .regularExpression) != nil }) {
+            return "The text looks like a password, key, or token; Halo never types secrets."
+        }
+        // Payment card numbers: 13–19 digits (spaces or dashes allowed) passing Luhn.
+        if let regex = try? NSRegularExpression(pattern: #"(?:\d[ -]?){12,18}\d"#) {
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                guard let range = Range(match.range, in: text) else { continue }
+                let digits = text[range].compactMap(\.wholeNumberValue)
+                var sum = 0
+                for (index, digit) in digits.reversed().enumerated() {
+                    let value = index % 2 == 1 ? digit * 2 : digit
+                    sum += value > 9 ? value - 9 : value
+                }
+                if (13...19).contains(digits.count), sum % 10 == 0 {
+                    return "The text looks like a payment card number; Halo never types payment details."
+                }
+            }
+        }
+        return nil
+    }
+
     /// One correlated bridge exchange for an authorized tab. Pending lifecycle
     /// events are applied first; the response is matched by request ID; any
     /// navigation, close, pause, revoke, or epoch change in flight fails closed.
@@ -540,10 +588,11 @@ public actor ChromeBrowserService {
         }
     }
 
-    /// Re-observes the tab and resolves an element for a click approval preview.
-    public func describeClickTarget(tabID: Int, elementID: String, browserAppID: String? = nil) async throws -> BrowserClickTarget {
+    /// Re-observes the tab and resolves an element for an approval preview.
+    public func describeElementTarget(tabID: Int, elementID: String, action: BrowserElementAction,
+                                      browserAppID: String? = nil) async throws -> BrowserElementTarget {
         guard bridgeServer != nil else {
-            throw InteractionError("Clicking requires the Halo browser extension connection (Settings → Mac Access → Browser bridge).")
+            throw InteractionError("Browser actions require the Halo browser extension connection (Settings → Mac Access → Browser bridge).")
         }
         let content = try await readTab(id: tabID, browserAppID: browserAppID)
         let context = try browserContext(browserAppID)
@@ -551,17 +600,22 @@ public actor ChromeBrowserService {
         guard let observed = bridgeElements[key], let element = observed.elements[elementID] else {
             throw InteractionError("Element \(elementID) is not on the current page. Read the tab again and use a current element ID.")
         }
-        guard Self.isClickable(element) else {
+        switch action {
+        case .click where !Self.isClickable(element):
             throw InteractionError("Only plain, enabled buttons can be clicked. Links, form submission, and protected or disabled controls are blocked.")
+        case .type where !Self.isTypable(element):
+            throw InteractionError("Only enabled plain text fields can be typed into. Password, one-time-code, payment, read-only, and disabled fields are blocked.")
+        default:
+            break
         }
-        return BrowserClickTarget(tabID: tabID, title: content.title, url: content.url, domain: content.domain,
+        return BrowserElementTarget(tabID: tabID, title: content.title, url: content.url, domain: content.domain,
                                   elementID: elementID, tagName: element.tagName, role: element.role,
                                   label: element.label, key: key, generation: observed.generation)
     }
 
     /// Performs one approved click. The page, element, and its position are
     /// re-verified by the extension; nothing is clicked if any of them changed.
-    public func click(_ target: BrowserClickTarget) async throws -> BrowserClickResult {
+    public func click(_ target: BrowserElementTarget) async throws -> BrowserClickResult {
         guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
         guard let server = bridgeServer, let validator = bridgeValidator, await server.isConnected else {
             throw InteractionError("The Halo browser extension disconnected; nothing was clicked.")
@@ -578,6 +632,32 @@ public actor ChromeBrowserService {
         }
         guard let action = resp.actionResult, action.elementID == target.elementID else {
             throw InteractionError("The browser bridge returned no click result.")
+        }
+        let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
+        return BrowserClickResult(verified: action.performed, after: after)
+    }
+
+    /// Replaces one approved field's contents with approved text. The extension
+    /// re-verifies the page and field; only whether the field now holds exactly
+    /// this text is reported back, never the field's value.
+    public func type(_ target: BrowserElementTarget, text: String) async throws -> BrowserClickResult {
+        if let refusal = Self.textRefusal(text) { throw InteractionError(refusal) }
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        guard let server = bridgeServer, let validator = bridgeValidator, await server.isConnected else {
+            throw InteractionError("The Halo browser extension disconnected; nothing was typed.")
+        }
+        let context = try browserContext(target.key.browserBundleID)
+        guard context.sessionID == target.key.browserSessionID else {
+            throw InteractionError("The browser restarted after approval; nothing was typed.")
+        }
+        let fingerprint = BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
+        let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
+                                                    validator: validator, requiredGeneration: target.generation, timeout: 10) {
+            BridgeRequest(requestID: $1, sessionNonce: $2, type: .typeText, targetTab: $0,
+                          elementID: target.elementID, expectedElement: fingerprint, text: text)
+        }
+        guard let action = resp.actionResult, action.elementID == target.elementID else {
+            throw InteractionError("The browser bridge returned no typing result.")
         }
         let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
         return BrowserClickResult(verified: action.performed, after: after)
@@ -619,7 +699,7 @@ public actor ChromeBrowserService {
             content.elements = obs.elements.map {
                 BrowserTabElement(id: $0.elementID, role: $0.role, tagName: $0.tagName,
                                   label: $0.isProtected ? "(protected)" : String($0.label.prefix(200)),
-                                  clickable: Self.isClickable($0))
+                                  clickable: Self.isClickable($0), typable: Self.isTypable($0))
             }
             return content
         }

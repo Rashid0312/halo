@@ -14,6 +14,9 @@ public enum BrowserBridgeLimits {
     /// Maximum number of observed interactive/structural elements per snapshot.
     public static let maxElementsPerObservation: Int = 200
 
+    /// Maximum approved text for one Phase 5B.2 text entry (UTF-16 units).
+    public static let maxTypedTextLength: Int = 4_000
+
     /// Required length for cryptographically random session nonces (32 bytes / 64 hex characters).
     public static let nonceLengthHexChars: Int = 64
 
@@ -99,9 +102,13 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
     /// a plain button outside any form or link, enabled, visible, not protected.
     /// Halo re-checks its own policy; this flag alone never authorizes a click.
     public let isActionable: Bool?
+    /// Set by the extension when the element passes the Phase 5B.2 text-entry
+    /// policy: an enabled, editable, visible plain text field that is not a
+    /// password, one-time-code, or payment field. Halo re-checks its own policy.
+    public let isEditable: Bool?
 
     public init(elementID: String, tagName: String, role: String, label: String, isProtected: Bool, isEnabled: Bool,
-                bounds: BoundedRect, isActionable: Bool? = nil) {
+                bounds: BoundedRect, isActionable: Bool? = nil, isEditable: Bool? = nil) {
         self.elementID = elementID
         self.tagName = tagName.lowercased()
         self.role = role.lowercased()
@@ -110,6 +117,7 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
         self.isEnabled = isEnabled
         self.bounds = bounds
         self.isActionable = isActionable
+        self.isEditable = isEditable
     }
 }
 
@@ -283,6 +291,8 @@ public enum BridgeRequestType: String, Sendable, Codable, Equatable {
     case revokeTab
     /// Phase 5B.1: one approved click on one previously observed element.
     case clickElement
+    /// Phase 5B.2: replace one observed text field's contents with approved text.
+    case typeText
 }
 
 /// What Halo showed the user for approval. The extension refuses the action if
@@ -321,10 +331,12 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
     public let targetTab: TabGenerationIdentity?
     public let elementID: String?
     public let expectedElement: BridgeElementFingerprint?
+    /// Approved text for `typeText` only.
+    public let text: String?
 
     public init(requestID: String, protocolVersion: UInt32 = BrowserBridgeLimits.currentProtocolVersion, sessionNonce: String,
                 type: BridgeRequestType, targetTab: TabGenerationIdentity? = nil,
-                elementID: String? = nil, expectedElement: BridgeElementFingerprint? = nil) {
+                elementID: String? = nil, expectedElement: BridgeElementFingerprint? = nil, text: String? = nil) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
         self.sessionNonce = sessionNonce
@@ -332,6 +344,7 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
         self.targetTab = targetTab
         self.elementID = elementID
         self.expectedElement = expectedElement
+        self.text = text
     }
 }
 
@@ -420,22 +433,38 @@ private enum BridgeModelValidation {
         case .observeTab, .revokeTab:
             guard let target = value.targetTab else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type requires a target tab.") }
             try tab(target)
-            guard value.elementID == nil, value.expectedElement == nil else {
+            guard value.elementID == nil, value.expectedElement == nil, value.text == nil else {
                 throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids element fields.")
             }
         case .pauseTabs:
-            guard value.targetTab == nil, value.elementID == nil, value.expectedElement == nil else {
+            guard value.targetTab == nil, value.elementID == nil, value.expectedElement == nil, value.text == nil else {
                 throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids a target tab.")
             }
-        case .clickElement:
+        case .clickElement, .typeText:
             guard let target = value.targetTab, let elementID = value.elementID, let expected = value.expectedElement else {
-                throw BridgeErrorDetails(code: .payloadMalformed, message: "Click requires a target tab, element, and expected fingerprint.")
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Element action requires a target tab, element, and expected fingerprint.")
+            }
+            if value.type == .typeText {
+                guard let text = value.text else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Text entry requires text.") }
+                try typedText(text)
+            } else if value.text != nil {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Click forbids text.")
             }
             try tab(target)
             try elementReference(elementID)
             try boundedUTF8(expected.tagName, max: 128, field: "expectedElement.tagName")
             try boundedUTF8(expected.role, max: 128, field: "expectedElement.role", allowEmpty: true)
             try boundedUTF8(expected.label, max: BrowserBridgeLimits.maxStringLength, field: "expectedElement.label", allowEmpty: true)
+        }
+    }
+
+    /// Typed text is 1–4,000 UTF-16 units with no control characters, so it can
+    /// never press Enter, Tab, or any other key that submits or navigates.
+    static func typedText(_ value: String) throws {
+        guard !value.isEmpty, value.utf16.count <= BrowserBridgeLimits.maxTypedTextLength,
+              !value.unicodeScalars.contains(where: { $0.properties.generalCategory == .control
+                  || $0.value == 0x2028 || $0.value == 0x2029 }) else {
+            throw BridgeErrorDetails(code: .payloadMalformed, message: "Typed text must be 1–4,000 characters without line breaks or control characters.")
         }
     }
 
@@ -553,7 +582,7 @@ public enum BridgeMessageFraming {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope must be a JSON object.")
                 }
                 let allowed: Set<String> = type == BridgeRequest.self
-                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement"]
+                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement", "text"]
                     : ["requestID", "protocolVersion", "sessionNonce", "success", "error", "handshake", "observation", "navigation", "tabClosed", "tabAnnouncement", "actionResult"]
                 guard Set(object.keys).isSubset(of: allowed) else {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope contains unknown fields.")

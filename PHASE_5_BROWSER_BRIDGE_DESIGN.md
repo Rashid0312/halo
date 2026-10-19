@@ -443,3 +443,73 @@ In each refused case the page's own counters confirm that nothing was clicked.
 - **Main frame only:** a click inside an iframe is not supported.
 - **Zoom:** the click point uses CSS pixels in the main-frame viewport, which matches `Input.dispatchMouseEvent`. Not yet tested under page zoom.
 - **Unconfirmed after navigation:** a click that makes the page navigate cannot be confirmed by the guard, because the document is replaced. It is reported as `verified: false`, "Click sent; the page changed before it could be confirmed."
+
+## 18. Phase 5B.2: Safe Text Entry
+
+Status: **complete** (2026-10-19). Replaces one plain text field's contents with approved text. Nothing is ever submitted.
+
+### 18.1 Flow
+1. **Observe.** `read_browser_tab` marks each element `typable` or not. Fields are named by their associated `<label>`, then `aria-label`, then `placeholder`. Field values are never read.
+2. **Check the text before anything else.** `type_in_browser_field(tab_id, element_id, text)` first applies Halo's text policy (`ChromeBrowserService.textRefusal`), before any re-observation or prompt.
+3. **Re-check the field.** `describeElementTarget(…, action: .type)` re-observes the tab and applies Halo's field policy (`isTypable`).
+4. **Approve.** The preview shows:
+   - the domain and page title
+   - `Field: “<label>”`
+   - `Text: <exact text>`
+   - "Replaces any text already in the field. Nothing is submitted."
+5. **Send.** A `typeText` request carries the text, bound to the approved generation and fingerprint.
+6. **Type, inside the extension:**
+   1. It re-checks the page and attaches `chrome.debugger` to that tab.
+   2. The content script re-resolves the field, matches its fingerprint, re-applies the policy, and focuses and selects it.
+   3. It confirms focus is still held and the page is unchanged.
+   4. It sends `Input.insertText`, which generates trusted input events, inserts text only and never presses a key.
+   5. It reports back only whether the field now equals the approved text.
+   6. It always detaches.
+7. **Report.** Halo matches the result to the request and returns `verified` to the model. The field's value is never sent to Halo, logged, or returned.
+
+### 18.2 Field policy
+| Typable | Refused before approval |
+|---|---|
+| `<input>` of type text, search, email, url, tel, number (or no type); `<textarea>`; enabled, editable, visible | password and protected fields; `autocomplete="one-time-code"` or `cc-*`; names, ids, or labels suggesting OTP, verification code, 2FA, CVV/CVC, card number, IBAN, SSN, PIN, or security code; `readonly`, disabled, `aria-disabled`; hidden or zero-size; anything else (checkboxes, selects, contenteditable) |
+
+### 18.3 Text policy
+Refused before approval:
+- empty text
+- more than 4,000 UTF-16 units
+- any control character, including line breaks and tabs (it could press Enter and submit), and U+2028/U+2029
+- text that looks like a secret:
+  - private key headers
+  - `sk-…`, `AKIA…`, `gh?_…` and `xox?-…` tokens
+  - JWTs
+  - a 40+ character mixed letter-and-digit token
+  - 13–19 digit numbers passing the Luhn check (payment cards).
+
+The protocol enforces the length and control-character rules again on the wire, and the extension checks them a third time.
+
+*Trade-off:* the generic long-token rule can refuse a very long alphanumeric URL path. It is deliberately conservative.
+
+### 18.4 Typing vs. submission
+- Typing never submits: no Enter, no Tab, no submit, no key events at all.
+- `Input.insertText` replaces the selection. Form submission belongs to 5B.4 and needs its own approval language.
+- The live suite verifies that the fixture form's submission counter stays at 0 throughout.
+
+### 18.5 Verification
+| Check | Covers |
+|---|---|
+| `--check-browser-tabs` → "Phase 5B.2 text protocol and policy" | Unsafe text rejected on the wire; text on non-type requests rejected; the secret and card detector refuses its samples and allows ordinary text (URLs, order numbers, accented text, short digit groups). |
+| `--check-browser-bridge-live` → 7 "5B.2" stages | The model-facing tool, with real approvals, against real Chromium. |
+
+The 7 live stages:
+1. the typable flags are correct
+2. approved typing is genuine (`isTrusted`), verified without reading the field, and submits nothing
+3. typing replaces the previous text, and textarea entry works
+4. denial types nothing
+5. five protected or ineligible fields and six unsafe texts are refused with no prompt
+6. a field relabelled during approval is refused
+7. a reload during approval is refused.
+
+### 18.6 Limits
+- **Loopback only** (development extension).
+- **Main frame only.**
+- **Not supported yet:** `contenteditable` editors, selects and checkboxes (5B.3).
+- **Ordinary pasted secrets:** the detector is heuristic. It is a safety net, not a guarantee, and the approval preview showing the exact text is the primary control.
