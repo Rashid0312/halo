@@ -38,7 +38,9 @@ function scheduleReconnect() {
     reconnectTimer = null;
     if (!nativePort) connectToNativeHost();
   }, reconnectDelayMs);
-  reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000);
+  // Capped low so Halo reconnects within seconds after it restarts; a failed
+  // attempt is cheap and the worker stops when Chrome idles it anyway.
+  reconnectDelayMs = Math.min(reconnectDelayMs * 2, 5000);
 }
 
 // Site access is whatever Chrome currently grants this extension: all http(s)

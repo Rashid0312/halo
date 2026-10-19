@@ -470,14 +470,16 @@ public actor ChromeBrowserService {
             repeat with w in windows
                 if mode of w is not "incognito" then
                     set actIndex to active tab index of w
-                    set tIdx to 1
-                    repeat with t in tabs of w
-                        set safeTitle to my replaceText(character id 31, "�", title of t)
+                    -- One Apple Event per property per window, not per tab.
+                    set tabIDs to id of tabs of w
+                    set tabTitles to title of tabs of w
+                    set tabURLs to URL of tabs of w
+                    repeat with tIdx from 1 to count of tabIDs
+                        set safeTitle to my replaceText(character id 31, "�", item tIdx of tabTitles)
                         set safeTitle to my replaceText(character id 30, "�", safeTitle)
-                        set safeURL to my replaceText(character id 31, "�", URL of t)
+                        set safeURL to my replaceText(character id 31, "�", item tIdx of tabURLs)
                         set safeURL to my replaceText(character id 30, "�", safeURL)
-                        set end of outList to (id of t as string) & (character id 31) & (actIndex as string) & (character id 31) & (tIdx as string) & (character id 31) & (wIdx as string) & (character id 31) & safeTitle & (character id 31) & safeURL
-                        set tIdx to tIdx + 1
+                        set end of outList to ((item tIdx of tabIDs) as string) & (character id 31) & (actIndex as string) & (character id 31) & (tIdx as string) & (character id 31) & (wIdx as string) & (character id 31) & safeTitle & (character id 31) & safeURL
                     end repeat
                 end if
                 set wIdx to wIdx + 1

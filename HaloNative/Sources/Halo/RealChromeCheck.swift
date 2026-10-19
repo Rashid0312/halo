@@ -111,7 +111,9 @@ extension NativeChecks {
         // Bridge: register the host for Chrome and wait for the extension.
         _ = try await service.resolveBrowserAppName(chromeID)
         controller.enabled = true
-        guard FileManager.default.fileExists(atPath: manifestFile.path) else { throw Failure("Native host was not registered for Chrome.") }
+        guard controller.status == .waiting, FileManager.default.fileExists(atPath: manifestFile.path) else {
+            throw Failure("Could not register the native host for Chrome: \(controller.status.summary) If the Halo app is running with Browser bridge on, quit it or turn the bridge off first.")
+        }
 
         // 1. Wikipedia: the full flow.
         let wiki = try await openAndAuthorize("https://en.wikipedia.org/wiki/Main_Page", host: "Wikipedia")
@@ -221,5 +223,35 @@ extension NativeChecks {
         await cleanUp()
         guard !FileManager.default.fileExists(atPath: manifestFile.path) else { throw Failure("The native host registration was not removed.") }
         print("PASS: Cleanup: opened tabs closed, native host registration removed from Chrome.")
+    }
+}
+
+extension NativeChecks {
+    /// Read-only latency breakdown of the browser tools against the user's
+    /// Chrome. Prints durations and counts only, never tab titles or addresses.
+    @MainActor
+    static func timeBrowserTools() async throws {
+        func ms(_ start: ContinuousClock.Instant) -> String {
+            let d = start.duration(to: .now)
+            return String(format: "%.0f ms", Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15)
+        }
+        let runtime = SystemBrowserRuntime()
+        let service = ChromeBrowserService()
+        let tools = MacTools(catalog: AppCatalog(), browserService: service)
+        for run in 1...3 {
+            var t = ContinuousClock.now
+            _ = try runtime.resolveBrowserContext("com.google.Chrome")
+            let resolve = ms(t)
+            t = .now
+            let raw = try await runtime.runAppleScript("tell application \"Google Chrome\" to return count of (tabs of every window)")
+            let trivialScript = ms(t)
+            t = .now
+            let tabs = try await service.listTabs(browserAppID: "com.google.Chrome")
+            let list = ms(t)
+            t = .now
+            let tool = try await tools.execute(name: "list_browser_tabs", arguments: #"{"authorized_only":false,"browser_app_id":"com.google.Chrome"}"#)
+            let toolTime = ms(t)
+            print("run \(run): resolve \(resolve) · trivial AppleScript \(trivialScript) (\(raw.count > 0 ? "ok" : "empty")) · listTabs \(list) for \(tabs.count) tabs · list_browser_tabs tool \(toolTime) (\(tool.count) bytes)")
+        }
     }
 }

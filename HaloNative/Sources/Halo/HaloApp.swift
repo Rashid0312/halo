@@ -79,6 +79,13 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if CommandLine.arguments.contains("--time-browser-tools") {
+            Task {
+                do { try await NativeChecks.timeBrowserTools(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--check-real-chrome") {
             Task {
                 do { try await NativeChecks.realChromeCheck(); exit(0) }
@@ -712,7 +719,7 @@ struct HaloSettings: View {
             settingsCard("Browser bridge", icon: "globe") {
                 Toggle("Connect to the Halo browser extension (experimental)", isOn: $browserBridge.enabled)
                 Text(browserBridge.status.summary).settingsNote()
-                Text("Read-only. Halo registers a native host only while this is on, accepts only its pinned extension, and still asks before reading any tab.")
+                Text("Lets Halo read and act in Chrome tabs you authorize: click, type, choose options, scroll, open addresses, submit ordinary forms, and follow links. Every action shows exactly what it will do and waits for your approval; sign-in, payments, account changes, messages, uploads, and downloads stay blocked. Halo registers its native host only while this is on and accepts only its pinned extension.")
                     .settingsNote()
             }
             settingsCard("Permissions", icon: "lock.shield") {
