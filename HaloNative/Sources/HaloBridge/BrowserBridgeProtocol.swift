@@ -112,10 +112,20 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
     public let isScrollable: Bool?
     /// Phase 5B.3: enabled option labels of a selectable `<select>` (bounded).
     public let options: [String]?
+    /// Phase 5B.4: what clicking this element would do (`BridgeClickKind`), or nil.
+    public let actionKind: String?
+    /// Phase 5B.4: why clicking is blocked (`BridgeBlockedReason`), or nil.
+    public let blockedReason: String?
+    /// Phase 5B.4: where a link or form submission goes (absolute URL).
+    public let destinationURL: String?
+    /// Phase 5B.4: the fields a submit button would send.
+    public let formFields: [BridgeFormField]?
 
     public init(elementID: String, tagName: String, role: String, label: String, isProtected: Bool, isEnabled: Bool,
                 bounds: BoundedRect, isActionable: Bool? = nil, isEditable: Bool? = nil,
-                isSelectable: Bool? = nil, isScrollable: Bool? = nil, options: [String]? = nil) {
+                isSelectable: Bool? = nil, isScrollable: Bool? = nil, options: [String]? = nil,
+                actionKind: String? = nil, blockedReason: String? = nil, destinationURL: String? = nil,
+                formFields: [BridgeFormField]? = nil) {
         self.elementID = elementID
         self.tagName = tagName.lowercased()
         self.role = role.lowercased()
@@ -128,6 +138,39 @@ public struct ObservedDOMElement: Sendable, Codable, Equatable {
         self.isSelectable = isSelectable
         self.isScrollable = isScrollable
         self.options = options
+        self.actionKind = actionKind
+        self.blockedReason = blockedReason
+        self.destinationURL = destinationURL
+        self.formFields = formFields
+    }
+}
+
+/// Phase 5B.4: the kinds of click Halo can perform.
+public enum BridgeClickKind: String, Sendable, Codable, CaseIterable {
+    /// A plain button (5B.1).
+    case button
+    /// Submits an ordinary form on the same site.
+    case submit
+    /// Follows an http(s) link in the same tab.
+    case link
+}
+
+/// Phase 5B.4: sensitive action families that stay blocked, each with its own reason.
+public enum BridgeBlockedReason: String, Sendable, Codable, CaseIterable {
+    case login, payment, account, message, upload, download, crossSiteForm, newTab, nonHttpLink, other
+}
+
+/// One field a form submission would send. Values are never included: only
+/// whether the field is filled. Halo adds the text it typed itself.
+public struct BridgeFormField: Sendable, Codable, Equatable {
+    public let elementID: String
+    public let label: String
+    public let filled: Bool
+
+    public init(elementID: String, label: String, filled: Bool) {
+        self.elementID = elementID
+        self.label = label
+        self.filled = filled
     }
 }
 
@@ -332,11 +375,17 @@ public struct BridgeElementFingerprint: Sendable, Codable, Equatable {
     public let tagName: String
     public let role: String
     public let label: String
+    /// Approved click kind; the extension refuses if the element now classifies differently.
+    public let kind: String?
+    /// Approved destination for links and submissions; must still match.
+    public let destination: String?
 
-    public init(tagName: String, role: String, label: String) {
+    public init(tagName: String, role: String, label: String, kind: String? = nil, destination: String? = nil) {
         self.tagName = tagName.lowercased()
         self.role = role.lowercased()
         self.label = label
+        self.kind = kind
+        self.destination = destination
     }
 }
 
@@ -488,6 +537,10 @@ private enum BridgeModelValidation {
             try boundedUTF8(expected.tagName, max: 128, field: "expectedElement.tagName")
             try boundedUTF8(expected.role, max: 128, field: "expectedElement.role", allowEmpty: true)
             try boundedUTF8(expected.label, max: BrowserBridgeLimits.maxStringLength, field: "expectedElement.label", allowEmpty: true)
+            if let kind = expected.kind, BridgeClickKind(rawValue: kind) == nil {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Unknown approved click kind.")
+            }
+            if let destination = expected.destination { try navigationURL(destination) }
         }
         if value.type != .pauseTabs {
             guard let target = value.targetTab else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type requires a target tab.") }
@@ -565,6 +618,23 @@ private enum BridgeModelValidation {
         try boundedUTF8(value.tagName, max: 128, field: "element.tagName")
         try boundedUTF8(value.role, max: 128, field: "element.role", allowEmpty: true)
         try boundedUTF8(value.label, max: BrowserBridgeLimits.maxStringLength, field: "element.label", allowEmpty: true)
+        if let kind = value.actionKind, BridgeClickKind(rawValue: kind) == nil {
+            throw BridgeErrorDetails(code: .payloadMalformed, message: "Unknown element action kind.")
+        }
+        if let reason = value.blockedReason, BridgeBlockedReason(rawValue: reason) == nil {
+            throw BridgeErrorDetails(code: .payloadMalformed, message: "Unknown blocked reason.")
+        }
+        guard value.actionKind == nil || value.blockedReason == nil else {
+            throw BridgeErrorDetails(code: .payloadMalformed, message: "An element cannot be both actionable and blocked.")
+        }
+        if let destination = value.destinationURL { try boundedUTF8(destination, max: 2_048, field: "element.destinationURL") }
+        if let fields = value.formFields {
+            guard fields.count <= 30 else { throw BridgeErrorDetails(code: .oversizedPayload, message: "Too many form fields.") }
+            for field in fields {
+                try elementReference(field.elementID)
+                try boundedUTF8(field.label, max: 200, field: "formField.label", allowEmpty: true)
+            }
+        }
         if let options = value.options {
             guard options.count <= 100 else { throw BridgeErrorDetails(code: .oversizedPayload, message: "Too many select options.") }
             try options.forEach { try boundedUTF8($0, max: 200, field: "element.option", allowEmpty: true) }
@@ -827,7 +897,7 @@ public actor BridgeSessionValidator {
         seenRequestIDs.insert(request.requestID)
         pendingRequests[request.requestID] = PendingRequest(target: request.targetTab, epoch: accessEpoch,
                                                             navigationEpoch: navigationEpoch,
-                                                            expectsNavigation: request.type == .navigateTab)
+                                                            expectsNavigation: request.type == .navigateTab || request.type == .clickElement)
     }
 
     /// Validates an incoming response against session nonce and pause status.

@@ -63,15 +63,97 @@
 
   // Phase 5B.1 click policy: plain buttons only. Anything that can submit a
   // form, navigate, or touch credentials is refused until a later slice.
-  function isActionable(el, info) {
+  function isVisibleAndEnabled(el, info) {
     if (info.isProtected || el.disabled || el.getAttribute("aria-disabled") === "true") return false;
-    if (el.closest("form, a[href]")) return false;
-    const isPlainButton = info.tagName === "button" && (el.getAttribute("type") || "").toLowerCase() === "button";
-    const isRoleButton = info.role === "button" && !["a", "input", "select", "textarea", "form"].includes(info.tagName);
-    if (!isPlainButton && !isRoleButton) return false;
     const rect = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
+
+  // Phase 5B.4 sensitive-action families. These stay blocked, each with its
+  // own reason, until a later slice gives them dedicated approval language.
+  const PAYMENT_WORDS = /\b(buy|pay|purchase|checkout|check out|place order|order now|subscribe|donate|add to (cart|bag|basket)|confirm (payment|order))\b/i;
+  const ACCOUNT_WORDS = /\b(delete|deactivate|close (my |your )?account|remove (my |your )?account|unsubscribe|cancel (my |your )?(subscription|membership)|change (email|password)|reset password|log ?out|sign ?out)\b/i;
+  const LOGIN_WORDS = /\b(log ?in|sign ?in|sign ?up|register|create account|verify)\b/i;
+  const MESSAGE_WORDS = /\b(send|post|reply|comment|publish|share|tweet|message)\b/i;
+  const FILE_EXTENSION = /\.(zip|dmg|pkg|exe|msi|iso|tar|gz|tgz|7z|rar|apk|deb|rpm|csv|xlsx?|docx?|pptx?|pdf)$/i;
+
+  function sensitiveWords(label) {
+    if (PAYMENT_WORDS.test(label)) return "payment";
+    if (ACCOUNT_WORDS.test(label)) return "account";
+    if (LOGIN_WORDS.test(label)) return "login";
+    if (MESSAGE_WORDS.test(label)) return "message";
+    return null;
+  }
+
+  let currentGeneration = 1;
+
+  // What clicking `el` would do: { kind } for a plain button, an ordinary
+  // same-site form submission, or a same-tab http(s) link; { reason } when the
+  // action belongs to a blocked family; {} when it is not clickable at all.
+  function classify(el, info) {
+    if (!isVisibleAndEnabled(el, info)) return {};
+    const type = (el.getAttribute("type") || "").toLowerCase();
+
+    if (info.tagName === "a" && el.hasAttribute("href")) {
+      let url = null;
+      try { url = new URL(el.href); } catch (_) {}
+      if (!url || !["http:", "https:"].includes(url.protocol)) return { reason: "nonHttpLink" };
+      const target = (el.getAttribute("target") || "").toLowerCase();
+      if (target && target !== "_self") return { reason: "newTab" };
+      if (el.hasAttribute("download") || FILE_EXTENSION.test(url.pathname)) return { reason: "download" };
+      const words = sensitiveWords(info.label);
+      if (words) return { reason: words };
+      return { kind: "link", destination: url.href };
+    }
+
+    const isSubmit = (info.tagName === "button" && (type === "" || type === "submit") && el.form) ||
+      (info.tagName === "input" && ["submit", "image"].includes(type));
+    if (isSubmit) {
+      const form = el.form;
+      if (!form) return {};
+      const fields = Array.from(form.elements);
+      if (fields.some((f) => (f.type || "").toLowerCase() === "password" ||
+          (f.getAttribute("autocomplete") || "").toLowerCase().includes("one-time-code"))) return { reason: "login" };
+      if (fields.some((f) => (f.type || "").toLowerCase() === "file")) return { reason: "upload" };
+      if (fields.some((f) => (f.getAttribute("autocomplete") || "").toLowerCase().startsWith("cc-") ||
+          SENSITIVE_HINT.test([f.getAttribute("name"), f.id, f.getAttribute("aria-label")].join(" ")))) return { reason: "payment" };
+      const words = sensitiveWords(info.label);
+      if (words) return { reason: words };
+      if (fields.some((f) => (f.tagName || "").toLowerCase() === "textarea")) return { reason: "message" };
+      let action = null;
+      // A submitter's formAction/formMethod properties return the document URL
+      // and a default when the attribute is absent, so only honour them when
+      // the attribute is present; otherwise the form's own action applies.
+      const actionAttribute = el.hasAttribute("formaction") ? el.getAttribute("formaction") : form.getAttribute("action");
+      try { action = new URL(actionAttribute || location.href, location.href); } catch (_) {}
+      if (!action || action.origin !== location.origin) return { reason: "crossSiteForm" };
+      const method = (el.hasAttribute("formmethod") ? el.getAttribute("formmethod") : form.getAttribute("method")) || "get";
+      if (method.toLowerCase() === "dialog") return { reason: "other" };
+      const formFields = fields.filter((f) => {
+        const t = (f.type || "").toLowerCase();
+        return ["input", "select", "textarea"].includes((f.tagName || "").toLowerCase()) &&
+          !["hidden", "submit", "button", "image", "reset", "file", "password"].includes(t);
+      }).slice(0, 30).map((f) => ({
+        elementID: referenceFor(f, currentGeneration),
+        label: describe(f).label.substring(0, 200),
+        // Only whether a field is filled is reported, never its value.
+        filled: (f.tagName || "").toLowerCase() === "select" ? f.selectedIndex >= 0 : f.value !== ""
+      }));
+      return { kind: "submit", destination: action.href, formFields };
+    }
+
+    if (el.closest("form, a[href]")) return {};
+    const isPlainButton = info.tagName === "button" && type === "button";
+    const isRoleButton = info.role === "button" && !["a", "input", "select", "textarea", "form"].includes(info.tagName);
+    if (!isPlainButton && !isRoleButton) return {};
+    const words = sensitiveWords(info.label);
+    if (words) return { reason: words };
+    return { kind: "button" };
+  }
+
+  function isActionable(el, info) {
+    return classify(el, info).kind === "button";
   }
 
   // Phase 5B.2 text-entry policy: plain text fields only. Credentials,
@@ -125,6 +207,7 @@
   }
 
   function observe(generationID) {
+    currentGeneration = generationID;
     const elements = [];
     const candidates = document.querySelectorAll(
       "button, input, select, textarea, a[href], h1, h2, h3, [role='button'], [role='textbox']"
@@ -141,6 +224,15 @@
         isProtected: info.isProtected,
         isEnabled: !el.disabled,
         isActionable: isActionable(el, info),
+        ...(() => {
+          const c = classify(el, info);
+          return {
+            actionKind: c.kind || undefined,
+            blockedReason: c.reason || undefined,
+            destinationURL: c.destination || undefined,
+            formFields: c.kind === "submit" ? c.formFields : undefined
+          };
+        })(),
         isEditable: isEditable(el, info),
         isSelectable: isSelectable(el, info),
         isScrollable: false,
@@ -263,13 +355,23 @@
     for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
       window.removeEventListener(type, armedGuard.listener, true);
     }
+    if (armedGuard.submitListener) document.removeEventListener("submit", armedGuard.submitListener, true);
     clearTimeout(armedGuard.timer);
     armedGuard = null;
   }
 
   function arm(el) {
     disarm();
-    const guard = { target: el, landed: false, misdirected: false, listener: null, timer: 0 };
+    const guard = { target: el, landed: false, misdirected: false, submitted: false, listener: null, submitListener: null, timer: 0 };
+    if (el.form) {
+      guard.submitListener = (event) => {
+        if (event.target !== el.form || !event.isTrusted) return;
+        guard.submitted = true;
+        // The document may unload right after this; tell the worker first.
+        chrome.runtime.sendMessage({ action: "haloSubmitted" }).catch(() => {});
+      };
+      document.addEventListener("submit", guard.submitListener, true);
+    }
     guard.listener = (event) => {
       if (!event.isTrusted) return;
       if (el.contains(event.target)) {
@@ -296,7 +398,13 @@
     if (info.tagName !== expected.tagName || info.role !== expected.role || info.label !== expected.label) {
       return { error: "elementChanged", message: "The element changed after approval." };
     }
-    if (!isActionable(el, info)) return { error: "elementNotActionable", message: "The element is not a plain, enabled, visible button." };
+    const classification = classify(el, info);
+    const expectedKind = expected.kind || "button";
+    if (!classification.kind || classification.kind !== expectedKind ||
+        (classification.destination || null) !== (expected.destination || null)) {
+      return { error: classification.kind ? "elementChanged" : "elementNotActionable",
+               message: classification.kind ? "What the element does changed after approval." : "The element is not clickable under the current policy." };
+    }
 
     el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     // Let layout settle (including the debugger infobar) before measuring.
@@ -374,7 +482,8 @@
     }
     if (request.action === "clickOutcome") {
       const guard = armedGuard;
-      const outcome = guard ? { landed: guard.landed, misdirected: guard.misdirected } : { landed: false, misdirected: false };
+      const outcome = guard ? { landed: guard.landed, misdirected: guard.misdirected, submitted: guard.submitted }
+        : { landed: false, misdirected: false, submitted: false };
       disarm();
       sendResponse(outcome);
       return false;

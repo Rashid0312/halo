@@ -56,6 +56,10 @@ public struct BrowserTabElement: Sendable, Codable, Equatable {
     public var selectable = false
     public var scrollable = false
     public var options: [String] = []
+    /// Phase 5B.4: what a click does (button, submit, link) when clickable.
+    public var clickKind: String?
+    /// Phase 5B.4: why a click is blocked, in plain words.
+    public var blocked: String?
 }
 
 /// Outcome of an approved navigation.
@@ -80,6 +84,10 @@ public struct BrowserElementTarget: Sendable, Equatable {
     public let label: String
     /// Offered option labels when the target is a dropdown.
     public var options: [String] = []
+    /// Phase 5B.4: approved click kind, destination, and the fields a submit sends.
+    public var clickKind: BridgeClickKind?
+    public var destination: String?
+    public var formFields: [BridgeFormField] = []
     let key: AuthorizedTabKey
     let generation: UInt64
 
@@ -89,10 +97,13 @@ public struct BrowserElementTarget: Sendable, Equatable {
 }
 
 public struct BrowserClickResult: Sendable {
-    /// True when the extension confirmed the genuine click reached the element.
+    /// True when the extension confirmed the action took effect (click landed,
+    /// form submitted, link navigated, text or option matched, view scrolled).
     public let verified: Bool
-    /// Fresh observation after the click, when the page is still readable.
+    /// Fresh observation after the action, when the page is still readable.
     public let after: BrowserTabContent?
+    /// False when the action left the authorized site and access ended.
+    public var stillAuthorized = true
 }
 
 public struct AuthorizedTabKey: Sendable, Codable, Hashable {
@@ -243,6 +254,9 @@ public actor ChromeBrowserService {
     private var bridgeReadInFlight = false
     /// Latest bridge observation per tab, bound to the document generation it came from.
     private var bridgeElements: [AuthorizedTabKey: (generation: UInt64, elements: [String: ObservedDOMElement])] = [:]
+    /// Text Halo typed per document, shown in submit approvals. Values the user
+    /// typed are never read; only Halo's own text is known.
+    private var typedTexts: [AuthorizedTabKey: (generation: UInt64, texts: [String: String])] = [:]
 
     public func attachBridgeServer(_ server: BridgeIPCServer) {
         self.bridgeServer = server
@@ -536,8 +550,44 @@ public actor ChromeBrowserService {
     /// Phase 5B.1 policy, enforced by Halo independently of the extension's flag:
     /// plain, enabled, unprotected buttons only.
     static func isClickable(_ element: ObservedDOMElement) -> Bool {
-        element.isActionable == true && element.isEnabled && !element.isProtected &&
-            (element.tagName == "button" || element.role == "button")
+        clickKind(element) != nil
+    }
+
+    /// Phase 5B.4: Halo's own check of what a click would do. The extension's
+    /// classification must agree with the element's tag and destination.
+    static func clickKind(_ element: ObservedDOMElement) -> BridgeClickKind? {
+        guard element.isEnabled, !element.isProtected, element.blockedReason == nil else { return nil }
+        switch element.actionKind.flatMap(BridgeClickKind.init(rawValue:)) {
+        case .button?:
+            return element.isActionable == true && (element.tagName == "button" || element.role == "button") ? .button : nil
+        case .submit?:
+            guard ["button", "input"].contains(element.tagName), let destination = element.destinationURL,
+                  navigationRefusal(destination) == nil, bridgeCovers(destination) else { return nil }
+            return .submit
+        case .link?:
+            guard element.tagName == "a", let destination = element.destinationURL, navigationRefusal(destination) == nil else { return nil }
+            return .link
+        case nil:
+            // Extensions predating 5B.4 only report plain buttons.
+            return element.actionKind == nil && element.isActionable == true &&
+                (element.tagName == "button" || element.role == "button") ? .button : nil
+        }
+    }
+
+    /// Plain-language reason for a blocked sensitive-action family.
+    static func blockedReasonText(_ reason: String) -> String {
+        switch BridgeBlockedReason(rawValue: reason) {
+        case .login?: "it signs in, signs up, or handles a password or one-time code"
+        case .payment?: "it may buy, pay, subscribe, or handle payment details"
+        case .account?: "it may delete, deactivate, sign out of, or change an account"
+        case .message?: "it may send or publish content"
+        case .upload?: "the form uploads files"
+        case .download?: "it downloads a file"
+        case .crossSiteForm?: "the form sends its data to a different website"
+        case .newTab?: "it opens a new tab, which Halo is not authorized to use"
+        case .nonHttpLink?: "it is not a web link"
+        default: "it is a sensitive action Halo does not perform yet"
+        }
     }
 
     /// Phase 5B.2 policy, enforced by Halo independently of the extension's flag:
@@ -728,8 +778,10 @@ public actor ChromeBrowserService {
             throw InteractionError("Only enabled single-choice dropdowns can be changed. Multi-select, disabled, and payment or credential dropdowns are blocked.")
         case .scroll where !Self.isScrollable(element):
             throw InteractionError("That element is not a scrollable region. Omit element_id to scroll the page.")
+        case .click where element.blockedReason != nil:
+            throw InteractionError("Blocked: \(Self.blockedReasonText(element.blockedReason!)). Halo does not perform this kind of action yet.")
         case .click where !Self.isClickable(element):
-            throw InteractionError("Only plain, enabled buttons can be clicked. Links, form submission, and protected or disabled controls are blocked.")
+            throw InteractionError("This element cannot be clicked. Plain buttons, ordinary same-site form submissions, and same-tab links can; protected, disabled, and hidden controls cannot.")
         case .type where !Self.isTypable(element):
             throw InteractionError("Only enabled plain text fields can be typed into. Password, one-time-code, payment, read-only, and disabled fields are blocked.")
         default:
@@ -739,6 +791,11 @@ public actor ChromeBrowserService {
                                           elementID: elementID, tagName: element.tagName, role: element.role,
                                           label: element.label, key: key, generation: observed.generation)
         target.options = element.options ?? []
+        if action == .click {
+            target.clickKind = Self.clickKind(element)
+            target.destination = element.destinationURL
+            target.formFields = element.formFields ?? []
+        }
         return target
     }
 
@@ -769,17 +826,41 @@ public actor ChromeBrowserService {
         guard context.sessionID == target.key.browserSessionID else {
             throw InteractionError("The browser restarted after approval; nothing was clicked.")
         }
-        let fingerprint = BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
+        let kind = target.clickKind ?? .button
+        let fingerprint = BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label,
+                                                   kind: kind.rawValue, destination: kind == .button ? nil : target.destination)
+        // Any click may navigate (links and submissions always do); its result
+        // still counts, and the navigation is applied like any other.
         let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
-                                                    validator: validator, requiredGeneration: target.generation, timeout: 10) {
+                                                    validator: validator, requiredGeneration: target.generation,
+                                                    timeout: 10, allowsNavigation: true) {
             BridgeRequest(requestID: $1, sessionNonce: $2, type: .clickElement, targetTab: $0,
                           elementID: target.elementID, expectedElement: fingerprint)
         }
         guard let action = resp.actionResult, action.elementID == target.elementID else {
             throw InteractionError("The browser bridge returned no click result.")
         }
-        let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
-        return BrowserClickResult(verified: action.performed, after: after)
+        await applyPendingBridgeMessages()
+        let stillAuthorized = authorizedTabs[target.key] != nil
+        let after = stillAuthorized ? try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID) : nil
+        var result = BrowserClickResult(verified: action.performed, after: after)
+        result.stillAuthorized = stillAuthorized
+        return result
+    }
+
+    /// Applies lifecycle events that arrived just after an action's result.
+    private func applyPendingBridgeMessages() async {
+        guard let server = bridgeServer, let validator = bridgeValidator else { return }
+        while await server.hasPendingMessage() {
+            guard let message = try? await server.receiveResponse(timeoutSeconds: 2) else { break }
+            _ = try? await applyBridgeMessage(message, nonce: server.sessionConfig.sessionNonce, validator: validator)
+        }
+    }
+
+    /// Text Halo itself typed into `elementID` in the target's document, if any.
+    public func typedText(in target: BrowserElementTarget, elementID: String) -> String? {
+        guard let typed = typedTexts[target.key], typed.generation == target.generation else { return nil }
+        return typed.texts[elementID]
     }
 
     /// Replaces one approved field's contents with approved text. The extension
@@ -803,6 +884,12 @@ public actor ChromeBrowserService {
         }
         guard let action = resp.actionResult, action.elementID == target.elementID else {
             throw InteractionError("The browser bridge returned no typing result.")
+        }
+        if action.performed {
+            var typed = typedTexts[target.key].flatMap { $0.generation == target.generation ? $0 : nil }
+                ?? (generation: target.generation, texts: [:])
+            typed.texts[target.elementID] = text
+            typedTexts[target.key] = typed
         }
         let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
         return BrowserClickResult(verified: action.performed, after: after)
@@ -924,6 +1011,8 @@ public actor ChromeBrowserService {
                                                 clickable: Self.isClickable($0), typable: Self.isTypable($0))
                 element.selectable = Self.isSelectable($0)
                 element.scrollable = Self.isScrollable($0)
+                element.clickKind = Self.clickKind($0)?.rawValue
+                element.blocked = $0.blockedReason.map(Self.blockedReasonText)
                 if element.selectable { element.options = $0.options ?? [] }
                 return element
             }

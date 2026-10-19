@@ -65,7 +65,15 @@ function connectToNativeHost() {
   }
 }
 
+// Trusted form submissions reported by the content script, per tab. A
+// submission usually unloads the page, so it is signalled before navigation.
+const submittedTabs = new Set();
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && message.action === "haloSubmitted" && sender.tab) {
+    submittedTabs.add(sender.tab.id);
+    return false;
+  }
   if (message && message.action === "ensureNativeConnection") {
     if (!nativePort) connectToNativeHost();
     sendResponse({ connected: Boolean(nativePort) });
@@ -289,6 +297,8 @@ async function handleClick(msg, requestID, sessionNonce) {
       return;
     }
     const point = { x: prep.x, y: prep.y };
+    const kind = (msg.expectedElement && msg.expectedElement.kind) || "button";
+    submittedTabs.delete(tabID);
     await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
     await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
     await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
@@ -297,18 +307,32 @@ async function handleClick(msg, requestID, sessionNonce) {
     try {
       outcome = await chrome.tabs.sendMessage(tabID, { action: "clickOutcome" });
     } catch (_) {
-      outcome = null; // The click replaced the document; landing cannot be confirmed.
+      outcome = null; // The click replaced the document before it could answer.
     }
     if (outcome && outcome.misdirected) {
       sendError(requestID, sessionNonce, "elementChanged", "The click did not land on the approved element and was blocked");
       return;
     }
+    // Links and submissions navigate. Wait (bounded) for the new document so
+    // Halo receives the navigation event before this result.
+    let navigated = false;
+    if (kind === "link" || kind === "submit") {
+      for (let i = 0; i < 40; i++) {
+        if (tabGenerations.get(tabID) !== target.documentGenerationID) { navigated = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    let performed;
+    if (kind === "submit") performed = Boolean(outcome && outcome.submitted) || submittedTabs.has(tabID);
+    else if (kind === "link") performed = navigated || Boolean(outcome && outcome.landed);
+    else performed = Boolean(outcome && outcome.landed);
+    submittedTabs.delete(tabID);
     nativePort.postMessage({
       requestID: requestID,
       protocolVersion: 1,
       sessionNonce: sessionNonce,
       success: true,
-      actionResult: { tab: target, elementID: msg.elementID, performed: Boolean(outcome && outcome.landed) }
+      actionResult: { tab: target, elementID: msg.elementID, performed: performed }
     });
   } catch (err) {
     sendError(requestID, sessionNonce, "internalError", "Click failed: " + String(err && err.message));

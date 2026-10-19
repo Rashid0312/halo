@@ -752,6 +752,28 @@ enum NativeChecks {
                 document.getElementById("list").addEventListener("scroll", () => { document.getElementById("ls").textContent = "List scrolled: yes"; });
                 </script></body></html>
                 """#)
+                // Phase 5B.4 sensitive-action fixture: one ordinary GET search
+                // form and links that may be followed; every other family blocked.
+                let formsPage = respond(#"""
+                <!DOCTYPE html><html><head><title>Halo Forms Fixture</title></head>
+                <body><h1>Halo Forms Fixture</h1><h2 id="lq">Last query: none</h2>
+                <form action="/forms" method="get"><label for="q">Search query</label><input id="q" name="q" type="text">
+                <label for="cat">Category</label><select id="cat" name="cat"><option>All</option><option>Docs</option></select>
+                <button type="submit">Search</button></form>
+                <form><label for="em">Email</label><input id="em" type="email"><input type="password" aria-label="Password"><button type="submit">Continue</button></form>
+                <form><input name="card_number" autocomplete="cc-number" aria-label="Card number"><button type="submit">Continue to review</button></form>
+                <form><label for="body">Message</label><textarea id="body"></textarea><button type="submit">Send</button></form>
+                <form><input type="file" aria-label="Attachment"><button type="submit">Upload</button></form>
+                <form action="https://example.com/collect"><label for="nm">Name</label><input id="nm"><button type="submit">Next step</button></form>
+                <button type="button">Delete account</button><button type="button">Buy now</button>
+                <a href="/page-b">Page B</a> <a href="/page-b" target="_blank">Open in new tab</a>
+                <a href="/report.zip">Download report</a> <a href="mailto:team@example.com">Email us</a>
+                <a href="/logout">Sign out</a> <a id="ext" href="/">Other site</a>
+                <script>
+                document.getElementById("lq").textContent = "Last query: " + (new URLSearchParams(location.search).get("q") || "none");
+                document.getElementById("ext").href = "http://localhost:" + location.port + "/halo-test";
+                </script></body></html>
+                """#)
                 let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
                     + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
@@ -780,7 +802,7 @@ enum NativeChecks {
                         let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
                         let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large
                             : path.hasPrefix("/click") ? clickPage : path.hasPrefix("/type") ? typePage
-                            : path.hasPrefix("/select") ? selectPage : responseBytes
+                            : path.hasPrefix("/select") ? selectPage : path.hasPrefix("/forms") ? formsPage : responseBytes
                         _ = bytes.withUnsafeBufferPointer { buf -> Int in
                             var written = 0
                             while written < buf.count {

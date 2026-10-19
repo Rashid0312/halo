@@ -590,3 +590,72 @@ The 8 live stages:
 - **Untrusted selection events:** select uses scripted events, which a page could in principle treat differently.
 - **Native dialogs:** a page `beforeunload` dialog could block navigation. The extension times out after about 5 s and reports that the navigation did not start.
 - **Not yet supported:** back, forward and reload.
+
+## 20. Phase 5B.4: Sensitive-Action Policy
+
+Status: **complete (first stage)** (2026-10-19).
+- **Enabled:** ordinary form submission and following same-tab links, each with its own approval language.
+- **Blocked:** every other sensitive family, each with a specific reason.
+
+### 20.1 Classification
+The content script classifies every element (`classify`), and Halo independently re-checks the result (`ChromeBrowserService.clickKind`).
+
+| Kind | Element | Halo's re-check |
+|---|---|---|
+| `button` | `<button type="button">` or `role="button"`, outside any form or link, label not sensitive | tag is button, or role is button |
+| `submit` | a form's submit button or `input[type=submit/image]` | tag is button or input; destination is http(s) **and covered by the bridge (same site)** |
+| `link` | `<a href>` with an http(s) target, same tab | tag is `a`; destination is a valid http(s) address |
+
+**Blocked families** (`BridgeBlockedReason`). They are refused before any approval, with these reasons:
+
+| Reason | Trigger |
+|---|---|
+| `login` | form has a password or one-time-code field; or label: log in, sign in, sign up, register, create account, verify |
+| `payment` | form has card or payment fields; or label: buy, pay, purchase, checkout, place order, subscribe, donate, add to cart, confirm payment |
+| `account` | label: delete, deactivate, close/remove account, unsubscribe, cancel subscription, change email/password, reset password, log out, sign out |
+| `message` | form has a textarea; or label: send, post, reply, comment, publish, share, tweet, message |
+| `upload` | form has a file field |
+| `download` | link has a `download` attribute or a file extension |
+| `crossSiteForm` | form action is on another origin |
+| `newTab` | link target other than `_self` |
+| `nonHttpLink` | `mailto:`, `javascript:`, etc. |
+
+The label rules apply to plain buttons too. This closes a 5B.1 gap: a plain "Delete account" or "Buy now" button had been clickable.
+
+**Bug found by the tests:** a submitter's `formAction` property returns the document URL when the `formaction` attribute is absent. The classifier had therefore treated other-site forms as same-site. It now reads the attribute, falling back to the form's own `action`.
+
+### 20.2 Approval language
+- **Plain button:** unchanged from §17.
+- **Submit:** "Submit this form?" with:
+  - the button
+  - "Sends to: <host> (this site)"
+  - one line per field: Halo's own typed text "(typed by Halo)", "filled (not shown)", or "empty".
+
+  Field values are never read. The extension reports only whether each field is filled, and Halo knows only the text it typed itself (per document generation).
+- **Link:** "Follow this link?" with the label, From and To, and the leaving-site warning when the host differs.
+
+### 20.3 Execution and verification
+- **What Halo sends:** the approved kind and destination travel in the fingerprint. The extension re-classifies just before clicking and refuses if either changed.
+- **Clicking:** a genuine click, as in §17.
+- **Verifying a submission:** the page's trusted `submit` event on the approved form is recorded, and signalled to the worker before the page unloads.
+- **Verifying a link:** the tab started navigating.
+- **Order of messages:** for both kinds, the worker responds after the new document starts loading, so Halo applies the navigation first.
+- **Navigation is expected:** click results, like navigation results, survive their own navigation in the validator, but still fail on a pause or revoke in flight. This also fixes plain buttons that navigate, which used to report a spurious "page changed".
+- **After the click:** the result reports `still_authorized`. Following a link to another site ends access, under the domain-bound rule.
+
+### 20.4 Verification
+| Check | Covers |
+|---|---|
+| `--check-browser-tabs` → "Phase 5B.4 click policy" | Halo rejects other-site submissions, missing or non-web destinations, and kind/tag mismatches even if the extension reports them; inconsistent or unknown classifications fail on the wire. |
+| `--check-browser-bridge-live` → 6 "5B.4" stages | The model-facing tool, with real approvals, against real Chromium. |
+
+The 6 live stages:
+1. 3 clickable kinds and 11 blocked elements are classified with the right reasons
+2. all 11 are refused without a prompt
+3. typing and then submitting a GET search: the approval lists the fields with Halo's own text, the trusted submit is verified, and the results load
+4. denial does nothing
+5. a same-site link keeps access
+6. a cross-site link warns and ends access.
+
+### 20.5 Still blocked
+The `login`, `payment`, `account`, `message`, `upload`, `download`, `crossSiteForm` and `newTab` families. Each needs its own slice with dedicated approval wording and verification before it can be enabled. Classification is heuristic and conservative; a false "blocked" is preferred over a false "allowed".

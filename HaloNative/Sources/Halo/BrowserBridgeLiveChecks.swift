@@ -539,12 +539,12 @@ extension NativeChecks {
 
         var map = try await elements()
         for (label, clickable) in [("Clicked 0 times", true), ("Rename me", true), ("Covered button", true),
-                                   ("Submit form", false), ("Go to page B", false), ("Disabled action", false), ("(protected)", false)] {
+                                   ("Submit form", true), ("Go to page B", true), ("Disabled action", false), ("(protected)", false)] {
             guard map[label]?["clickable"] as? Bool == clickable else {
                 throw Failure("Element '\(label)' clickable flag should be \(clickable); got \(String(describing: map[label])).")
             }
         }
-        pass("5B.1 observation: element references returned; only plain enabled buttons are clickable (submit, link, disabled, password refused).")
+        pass("5B.1 observation: element references returned; plain buttons, the ordinary form's submit, and the same-tab link are clickable; disabled and password are not.")
 
         // Approve: a genuine (trusted) click lands and is verified.
         decide = { tools.resolve(id: $0.id, allow: true) }
@@ -570,12 +570,12 @@ extension NativeChecks {
 
         // Refused before approval: links, submit, disabled, protected.
         approvals = []
-        for label in ["Submit form", "Go to page B", "Disabled action", "(protected)"] {
+        for label in ["Disabled action", "(protected)"] {
             let refused = try await click(try elementID(map, label))
             guard refused["ok"] as? Bool == false else { throw Failure("'\(label)' was not refused: \(refused)") }
         }
         guard approvals.isEmpty else { throw Failure("A refused element still reached the approval prompt.") }
-        pass("5B.1 policy: submit button, link, disabled button, and password field refused before any approval prompt.")
+        pass("5B.1 policy: disabled button and password field refused before any approval prompt (submit and link are 5B.4 kinds).")
 
         // Element changes while the approval is open: refused, nothing clicked.
         decide = { approval in
@@ -863,6 +863,96 @@ extension NativeChecks {
         }
         pass("Bridge coverage: with the bridge connected, a site outside the extension's permissions is still read via the normal path; browser actions there are refused with a clear reason.")
 
+        // 5B.4. Sensitive-action policy: blocked families, ordinary form
+        // submission, and following links.
+        let beforeForms = await {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate", ["expression": "performance.timeOrigin", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? Double else { return 0.0 }
+            return value
+        }()
+        try await devtoolsC.call(pageC, "Page.navigate", ["url": base + "/forms"])
+        _ = try await waitUntil("forms fixture to load", timeout: 10) {
+            guard let result = try? await devtoolsC.call(pageC, "Runtime.evaluate",
+                      ["expression": "performance.timeOrigin + '|' + document.readyState", "returnByValue": true]),
+                  let value = (result["result"] as? [String: Any])?["value"] as? String else { return false }
+            let parts = value.split(separator: "|")
+            return parts.count == 2 && Double(parts[0]) != beforeForms && parts[1] == "complete"
+        }
+        try await authorize(tabC, url: base + "/forms", title: "Halo Forms Fixture")
+        _ = try await readUntil("forms fixture read", id: tabC) { $0.title == "Halo Forms Fixture" }
+
+        map = try await elements()
+        let expectedKinds = ["Search": "submit", "Page B": "link", "Other site": "link"]
+        let expectedBlocked = ["Continue": "password", "Continue to review": "payment", "Send": "send or publish",
+                               "Upload": "uploads", "Next step": "different website", "Delete account": "account",
+                               "Buy now": "payment", "Open in new tab": "new tab", "Download report": "downloads",
+                               "Email us": "not a web link", "Sign out": "account"]
+        for (label, kind) in expectedKinds where !(map[label]?["clickable"] as? Bool == true && map[label]?["click_kind"] as? String == kind) {
+            throw Failure("'\(label)' should be a clickable \(kind); got \(String(describing: map[label])).")
+        }
+        for (label, phrase) in expectedBlocked {
+            guard map[label]?["clickable"] as? Bool == false, (map[label]?["blocked"] as? String)?.contains(phrase) == true else {
+                throw Failure("'\(label)' should be blocked (\(phrase)); got \(String(describing: map[label])).")
+            }
+        }
+        pass("5B.4 classification: ordinary form submit and same-tab links clickable; sign-in, payment, account, message, upload, other-site form, new-tab, download, and non-web links blocked with their own reasons.")
+
+        approvals = []
+        for label in expectedBlocked.keys.sorted() {
+            let refused = try await click(try elementID(map, label))
+            guard refused["ok"] as? Bool == false, (refused["error"] as? String)?.hasPrefix("Blocked:") == true else {
+                throw Failure("Blocked '\(label)' was not refused with its reason: \(refused)")
+            }
+        }
+        guard approvals.isEmpty else { throw Failure("A blocked action reached the approval prompt.") }
+        pass("5B.4 blocked families: all \(expectedBlocked.count) refused before any approval prompt, each with a specific reason.")
+
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        _ = try await type(try elementID(map, "Search query"), "hello")
+        map = try await elements()
+        approvals = []
+        let submitted = try await click(try elementID(map, "Search"))
+        guard submitted["ok"] as? Bool == true, submitted["verified"] as? Bool == true, submitted["kind"] as? String == "submit",
+              submitted["still_authorized"] as? Bool == true, let submitPreview = approvals.first,
+              submitPreview.title == "Submit this form?", submitPreview.preview.contains("Sends to: 127.0.0.1 (this site)"),
+              submitPreview.preview.contains("Search query — “hello” (typed by Halo)"),
+              submitPreview.preview.contains("Category — filled (not shown)") else {
+            throw Failure("Form submission failed: \(submitted) preview=\(String(describing: approvals.first))")
+        }
+        _ = try await readUntil("search results", id: tabC) { $0.content.contains("Last query: hello") }
+        pass("5B.4 form submission: approval listed the destination and each field (Halo's own text shown, others only as filled/empty); trusted submit verified; results loaded.")
+
+        map = try await elements()
+        decide = { tools.resolve(id: $0.id, allow: false) }
+        let deniedSubmit = try await click(try elementID(map, "Search"))
+        let afterDenied = try await service.readTab(id: tabC)
+        guard deniedSubmit["denied"] as? Bool == true, afterDenied.url.contains("q=hello") else {
+            throw Failure("Denied submission changed the page: \(deniedSubmit)")
+        }
+        pass("5B.4 denied submission: nothing submitted.")
+
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        approvals = []
+        let followed = try await click(try elementID(map, "Page B"))
+        guard followed["verified"] as? Bool == true, followed["kind"] as? String == "link", followed["still_authorized"] as? Bool == true,
+              let linkPreview = approvals.first, linkPreview.title == "Follow this link?",
+              linkPreview.preview.contains("To: \(base)/page-b"), !linkPreview.preview.contains("leaves") else {
+            throw Failure("Following a same-site link failed: \(followed) preview=\(String(describing: approvals.first))")
+        }
+        _ = try await readUntil("page B via link", id: tabC) { $0.title == "Halo Fixture Page B" }
+        pass("5B.4 same-site link: approval showed From/To; link followed and verified; access kept.")
+
+        _ = try await run("navigate_browser_tab", ["tab_id": tabC, "url": base + "/forms"])
+        _ = try await readUntil("forms again", id: tabC) { $0.title == "Halo Forms Fixture" }
+        map = try await elements()
+        approvals = []
+        let leftSite = try await click(try elementID(map, "Other site"))
+        guard leftSite["verified"] as? Bool == true, leftSite["still_authorized"] as? Bool == false,
+              approvals.first?.preview.contains("This leaves 127.0.0.1") == true, await !service.isAuthorized(tabID: tabC) else {
+            throw Failure("Cross-site link failed: \(leftSite) preview=\(String(describing: approvals.first))")
+        }
+        pass("5B.4 cross-site link: approval warned it leaves the site; followed; access to the tab ended.")
+
         // 13. Disable: no manifest, session, socket, or helper may remain.
         let finalSession = await service.activeBridgeServer()?.directoryURL
         controller.enabled = false
@@ -906,7 +996,7 @@ extension NativeChecks {
               milliseconds(detectCrash) <= 1000, milliseconds(warmReconnect) <= 5000, helperCPU < 1, haloCPU < 2 else {
             throw Failure("Real-browser performance thresholds not met.")
         }
-        print("PASS: Real Chromium bridge suite (5A lifecycle, 5B.1 click, 5B.2 typing, 5B.3 select/scroll/navigate): \(results.count) stages verified end to end.")
+        print("PASS: Real Chromium bridge suite (5A lifecycle, 5B.1–5B.4 browser actions): \(results.count) stages verified end to end.")
     }
 }
 
@@ -1128,18 +1218,59 @@ extension NativeChecks {
             throw Failure("Navigation protocol: a navigation result survived a pause in flight.")
         } catch let error as BridgeErrorDetails where error.code == .accessPaused {}
 
+        // Clicks may navigate (links, submissions), so their results survive
+        // navigation too; observations never do.
         let clickTab = TabGenerationIdentity(browser: browser, tabID: 5, documentGenerationID: 5, url: "http://127.0.0.1/next", domain: "127.0.0.1")
         try await navValidator.authorizeTab(clickTab)
         let click5 = BridgeRequest(requestID: "click5", sessionNonce: nonce, type: .clickElement, targetTab: clickTab,
                                    elementID: "el_5_ab", expectedElement: fingerprint)
         try await navValidator.validateRequest(click5)
         try await navValidator.notifyNavigation(event: navigationEvent(from: 5))
+        try await navValidator.validateResponse(BridgeResponse(requestID: "click5", sessionNonce: nonce, success: true,
+                                                               actionResult: BridgeActionResult(tab: clickTab, elementID: "el_5_ab", performed: true)))
+        let observeTab6 = TabGenerationIdentity(browser: browser, tabID: 5, documentGenerationID: 6, url: "http://127.0.0.1/next", domain: "127.0.0.1")
+        try await navValidator.authorizeTab(observeTab6)
+        let observe6 = BridgeRequest(requestID: "observe6", sessionNonce: nonce, type: .observeTab, targetTab: observeTab6)
+        try await navValidator.validateRequest(observe6)
+        try await navValidator.notifyNavigation(event: navigationEvent(from: 6))
         do {
-            try await navValidator.validateResponse(BridgeResponse(requestID: "click5", sessionNonce: nonce, success: true,
-                                                                   actionResult: BridgeActionResult(tab: clickTab, elementID: "el_5_ab", performed: true)))
-            throw Failure("Navigation protocol: a click result survived a navigation in flight.")
-        } catch let error as BridgeErrorDetails where error.code == .accessPaused {}
-        print("PASS: Phase 5B.3 select/scroll/navigate protocol: each action carries only its own fields; scroll bounds and unsafe or credentialed addresses rejected; navigation results survive only their own navigation.")
+            try await navValidator.validateResponse(BridgeResponse(requestID: "observe6", sessionNonce: nonce, success: true,
+                                                                   observation: TabObservedEvent(tab: observeTab6, title: "t", elements: [])))
+            throw Failure("Navigation protocol: an observation survived a navigation in flight.")
+        } catch is BridgeErrorDetails {}
+        print("PASS: Phase 5B.3 select/scroll/navigate protocol: each action carries only its own fields; scroll bounds and unsafe or credentialed addresses rejected; navigation and click results survive their own navigation but not a pause; observations never survive navigation.")
+
+        // Phase 5B.4: Halo re-checks the extension's click classification.
+        let rect = BoundedRect(x: 0, y: 0, width: 10, height: 10)
+        func element(_ tag: String, kind: String?, reason: String? = nil, destination: String? = nil, actionable: Bool = false) -> ObservedDOMElement {
+            ObservedDOMElement(elementID: "el_1_ab", tagName: tag, role: "", label: "x", isProtected: false, isEnabled: true,
+                               bounds: rect, isActionable: actionable, actionKind: kind, blockedReason: reason, destinationURL: destination)
+        }
+        let kindCases: [(ObservedDOMElement, BridgeClickKind?)] = [
+            (element("button", kind: "button", actionable: true), .button),
+            (element("button", kind: "submit", destination: "http://127.0.0.1/forms?q=1"), .submit),
+            (element("a", kind: "link", destination: "https://example.com/"), .link),
+            (element("button", kind: "submit", destination: "https://example.com/collect"), nil),
+            (element("button", kind: "submit", destination: nil), nil),
+            (element("a", kind: "link", destination: "javascript:alert(1)"), nil),
+            (element("a", kind: "button", actionable: true), nil),
+            (element("div", kind: "link", destination: "https://example.com/"), nil),
+            (element("button", kind: nil, reason: "payment", actionable: true), nil)
+        ]
+        for (index, (candidate, expected)) in kindCases.enumerated() where ChromeBrowserService.clickKind(candidate) != expected {
+            throw Failure("Click policy case \(index) classified as \(String(describing: ChromeBrowserService.clickKind(candidate))), expected \(String(describing: expected)).")
+        }
+        func observationRejected(_ candidate: ObservedDOMElement) -> Bool {
+            let response = BridgeResponse(requestID: "obs", sessionNonce: nonce, success: true,
+                                          observation: TabObservedEvent(tab: tab, title: "t", elements: [candidate]))
+            return (try? BridgeMessageFraming.encode(response)) == nil
+        }
+        guard observationRejected(element("button", kind: "submit", reason: "payment")),
+              observationRejected(element("button", kind: "teleport")),
+              observationRejected(element("button", kind: nil, reason: "unknownFamily")) else {
+            throw Failure("Observation with an inconsistent or unknown click classification was accepted.")
+        }
+        print("PASS: Phase 5B.4 click policy: Halo rejects other-site submissions, non-web or missing destinations, and kind/tag mismatches even if the extension reports them; inconsistent or unknown classifications fail on the wire.")
     }
 }
 
@@ -1153,7 +1284,7 @@ extension NativeChecks {
         let chromeCopy = Running(bundleID: "com.google.Chrome", pid: 11, launched: 3)
         let finder = Running(bundleID: "com.apple.finder", pid: 30, launched: 0)
         func refuses(_ what: String, _ body: () throws -> Running) throws {
-            do { _ = try body() } catch { return }
+            if (try? body()) == nil { return }
             throw Failure("Browser selection: \(what) did not refuse.")
         }
         guard try SystemBrowserRuntime.choose(from: [finder, chrome], requested: nil, lastActive: nil) == chrome,

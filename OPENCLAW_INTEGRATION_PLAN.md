@@ -49,7 +49,7 @@ The integration will not initially import:
 | 2. Read-only Mac understanding | Complete | App/window/UI inspection and reviewed screen capture pass without silent persistence |
 | 3. Safe Mac actions | Complete | Exact-target execution, approvals, secure-field protection, and post-action verification pass across both drivers |
 | 4. Chrome tab integration | Complete | Browser-session authorization, approval revalidation, injection-safe metadata framing, and in-flight killswitch checks pass |
-| 5. Browser actions | In progress: 5A read-only bridge and 5B.1–5B.3 (click, text entry, select/scroll/navigation) complete; 5B.4 (sensitive-action policy) next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
+| 5. Browser actions | In progress: 5A and 5B.1–5B.4 complete (form submission and links enabled; other sensitive families blocked); real-site support next | A real, fast, approval-gated Native Messaging observation path must pass before any DOM mutation is added (met 2026-10-19) |
 | 6. Legacy automation retirement | Not started | Replaced Halo implementations are removed only after parity and rollback validation |
 | 7. Release hardening | Not started | Security, permissions, signing, notarization, clean-install, and recovery checks pass |
 
@@ -272,9 +272,22 @@ Evidence: design doc §18. `--check-browser-tabs` (text protocol and policy) and
 
 Evidence: design doc §19. `--check-browser-tabs` (5B.3 protocol) and `--check-browser-bridge-live` (8 stages) pass.
 
+### Phase 5B.4 — Sensitive-action policy (first stage complete, 2026-10-19)
+
+- [x] Recognise and block login, payment, account, message, upload, download, other-site form, new-tab, and non-web actions, each with its own reason, before approval. This also covers plain buttons labelled e.g. "Delete account".
+- [x] Enable ordinary same-site form submission. The approval lists the destination and the fields, with Halo's own text shown and others only as filled or empty. The trusted submit is verified.
+- [x] Enable following same-tab links, with a From/To approval; leaving the site ends access.
+
+Evidence: design doc §20. `--check-browser-tabs` (click policy) and `--check-browser-bridge-live` (6 stages) pass.
+
 ### Remaining Phase 5B slices
 
-- **5B.4:** the sensitive-action policy (forms, messages, purchases, accounts, uploads, downloads, credentials).
+- **Real-site support:**
+  - broader or per-site host permissions
+  - prioritising visible elements on large pages
+  - shadow DOM and iframes
+  - verifying tab-ID parity with AppleScript in real Chrome.
+- **Further 5B.4 families,** each with its own slice: message sending, then others as needed.
 - Original scope still to cover:
 
 - Re-observe after navigation and invalidate old page references.
@@ -604,3 +617,16 @@ Implementation boundary: Transport foundation (`BrowserBridgeProtocol.swift`) im
   - verifying that AppleScript and extension tab IDs match in real Chrome
   - a manual check of the settings toggle
   - rerunning `--check-safe-actions`.
+
+### 2026-10-19 (Phase 5B.4 — Sensitive-action policy, first stage)
+
+- Classification:
+  - the extension classifies each element as button, submit or link, or as blocked with a reason
+  - Halo re-checks kind, tag, destination and coverage
+  - the approved kind and destination are re-verified at click time.
+- Enabled ordinary form submission and link following, each with its own approval language; all other families stay blocked with specific reasons.
+- Fixes:
+  - other-site forms were misclassified, because `formAction` returns the document URL when the attribute is absent
+  - plain buttons with sensitive labels were clickable
+  - clicks that navigate reported a spurious page change.
+- Tests: Halo click-policy checks, and 6 real-Chromium stages. The 5B.1 expectations were updated (its submit and link are now 5B.4 kinds).
