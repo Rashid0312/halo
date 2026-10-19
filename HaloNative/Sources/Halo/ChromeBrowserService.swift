@@ -55,19 +55,78 @@ public struct AuthorizedTabRecord: Sendable, Codable, Equatable {
     public let authorizedAt: Date
 }
 
+internal protocol BrowserAutomationRuntime: Sendable {
+    func resolveBrowserContext(_ requestedBundleID: String?) throws -> ChromeBrowserService.BrowserContext
+    func runAppleScript(_ script: String) async throws -> String
+}
+
+internal struct SystemBrowserRuntime: BrowserAutomationRuntime {
+    func resolveBrowserContext(_ requestedBundleID: String?) throws -> ChromeBrowserService.BrowserContext {
+        let running = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }
+        let app: NSRunningApplication
+        let bundleID: String
+
+        if let requestedBundleID {
+            guard ChromeBrowserService.supportedBrowserBundleIDs[requestedBundleID] != nil else {
+                throw InteractionError("Unsupported Chromium browser bundle ID '\(requestedBundleID)'.")
+            }
+            guard let exact = running.first(where: { $0.bundleIdentifier == requestedBundleID }) else {
+                throw InteractionError("The requested Chromium browser is not running.")
+            }
+            app = exact
+            bundleID = requestedBundleID
+        } else {
+            let candidates = running.filter { candidate in
+                candidate.bundleIdentifier.map { ChromeBrowserService.supportedBrowserBundleIDs[$0] != nil } == true
+            }
+            guard let selected = candidates.first(where: { $0.isActive }) ?? candidates.sorted(by: {
+                ($0.bundleIdentifier ?? "") < ($1.bundleIdentifier ?? "")
+            }).first, let selectedID = selected.bundleIdentifier else {
+                throw InteractionError("No supported Chromium browser (Google Chrome, Brave, Chromium, Edge) is currently running.")
+            }
+            app = selected
+            bundleID = selectedID
+        }
+
+        let launched = app.launchDate?.timeIntervalSince1970 ?? 0
+        return ChromeBrowserService.BrowserContext(bundleID: bundleID,
+                                                   name: ChromeBrowserService.supportedBrowserBundleIDs[bundleID]!,
+                                                   pid: app.processIdentifier,
+                                                   sessionID: "\(app.processIdentifier):\(launched)")
+    }
+
+    func runAppleScript(_ script: String) async throws -> String {
+        try Task.checkCancellation()
+        let result = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", script],
+                                                 directory: FileManager.default.temporaryDirectory, timeout: 10)
+        guard result.status == 0 else {
+            throw InteractionError("Browser automation error: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        return result.stdout
+    }
+}
+
 /// Read-only, explicitly authorized access to non-incognito Chromium tabs.
 /// Authorization is scoped to a browser process session and tab. An access epoch
 /// ensures pause and revocation win over results already in flight.
 public actor ChromeBrowserService {
     public static let shared = ChromeBrowserService()
 
-    private struct BrowserContext: Sendable {
+    internal struct BrowserContext: Sendable, Equatable {
         let bundleID: String
         let name: String
         let pid: pid_t
         let sessionID: String
+
+        init(bundleID: String, name: String, pid: pid_t, sessionID: String) {
+            self.bundleID = bundleID
+            self.name = name
+            self.pid = pid
+            self.sessionID = sessionID
+        }
     }
 
+    private let runtime: any BrowserAutomationRuntime
     private var authorizedTabs: [AuthorizedTabKey: AuthorizedTabRecord] = [:]
     private var isPaused = false
     private var accessEpoch: UInt64 = 0
@@ -82,7 +141,13 @@ public actor ChromeBrowserService {
         "com.microsoft.edgemac": "Microsoft Edge",
     ]
 
-    public init() {}
+    public init() {
+        self.runtime = SystemBrowserRuntime()
+    }
+
+    internal init(runtime: any BrowserAutomationRuntime) {
+        self.runtime = runtime
+    }
 
     public func setPaused(_ paused: Bool) {
         guard isPaused != paused else { return }
@@ -111,36 +176,7 @@ public actor ChromeBrowserService {
     public func authorizedCount() -> Int { authorizedTabs.count }
 
     private func browserContext(_ requestedBundleID: String?) throws -> BrowserContext {
-        let running = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }
-        let app: NSRunningApplication
-        let bundleID: String
-
-        if let requestedBundleID {
-            guard Self.supportedBrowserBundleIDs[requestedBundleID] != nil else {
-                throw InteractionError("Unsupported Chromium browser bundle ID '\(requestedBundleID)'.")
-            }
-            guard let exact = running.first(where: { $0.bundleIdentifier == requestedBundleID }) else {
-                throw InteractionError("The requested Chromium browser is not running.")
-            }
-            app = exact
-            bundleID = requestedBundleID
-        } else {
-            let candidates = running.filter { candidate in
-                candidate.bundleIdentifier.map { Self.supportedBrowserBundleIDs[$0] != nil } == true
-            }
-            guard let selected = candidates.first(where: { $0.isActive }) ?? candidates.sorted(by: {
-                ($0.bundleIdentifier ?? "") < ($1.bundleIdentifier ?? "")
-            }).first, let selectedID = selected.bundleIdentifier else {
-                throw InteractionError("No supported Chromium browser (Google Chrome, Brave, Chromium, Edge) is currently running.")
-            }
-            app = selected
-            bundleID = selectedID
-        }
-
-        let launched = app.launchDate?.timeIntervalSince1970 ?? 0
-        return BrowserContext(bundleID: bundleID, name: Self.supportedBrowserBundleIDs[bundleID]!,
-                              pid: app.processIdentifier,
-                              sessionID: "\(app.processIdentifier):\(launched)")
+        try runtime.resolveBrowserContext(requestedBundleID)
     }
 
     public func resolveBrowserAppName(_ browserAppID: String?) throws -> String {
@@ -148,13 +184,7 @@ public actor ChromeBrowserService {
     }
 
     private func runAppleScript(_ script: String) async throws -> String {
-        try Task.checkCancellation()
-        let result = try await CommandRunner.run(executable: "/usr/bin/osascript", arguments: ["-e", script],
-                                                 directory: FileManager.default.temporaryDirectory, timeout: 10)
-        guard result.status == 0 else {
-            throw InteractionError("Browser automation error: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
-        }
-        return result.stdout
+        try await runtime.runAppleScript(script)
     }
 
     public func openTab(url: String, browserAppID: String? = nil) async throws -> Int {

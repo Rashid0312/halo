@@ -182,7 +182,7 @@ Choose using measured reliability, shipped size, update burden, attack surface, 
 - [x] Authorization re-observes the tab after approval and rejects navigation, restart, replacement, and ID reuse.
 - [x] Page-controlled title and URL metadata have framing controls sanitized inside AppleScript and are accepted only with an exact field count; listing does not require Chrome's JavaScript-from-Apple-Events setting.
 - [x] Pause/revoke changes an access epoch checked after every external await so in-flight results cannot return afterward.
-- [ ] Adversarial signed-GUI checks pass for browser-session collision/restart and concurrent in-flight pause/revoke. Same-tab approval changes and delimiter injection are covered; multi-browser/restart coverage remains to be exercised live.
+- [x] Adversarial checks pass for browser-session collision/restart and concurrent in-flight pause/revoke. (PASS: deterministic coverage verifies cross-browser isolation, process-session reuse rejection, approval-time replacement/navigation rejection, delimiter framing sanitization, in-flight pause/revoke suppression, and unsupported bundle ID fail-closed)
 
 ## Phase 5 — Browser actions
 

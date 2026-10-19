@@ -685,6 +685,9 @@ enum NativeChecks {
     }
 
     static func browserTabIntegration(_ tools: MacTools) async throws {
+        // Run deterministic Phase 4 adversarial coverage across all 8 required cases
+        try await adversarialBrowserCoverage(tools)
+
         // 1. Verify tool definitions
         let definitions = try JSONSerialization.jsonObject(with: await tools.definitions()) as? [[String: Any]] ?? []
         let names = Set(definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
@@ -1016,5 +1019,514 @@ enum NativeChecks {
             try await Task.sleep(for: .milliseconds(10))
         }
         throw Failure("Approval did not appear for step '\(step)'")
+    }
+
+    private final class AsyncGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var isEntered = false
+        private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
+        private var isReleased = false
+
+        func waitUntilEntered(step: String, timeout: Duration = .seconds(5)) async throws {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while clock.now < deadline {
+                try Task.checkCancellation()
+                if lock.withLock({ isEntered }) { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            throw Failure("Timed out waiting for simulated browser runtime at '\(step)'")
+        }
+
+        func enterAndAwaitRelease() async {
+            lock.withLock { isEntered = true }
+
+            await withCheckedContinuation { cont in
+                lock.withLock {
+                    if isReleased {
+                        cont.resume()
+                    } else {
+                        releaseContinuations.append(cont)
+                    }
+                }
+            }
+        }
+
+        func release() {
+            let releaseToResume: [CheckedContinuation<Void, Never>] = lock.withLock {
+                isReleased = true
+                let toResume = releaseContinuations
+                releaseContinuations.removeAll()
+                return toResume
+            }
+            for cont in releaseToResume { cont.resume() }
+        }
+    }
+
+    private final class SimulatedBrowserRuntime: BrowserAutomationRuntime, @unchecked Sendable {
+        private let lock = NSLock()
+        private var contexts: [String: ChromeBrowserService.BrowserContext] = [:]
+        private var activeBundleID: String?
+        private var scriptHandler: (@Sendable (String) async throws -> String)?
+
+        init(contexts: [ChromeBrowserService.BrowserContext] = [], activeBundleID: String? = nil) {
+            for ctx in contexts {
+                self.contexts[ctx.bundleID] = ctx
+            }
+            self.activeBundleID = activeBundleID ?? contexts.first?.bundleID
+        }
+
+        func setContext(_ context: ChromeBrowserService.BrowserContext, makeActive: Bool = false) {
+            lock.withLock {
+                contexts[context.bundleID] = context
+                if makeActive || activeBundleID == nil {
+                    activeBundleID = context.bundleID
+                }
+            }
+        }
+
+        func setActiveBundleID(_ bundleID: String?) {
+            lock.withLock { activeBundleID = bundleID }
+        }
+
+        func setScriptHandler(_ handler: (@Sendable (String) async throws -> String)?) {
+            lock.withLock { scriptHandler = handler }
+        }
+
+        func resolveBrowserContext(_ requestedBundleID: String?) throws -> ChromeBrowserService.BrowserContext {
+            try lock.withLock {
+                if let requestedBundleID {
+                    guard ChromeBrowserService.supportedBrowserBundleIDs[requestedBundleID] != nil else {
+                        throw InteractionError("Unsupported Chromium browser bundle ID '\(requestedBundleID)'.")
+                    }
+                    guard let ctx = contexts[requestedBundleID] else {
+                        throw InteractionError("The requested Chromium browser is not running.")
+                    }
+                    return ctx
+                } else {
+                    guard let activeID = activeBundleID, let ctx = contexts[activeID] else {
+                        guard let first = contexts.values.sorted(by: { $0.bundleID < $1.bundleID }).first else {
+                            throw InteractionError("No supported Chromium browser (Google Chrome, Brave, Chromium, Edge) is currently running.")
+                        }
+                        return first
+                    }
+                    return ctx
+                }
+            }
+        }
+
+        func runAppleScript(_ script: String) async throws -> String {
+            try Task.checkCancellation()
+            let handler = lock.withLock { scriptHandler }
+            guard let handler else {
+                return ""
+            }
+            return try await handler(script)
+        }
+    }
+
+    static func adversarialBrowserCoverage(_ tools: MacTools) async throws {
+        // --- 1. Cross-Browser Authorization Isolation ---
+        // Two different browser identities using the same numeric tab ID must never share authorization.
+        let chromeContext = ChromeBrowserService.BrowserContext(
+            bundleID: "com.google.Chrome",
+            name: "Google Chrome",
+            pid: 1001,
+            sessionID: "1001:100.0"
+        )
+        let braveContext = ChromeBrowserService.BrowserContext(
+            bundleID: "com.brave.Browser",
+            name: "Brave Browser",
+            pid: 2002,
+            sessionID: "2002:200.0"
+        )
+        let runtime = SimulatedBrowserRuntime(contexts: [chromeContext, braveContext], activeBundleID: "com.google.Chrome")
+        let service = ChromeBrowserService(runtime: runtime)
+        let simTools = MacTools(catalog: AppCatalog(), browserService: service)
+
+        runtime.setScriptHandler { script in
+            if script.contains("Google Chrome") {
+                if script.contains("execute t javascript") {
+                    return #"{"title":"Chrome Page","url":"http://127.0.0.1/chrome","text":"Chrome Content"}"#
+                }
+                return "42\u{1F}1\u{1F}1\u{1F}1\u{1F}Chrome Page\u{1F}http://127.0.0.1/chrome\u{1E}"
+            } else if script.contains("Brave Browser") {
+                if script.contains("execute t javascript") {
+                    return #"{"title":"Brave Page","url":"http://127.0.0.1/brave","text":"Brave Content"}"#
+                }
+                return "42\u{1F}1\u{1F}1\u{1F}1\u{1F}Brave Page\u{1F}http://127.0.0.1/brave\u{1E}"
+            }
+            return ""
+        }
+
+        let authChromeTask = Task {
+            try await simTools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":42,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        let approval1 = try await waitForApproval(simTools, step: "adversarial auth chrome")
+        simTools.resolve(id: approval1.id, allow: true)
+        let authChromeRes = try await authChromeTask.value
+        let authChromeObj = try JSONSerialization.jsonObject(with: Data(authChromeRes.utf8)) as? [String: Any]
+        guard authChromeObj?["ok"] as? Bool == true else {
+            throw Failure("Case 1: Chrome authorization failed: \(authChromeRes)")
+        }
+
+        let readChromeRes = try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":42,"browser_app_id":"com.google.Chrome"}"#)
+        let readChromeObj = try JSONSerialization.jsonObject(with: Data(readChromeRes.utf8)) as? [String: Any]
+        guard readChromeObj?["ok"] as? Bool == true, (readChromeObj?["content"] as? String) == "Chrome Content" else {
+            throw Failure("Case 1: Chrome read failed: \(readChromeRes)")
+        }
+
+        let braveListRes = try await simTools.execute(name: "list_browser_tabs", arguments: #"{"browser_app_id":"com.brave.Browser","authorized_only":true}"#)
+        let braveListObj = try JSONSerialization.jsonObject(with: Data(braveListRes.utf8)) as? [String: Any]
+        let braveAuthorizedTabs = braveListObj?["tabs"] as? [[String: Any]] ?? []
+        guard braveAuthorizedTabs.isEmpty else {
+            throw Failure("Case 1: Brave unexpectedly inherited Chrome authorization in listing: \(braveListRes)")
+        }
+
+        let readBraveRes = try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":42,"browser_app_id":"com.brave.Browser"}"#)
+        let readBraveObj = try JSONSerialization.jsonObject(with: Data(readBraveRes.utf8)) as? [String: Any]
+        guard readBraveObj?["ok"] as? Bool == false,
+              let errBrave = readBraveObj?["error"] as? String,
+              errBrave.contains("not authorized for this browser session") else {
+            throw Failure("Case 1: Brave read of tab 42 was not rejected: \(readBraveRes)")
+        }
+
+        // --- 2. Browser Process Session Restart Isolation ---
+        // A new browser process session reusing the same bundle ID and tab ID must not inherit authorization.
+        let restartedChromeContext = ChromeBrowserService.BrowserContext(
+            bundleID: "com.google.Chrome",
+            name: "Google Chrome",
+            pid: 1002,
+            sessionID: "1002:200.0"
+        )
+        runtime.setContext(restartedChromeContext)
+
+        let readRestartRes = try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":42,"browser_app_id":"com.google.Chrome"}"#)
+        let readRestartObj = try JSONSerialization.jsonObject(with: Data(readRestartRes.utf8)) as? [String: Any]
+        guard readRestartObj?["ok"] as? Bool == false,
+              let errRestart = readRestartObj?["error"] as? String,
+              errRestart.contains("not authorized for this browser session") else {
+            throw Failure("Case 2: Reading tab 42 after browser restart was not rejected: \(readRestartRes)")
+        }
+
+        let authNewTask = Task {
+            try await simTools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":42,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        let approvalNew = try await waitForApproval(simTools, step: "adversarial auth new session")
+        simTools.resolve(id: approvalNew.id, allow: true)
+        let authNewResult = try await authNewTask.value
+        guard let authNewObject = try? JSONSerialization.jsonObject(with: Data(authNewResult.utf8)) as? [String: Any],
+              authNewObject["ok"] as? Bool == true else {
+            throw Failure("Case 2: Authorization in the restarted browser session failed: \(authNewResult)")
+        }
+
+        let inFlightRestartGate = AsyncGate()
+        runtime.setScriptHandler { script in
+            if script.contains("execute t javascript") {
+                await inFlightRestartGate.enterAndAwaitRelease()
+                return #"{"title":"Chrome Page","url":"http://127.0.0.1/chrome","text":"In-flight restart text"}"#
+            }
+            return "42\u{1F}1\u{1F}1\u{1F}1\u{1F}Chrome Page\u{1F}http://127.0.0.1/chrome\u{1E}"
+        }
+
+        let inFlightReadTask = Task {
+            try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":42,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        try await inFlightRestartGate.waitUntilEntered(step: "case 2 in-flight restart read")
+
+        let thirdChromeContext = ChromeBrowserService.BrowserContext(
+            bundleID: "com.google.Chrome",
+            name: "Google Chrome",
+            pid: 1003,
+            sessionID: "1003:300.0"
+        )
+        runtime.setContext(thirdChromeContext)
+        inFlightRestartGate.release()
+
+        let inFlightReadRes = try await inFlightReadTask.value
+        let inFlightReadObj = try JSONSerialization.jsonObject(with: Data(inFlightReadRes.utf8)) as? [String: Any]
+        guard inFlightReadObj?["ok"] as? Bool == false,
+              let inFlightErr = inFlightReadObj?["error"] as? String,
+              inFlightErr.contains("restarted") || inFlightErr.contains("revoked") else {
+            throw Failure("Case 2: In-flight restart did not reject read: \(inFlightReadRes)")
+        }
+
+        // --- 3. Tab Replacement or URL Change During Approval ---
+        // Tab replacement or URL change while approval is visible must fail authorization.
+        let test3Context = ChromeBrowserService.BrowserContext(
+            bundleID: "com.google.Chrome",
+            name: "Google Chrome",
+            pid: 3001,
+            sessionID: "3001:100.0"
+        )
+        runtime.setContext(test3Context)
+        final class DynamicTabBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _url = "http://127.0.0.1/stepA"
+            private var _tabID = 50
+
+            var url: String {
+                get { lock.withLock { _url } }
+                set { lock.withLock { _url = newValue } }
+            }
+            var tabID: Int {
+                get { lock.withLock { _tabID } }
+                set { lock.withLock { _tabID = newValue } }
+            }
+        }
+        let dynamicTab = DynamicTabBox()
+        runtime.setScriptHandler { _ in
+            "\(dynamicTab.tabID)\u{1F}1\u{1F}1\u{1F}1\u{1F}Dynamic Tab\u{1F}\(dynamicTab.url)\u{1E}"
+        }
+
+        // 3a. Same-domain URL change while approval is open
+        let task3a = Task {
+            try await simTools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":50,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        let approval3a = try await waitForApproval(simTools, step: "adversarial case 3a")
+        dynamicTab.url = "http://127.0.0.1/stepA-mutated"
+        simTools.resolve(id: approval3a.id, allow: true)
+        let res3a = try await task3a.value
+        let obj3a = try JSONSerialization.jsonObject(with: Data(res3a.utf8)) as? [String: Any]
+        guard obj3a?["ok"] as? Bool == false,
+              let err3a = obj3a?["error"] as? String,
+              err3a.contains("changed while approval was open") else {
+            throw Failure("Case 3a: Same-domain URL change during approval was not rejected: \(res3a)")
+        }
+
+        // 3b. Domain change while approval is open
+        dynamicTab.url = "http://127.0.0.1/stepB"
+        let task3b = Task {
+            try await simTools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":50,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        let approval3b = try await waitForApproval(simTools, step: "adversarial case 3b")
+        dynamicTab.url = "https://evil.com/phishing"
+        simTools.resolve(id: approval3b.id, allow: true)
+        let res3b = try await task3b.value
+        let obj3b = try JSONSerialization.jsonObject(with: Data(res3b.utf8)) as? [String: Any]
+        guard obj3b?["ok"] as? Bool == false,
+              let err3b = obj3b?["error"] as? String,
+              err3b.contains("changed while approval was open") else {
+            throw Failure("Case 3b: Domain change during approval was not rejected: \(res3b)")
+        }
+
+        // 3c. Tab replacement while approval is open
+        dynamicTab.url = "http://127.0.0.1/stepC"
+        dynamicTab.tabID = 50
+        let task3c = Task {
+            try await simTools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":50,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        let approval3c = try await waitForApproval(simTools, step: "adversarial case 3c")
+        dynamicTab.tabID = 51
+        simTools.resolve(id: approval3c.id, allow: true)
+        let res3c = try await task3c.value
+        let obj3c = try JSONSerialization.jsonObject(with: Data(res3c.utf8)) as? [String: Any]
+        guard obj3c?["ok"] as? Bool == false,
+              let err3c = obj3c?["error"] as? String,
+              err3c.contains("changed while approval was open") else {
+            throw Failure("Case 3c: Tab replacement during approval was not rejected: \(res3c)")
+        }
+
+        // --- 4. Page-Controlled Framing Delimiter Immunity ---
+        // Page-controlled title framing characters U+001E and U+001F must not corrupt parsed metadata.
+        let sanitizedOutput = "60\u{1F}1\u{1F}1\u{1F}1\u{1F}Title with \u{FFFD} field and \u{FFFD} record\u{1F}http://127.0.0.1/test\u{1E}"
+        runtime.setScriptHandler { _ in sanitizedOutput }
+        let list4aRes = try await simTools.execute(name: "list_browser_tabs", arguments: #"{"authorized_only":false,"browser_app_id":"com.google.Chrome"}"#)
+        let list4aObj = try JSONSerialization.jsonObject(with: Data(list4aRes.utf8)) as? [String: Any]
+        guard list4aObj?["ok"] as? Bool == true,
+              let tabs4a = list4aObj?["tabs"] as? [[String: Any]],
+              tabs4a.count == 1,
+              let tab4a = tabs4a.first,
+              (tab4a["title"] as? String)?.contains("Title with \u{FFFD} field and \u{FFFD} record") == true,
+              (tab4a["domain"] as? String) == "127.0.0.1" else {
+            throw Failure("Case 4a: Sanitized framing controls corrupted listing: \(list4aRes)")
+        }
+
+        let hostileInjectedOutput = "60\u{1F}1\u{1F}1\u{1F}1\u{1F}Injected\u{1F}http://evil.com\u{1E}Extra\u{1F}1\u{1F}http://127.0.0.1\u{1E}"
+        runtime.setScriptHandler { _ in hostileInjectedOutput }
+        let list4bRes = try await simTools.execute(name: "list_browser_tabs", arguments: #"{"authorized_only":false,"browser_app_id":"com.google.Chrome"}"#)
+        let list4bObj = try JSONSerialization.jsonObject(with: Data(list4bRes.utf8)) as? [String: Any]
+        guard list4bObj?["ok"] as? Bool == false,
+              let err4b = list4bObj?["error"] as? String,
+              err4b.contains("Malformed browser tab metadata") else {
+            throw Failure("Case 4b: Hostile framing injection was not rejected: \(list4bRes)")
+        }
+
+        // --- 5. In-Flight Listing Pause Suppression ---
+        // Pause during an in-flight listing must suppress the result.
+        let listGate = AsyncGate()
+        runtime.setScriptHandler { _ in
+            await listGate.enterAndAwaitRelease()
+            return "70\u{1F}1\u{1F}1\u{1F}1\u{1F}Delayed Tab\u{1F}http://127.0.0.1/delayed\u{1E}"
+        }
+
+        let inFlightListTask = Task {
+            try await simTools.execute(name: "list_browser_tabs", arguments: #"{"authorized_only":false,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        try await listGate.waitUntilEntered(step: "case 5 in-flight listing")
+
+        let pauseRes = try await simTools.execute(name: "pause_browser_tabs", arguments: #"{"paused":true}"#)
+        let pauseObj = try JSONSerialization.jsonObject(with: Data(pauseRes.utf8)) as? [String: Any]
+        guard pauseObj?["ok"] as? Bool == true else { throw Failure("Case 5: pause_browser_tabs failed: \(pauseRes)") }
+
+        listGate.release()
+        let inFlightListRes = try await inFlightListTask.value
+        let inFlightListObj = try JSONSerialization.jsonObject(with: Data(inFlightListRes.utf8)) as? [String: Any]
+        guard inFlightListObj?["ok"] as? Bool == false,
+              let err5 = inFlightListObj?["error"] as? String,
+              err5.contains("in flight") || err5.contains("paused") else {
+            throw Failure("Case 5: In-flight listing was not suppressed on pause: \(inFlightListRes)")
+        }
+        _ = try await simTools.execute(name: "pause_browser_tabs", arguments: #"{"paused":false}"#)
+
+        // --- 6. In-Flight Read Pause and Revoke Suppression ---
+        // Pause or revoke during an in-flight read must suppress the result.
+        runtime.setScriptHandler { script in
+            if script.contains("execute t javascript") {
+                return #"{"title":"Secret Doc","url":"http://127.0.0.1/doc","text":"Sensitive Data 123"}"#
+            }
+            return "80\u{1F}1\u{1F}1\u{1F}1\u{1F}Secret Doc\u{1F}http://127.0.0.1/doc\u{1E}"
+        }
+        let auth80Task = Task {
+            try await simTools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":80,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        let app80 = try await waitForApproval(simTools, step: "adversarial case 6 auth")
+        simTools.resolve(id: app80.id, allow: true)
+        let auth80Result = try await auth80Task.value
+        guard let auth80Object = try? JSONSerialization.jsonObject(with: Data(auth80Result.utf8)) as? [String: Any],
+              auth80Object["ok"] as? Bool == true else {
+            throw Failure("Case 6: Authorization for the in-flight read fixture failed: \(auth80Result)")
+        }
+
+        // 6a. Pause during in-flight read
+        let readGate6a = AsyncGate()
+        runtime.setScriptHandler { script in
+            if script.contains("execute t javascript") {
+                await readGate6a.enterAndAwaitRelease()
+                return #"{"title":"Secret Doc","url":"http://127.0.0.1/doc","text":"Sensitive Data 123"}"#
+            }
+            return "80\u{1F}1\u{1F}1\u{1F}1\u{1F}Secret Doc\u{1F}http://127.0.0.1/doc\u{1E}"
+        }
+
+        let inFlightRead6aTask = Task {
+            try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":80,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        try await readGate6a.waitUntilEntered(step: "case 6a paused read")
+
+        _ = try await simTools.execute(name: "pause_browser_tabs", arguments: #"{"paused":true}"#)
+        readGate6a.release()
+
+        let inFlightRead6aRes = try await inFlightRead6aTask.value
+        let inFlightRead6aObj = try JSONSerialization.jsonObject(with: Data(inFlightRead6aRes.utf8)) as? [String: Any]
+        guard inFlightRead6aObj?["ok"] as? Bool == false,
+              let err6a = inFlightRead6aObj?["error"] as? String,
+              err6a.contains("in flight") || err6a.contains("paused") else {
+            throw Failure("Case 6a: In-flight read was not suppressed on pause: \(inFlightRead6aRes)")
+        }
+        if let leaked = inFlightRead6aObj?["content"] as? String, !leaked.isEmpty {
+            throw Failure("Case 6a: Content leaked despite in-flight pause")
+        }
+
+        _ = try await simTools.execute(name: "pause_browser_tabs", arguments: #"{"paused":false}"#)
+
+        // 6b. Revoke during in-flight read
+        let readGate6b = AsyncGate()
+        runtime.setScriptHandler { script in
+            if script.contains("execute t javascript") {
+                await readGate6b.enterAndAwaitRelease()
+                return #"{"title":"Secret Doc","url":"http://127.0.0.1/doc","text":"Sensitive Data 123"}"#
+            }
+            return "80\u{1F}1\u{1F}1\u{1F}1\u{1F}Secret Doc\u{1F}http://127.0.0.1/doc\u{1E}"
+        }
+
+        let inFlightRead6bTask = Task {
+            try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":80,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        try await readGate6b.waitUntilEntered(step: "case 6b revoked read")
+
+        _ = try await simTools.execute(name: "revoke_browser_tab", arguments: #"{"tab_id":80,"browser_app_id":"com.google.Chrome"}"#)
+        readGate6b.release()
+
+        let inFlightRead6bRes = try await inFlightRead6bTask.value
+        let inFlightRead6bObj = try JSONSerialization.jsonObject(with: Data(inFlightRead6bRes.utf8)) as? [String: Any]
+        guard inFlightRead6bObj?["ok"] as? Bool == false,
+              let err6b = inFlightRead6bObj?["error"] as? String,
+              err6b.contains("in flight") else {
+            throw Failure("Case 6b: In-flight read was not suppressed on revoke: \(inFlightRead6bRes)")
+        }
+        if let leaked = inFlightRead6bObj?["content"] as? String, !leaked.isEmpty {
+            throw Failure("Case 6b: Content leaked despite in-flight revoke")
+        }
+
+        // --- 7. Unsupported Explicit Browser Bundle IDs Fail Closed ---
+        // Unsupported explicit browser bundle IDs must fail closed.
+        let unsupportedIDs = ["com.apple.Safari", "org.mozilla.firefox", "invalid.browser.bundle", ""]
+        for badID in unsupportedIDs {
+            let listRes = try await simTools.execute(name: "list_browser_tabs", arguments: #"{"browser_app_id":"\#(badID)"}"#)
+            let listObj = try JSONSerialization.jsonObject(with: Data(listRes.utf8)) as? [String: Any]
+            guard listObj?["ok"] as? Bool == false,
+                  let err = listObj?["error"] as? String,
+                  err.contains("Unsupported Chromium browser bundle ID") else {
+                throw Failure("Case 7: Unsupported browser bundle ID '\(badID)' did not fail closed in listing: \(listRes)")
+            }
+
+            let readRes = try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":1,"browser_app_id":"\#(badID)"}"#)
+            let readObj = try JSONSerialization.jsonObject(with: Data(readRes.utf8)) as? [String: Any]
+            guard readObj?["ok"] as? Bool == false,
+                  let readError = readObj?["error"] as? String,
+                  readError.contains("Unsupported Chromium browser bundle ID") else {
+                throw Failure("Case 7: Read with unsupported browser bundle ID '\(badID)' did not fail closed: \(readRes)")
+            }
+        }
+
+        // --- 8. Existing Domain-Navigation Revocation ---
+        // Existing domain-navigation revocation must remain covered.
+        runtime.setScriptHandler { script in
+            if script.contains("execute t javascript") {
+                return #"{"title":"Original","url":"http://127.0.0.1/doc","text":"Original Text"}"#
+            }
+            return "90\u{1F}1\u{1F}1\u{1F}1\u{1F}Original\u{1F}http://127.0.0.1/doc\u{1E}"
+        }
+        let auth90Task = Task {
+            try await simTools.execute(name: "authorize_browser_tab", arguments: #"{"tab_id":90,"browser_app_id":"com.google.Chrome"}"#)
+        }
+        let app90 = try await waitForApproval(simTools, step: "adversarial case 8 auth")
+        simTools.resolve(id: app90.id, allow: true)
+        let auth90Result = try await auth90Task.value
+        guard let auth90Object = try? JSONSerialization.jsonObject(with: Data(auth90Result.utf8)) as? [String: Any],
+              auth90Object["ok"] as? Bool == true else {
+            throw Failure("Case 8: Authorization for domain-navigation fixture failed: \(auth90Result)")
+        }
+
+        let firstReadRes = try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":90,"browser_app_id":"com.google.Chrome"}"#)
+        let firstReadObj = try JSONSerialization.jsonObject(with: Data(firstReadRes.utf8)) as? [String: Any]
+        guard firstReadObj?["ok"] as? Bool == true else {
+            throw Failure("Case 8: First read failed: \(firstReadRes)")
+        }
+
+        runtime.setScriptHandler { script in
+            if script.contains("execute t javascript") {
+                return #"{"title":"Navigated","url":"http://localhost/navigated","text":"Hijacked Text"}"#
+            }
+            return "90\u{1F}1\u{1F}1\u{1F}1\u{1F}Navigated\u{1F}http://localhost/navigated\u{1E}"
+        }
+
+        let hijackedRes = try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":90,"browser_app_id":"com.google.Chrome"}"#)
+        let hijackedObj = try JSONSerialization.jsonObject(with: Data(hijackedRes.utf8)) as? [String: Any]
+        guard hijackedObj?["ok"] as? Bool == false,
+              let hijackErr = hijackedObj?["error"] as? String,
+              hijackErr.contains("navigated") && hijackErr.contains("revoked") else {
+            throw Failure("Case 8: Domain navigation was not caught and revoked: \(hijackedRes)")
+        }
+
+        let secondReadRes = try await simTools.execute(name: "read_browser_tab", arguments: #"{"tab_id":90,"browser_app_id":"com.google.Chrome"}"#)
+        let secondReadObj = try JSONSerialization.jsonObject(with: Data(secondReadRes.utf8)) as? [String: Any]
+        guard secondReadObj?["ok"] as? Bool == false,
+              let secErr = secondReadObj?["error"] as? String,
+              secErr.contains("not authorized") else {
+            throw Failure("Case 8: Revoked tab remained authorized on subsequent read: \(secondReadRes)")
+        }
+
+        print("PASS: Deterministic browser-session adversarial coverage: cross-browser isolation, session restart, approval-time change rejection, delimiter immunity, in-flight pause/revoke suppression, and unsupported bundle ID fail-closed verified.")
     }
 }
