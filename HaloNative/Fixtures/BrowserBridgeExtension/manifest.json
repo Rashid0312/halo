@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Halo Browser Bridge (Development Fixture)",
+  "version": "0.1.0",
+  "description": "Minimal, read-only Manifest V3 development extension for Halo Chromium Native Messaging bridge.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy0y08jYC/T43INjLt9OO2Sr6VzkTNBTYPGGTCaPgjOn8eYQAO4uMcfqdF3st6t//RkzicsAYRzLriVFkm2YZgEsEoIROPzL7gpga7ACGpc17ySTed3DRLuKHsX6KOzsADMG9gJ6ygjG1zmJv/H0uTGBndgncEbwPfex9Dw1e8/2N3tpK+pOVBS/CEehgu/4X6G2TknmRY14osNWan20jXomRt0CNPAODYs1/JXNduMhL49EFm0akXFIfWYzFTiS4CF/Hdjy/rtuW+Pumz5oE9DXpCpijY0DFGQc+0OIhDpIDVieBB0wmLykdCL/t4vsvKMZQE+bdOPAlUfPVKvBK7wIDAQAB",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "nativeMessaging",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "incognito": "not_allowed",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

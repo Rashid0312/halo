@@ -7,7 +7,7 @@ import HaloCore
 struct HaloApp: App {
     @NSApplicationDelegateAdaptor(HaloDelegate.self) private var delegate
     var body: some Scene {
-        Settings { HaloSettings(voice: delegate.voice, wake: delegate.wake, setHandsFree: delegate.setHandsFree, catalog: delegate.catalog, macTools: delegate.macTools, presentation: delegate.presentation, auth: delegate.auth) }
+        Settings { HaloSettings(voice: delegate.voice, wake: delegate.wake, setHandsFree: delegate.setHandsFree, catalog: delegate.catalog, macTools: delegate.macTools, presentation: delegate.presentation, auth: delegate.auth, browserBridge: delegate.browserBridge) }
             .defaultSize(width: 820, height: 620)
     }
 }
@@ -34,6 +34,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
     let catalog = AppCatalog()
     let auth = ChatGPTAuth()
     lazy var macTools = MacTools(catalog: catalog)
+    let browserBridge = BrowserBridgeController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--ui-test-host") {
@@ -78,7 +79,14 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        if CommandLine.arguments.contains("--check-browser-tabs") {
+        if CommandLine.arguments.contains("--check-browser-bridge-live") {
+            Task {
+                do { try await NativeChecks.runRealBrowserLifecycleSuite(helperBinaryURL: NativeChecks.locateHelperBinary()); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-browser-tabs") || CommandLine.arguments.contains("--check-browser-bridge") {
             Task {
                 do { try await NativeChecks.browserTabIntegration(macTools); exit(0) }
                 catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
@@ -348,6 +356,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         conversation.onReply = { [weak self] text in self?.voice.finishReply(text) }
         conversation.onStop = { [weak self] in self?.voice.stopSpeaking(); self?.macTools.cancelApproval() }
         NSApp.setActivationPolicy(.accessory)
+        browserBridge.resumeIfEnabled()
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "circle.hexagongrid.fill", accessibilityDescription: "Halo")
         item.button?.toolTip = "Mercy — open Halo"
@@ -583,6 +592,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         for observer in audioObservers { NotificationCenter.default.removeObserver(observer) }
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         wake.stop(); voice.cancel(); conversation.stop()
+        browserBridge.shutdownForTermination()
     }
 }
 
@@ -594,6 +604,7 @@ struct HaloSettings: View {
     @Bindable var macTools: MacTools
     @Bindable var presentation: PanelPresentation
     @Bindable var auth: ChatGPTAuth
+    @Bindable var browserBridge: BrowserBridgeController
 
     private enum Page: String, CaseIterable, Identifiable {
         case general = "General"
@@ -688,6 +699,12 @@ struct HaloSettings: View {
         case .privacy:
             settingsCard("Action authorization", icon: "bolt.shield") {
                 Text("Halo shows the exact command, script, file contents, screenshot, or interface action before carrying out a sensitive step. macOS permission prompts can still appear separately.")
+                    .settingsNote()
+            }
+            settingsCard("Browser bridge", icon: "globe") {
+                Toggle("Connect to the Halo browser extension (experimental)", isOn: $browserBridge.enabled)
+                Text(browserBridge.status.summary).settingsNote()
+                Text("Read-only. Halo registers a native host only while this is on, accepts only its pinned extension, and still asks before reading any tab.")
                     .settingsNote()
             }
             settingsCard("Permissions", icon: "lock.shield") {

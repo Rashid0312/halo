@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import HaloBridge
 
 public struct BrowserTab: Sendable, Codable, Equatable {
     public let id: Int
@@ -130,6 +131,74 @@ public actor ChromeBrowserService {
     private var authorizedTabs: [AuthorizedTabKey: AuthorizedTabRecord] = [:]
     private var isPaused = false
     private var accessEpoch: UInt64 = 0
+    private var bridgeServer: BridgeIPCServer? = nil
+    private var bridgeValidator: BridgeSessionValidator? = nil
+    private var bridgeGenerations: [AuthorizedTabKey: UInt64] = [:]
+    private var bridgeReadInFlight = false
+
+    public func attachBridgeServer(_ server: BridgeIPCServer) {
+        self.bridgeServer = server
+        self.bridgeValidator = BridgeSessionValidator(sessionNonce: server.sessionConfig.sessionNonce)
+        self.bridgeGenerations.removeAll()
+    }
+
+    private enum BridgeMessageKind { case event(AuthorizedTabKey), response }
+
+    /// Applies an unsolicited navigation or tab-close event to the authorization
+    /// state. Events that cannot be reconciled revoke the tab (fail closed).
+    private func applyBridgeMessage(_ message: BridgeResponse, nonce: String,
+                                    validator: BridgeSessionValidator) async throws -> BridgeMessageKind {
+        if let navigation = message.navigation {
+            guard BridgeSessionValidator.constantTimeEquals(message.sessionNonce, nonce) else {
+                throw BridgeErrorDetails(code: .authenticationFailed, message: "Navigation event session mismatch.")
+            }
+            let key = AuthorizedTabKey(browserBundleID: navigation.browser.bundleID,
+                                       browserSessionID: navigation.browser.sessionID, tabID: navigation.tabID)
+            // The extension's generation is authoritative for every tab it has bound,
+            // authorized or not, so a later re-approval targets the live document.
+            bridgeGenerations[key] = navigation.newDocumentGenerationID
+            if let record = authorizedTabs[key] {
+                do {
+                    try await validator.notifyNavigation(event: navigation)
+                    if navigation.newDomain.lowercased() != record.domain.lowercased() {
+                        authorizedTabs.removeValue(forKey: key)
+                    } else {
+                        // Authorization is domain-bound; follow same-site navigation.
+                        authorizedTabs[key] = AuthorizedTabRecord(key: key, domain: record.domain, title: record.title,
+                                                                  url: navigation.newURL, authorizedAt: record.authorizedAt)
+                    }
+                } catch {
+                    authorizedTabs.removeValue(forKey: key)
+                }
+                accessEpoch &+= 1
+            }
+            return .event(key)
+        }
+        if let closed = message.tabClosed {
+            guard BridgeSessionValidator.constantTimeEquals(message.sessionNonce, nonce) else {
+                throw BridgeErrorDetails(code: .authenticationFailed, message: "Tab-close event session mismatch.")
+            }
+            let key = AuthorizedTabKey(browserBundleID: closed.browser.bundleID,
+                                       browserSessionID: closed.browser.sessionID, tabID: closed.tabID)
+            try? await validator.notifyClosed(event: closed)
+            bridgeGenerations.removeValue(forKey: key)
+            if authorizedTabs.removeValue(forKey: key) != nil {
+                accessEpoch &+= 1
+            }
+            return .event(key)
+        }
+        return .response
+    }
+
+    public func detachBridgeServer() {
+        self.bridgeServer = nil
+        self.bridgeValidator = nil
+        self.bridgeGenerations.removeAll()
+    }
+
+    public func activeBridgeServer() -> BridgeIPCServer? {
+        bridgeServer
+    }
 
     public static let supportedBrowserBundleIDs: [String: String] = [
         "com.google.Chrome": "Google Chrome",
@@ -149,10 +218,11 @@ public actor ChromeBrowserService {
         self.runtime = runtime
     }
 
-    public func setPaused(_ paused: Bool) {
+    public func setPaused(_ paused: Bool) async {
         guard isPaused != paused else { return }
         isPaused = paused
         accessEpoch &+= 1
+        await bridgeValidator?.setPaused(paused)
     }
 
     public func isAccessPaused() -> Bool { isPaused }
@@ -161,15 +231,38 @@ public actor ChromeBrowserService {
         authorizedTabs.keys.contains { $0.tabID == tabID }
     }
 
-    public func revoke(tabID: Int, browserAppID: String? = nil) {
+    public func revoke(tabID: Int, browserAppID: String? = nil) async {
+        let revokedKeys = authorizedTabs.keys.filter { key in
+            key.tabID == tabID && (browserAppID == nil || key.browserBundleID == browserAppID)
+        }
+        if let validator = bridgeValidator {
+            for key in revokedKeys {
+                if let record = authorizedTabs[key] {
+                    let browser = BrowserIdentity(bundleID: key.browserBundleID, sessionID: key.browserSessionID,
+                                                  pid: (try? browserContext(key.browserBundleID).pid) ?? 1)
+                    let identity = TabGenerationIdentity(browser: browser, tabID: key.tabID,
+                        documentGenerationID: bridgeGenerations[key] ?? 1, url: record.url, domain: record.domain)
+                    await validator.revokeTab(identity)
+                }
+            }
+        }
         authorizedTabs = authorizedTabs.filter { key, _ in
             key.tabID != tabID || (browserAppID != nil && key.browserBundleID != browserAppID)
         }
         accessEpoch &+= 1
     }
 
-    public func revokeAll() {
+    public func revokeAll() async {
+        if let validator = bridgeValidator {
+            for (key, record) in authorizedTabs {
+                let browser = BrowserIdentity(bundleID: key.browserBundleID, sessionID: key.browserSessionID,
+                                              pid: (try? browserContext(key.browserBundleID).pid) ?? 1)
+                await validator.revokeTab(TabGenerationIdentity(browser: browser, tabID: key.tabID,
+                    documentGenerationID: bridgeGenerations[key] ?? 1, url: record.url, domain: record.domain))
+            }
+        }
         authorizedTabs.removeAll()
+        bridgeGenerations.removeAll()
         accessEpoch &+= 1
     }
 
@@ -220,7 +313,7 @@ public actor ChromeBrowserService {
             return "NOT_FOUND"
         end tell
         """)
-        revoke(tabID: id, browserAppID: context.bundleID)
+        await revoke(tabID: id, browserAppID: context.bundleID)
     }
 
     private func tabKey(_ id: Int, context: BrowserContext) -> AuthorizedTabKey {
@@ -320,6 +413,13 @@ public actor ChromeBrowserService {
                                          url: current.url, authorizedAt: Date())
         authorizedTabs[key] = record
         accessEpoch &+= 1
+        if let validator = bridgeValidator {
+            let identity = TabGenerationIdentity(
+                browser: BrowserIdentity(bundleID: current.browserBundleID, sessionID: current.browserSessionID, pid: current.browserPID),
+                tabID: current.id, documentGenerationID: bridgeGenerations[key] ?? 1, url: current.url, domain: current.domain
+            )
+            try await validator.authorizeTab(identity)
+        }
         return record
     }
 
@@ -331,6 +431,94 @@ public actor ChromeBrowserService {
             throw InteractionError("Tab \(id) is not authorized for this browser session.")
         }
         let epoch = accessEpoch
+
+        // 1. If an authenticated Native Messaging bridge is connected, route observation through the bridge:
+        if let server = bridgeServer, let validator = bridgeValidator, await server.isConnected {
+            guard !bridgeReadInFlight else {
+                throw InteractionError("Another browser read is already in progress.")
+            }
+            bridgeReadInFlight = true
+            defer { bridgeReadInFlight = false }
+            let nonce = server.sessionConfig.sessionNonce
+            do {
+                // Lifecycle events and abandoned responses that arrived while idle
+                // must be applied before the current generation is trusted.
+                while await server.hasPendingMessage() {
+                    _ = try await applyBridgeMessage(try await server.receiveResponse(timeoutSeconds: 2), nonce: nonce, validator: validator)
+                }
+            } catch {
+                throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+            }
+            guard !isPaused, let record = authorizedTabs[key] else {
+                throw InteractionError("Tab \(id) is no longer authorized; the page navigated or closed.")
+            }
+            let epoch = accessEpoch
+            let browserIdent = BrowserIdentity(bundleID: context.bundleID, sessionID: context.sessionID, pid: context.pid)
+            let generation = bridgeGenerations[key] ?? 1
+            let tabIdent = TabGenerationIdentity(browser: browserIdent, tabID: id, documentGenerationID: generation, url: record.url, domain: record.domain)
+            let reqID = BridgeSocketIO.generateRandomHex(byteCount: 8)
+            let bridgeReq = BridgeRequest(
+                requestID: reqID,
+                sessionNonce: nonce,
+                type: .observeTab,
+                targetTab: tabIdent
+            )
+            do {
+                try await validator.authorizeTab(tabIdent)
+                try await validator.validateRequest(bridgeReq)
+                try await server.sendRequest(bridgeReq)
+                var changedInFlight = false
+                let deadline = Date().addingTimeInterval(5)
+                var resp: BridgeResponse
+                while true {
+                    resp = try await server.receiveResponse(timeoutSeconds: max(0.1, deadline.timeIntervalSinceNow))
+                    switch try await applyBridgeMessage(resp, nonce: nonce, validator: validator) {
+                    case .event(let affected):
+                        if affected == key { changedInFlight = true }
+                        continue
+                    case .response where resp.requestID != reqID:
+                        continue // Response to an earlier, abandoned request.
+                    case .response:
+                        break
+                    }
+                    break
+                }
+                if changedInFlight {
+                    throw InteractionError("The browser tab changed while the read was in flight.")
+                }
+                try await validator.validateResponse(resp)
+                try Task.checkCancellation()
+                guard !isPaused, epoch == accessEpoch, authorizedTabs[key] == record else {
+                    throw InteractionError("Browser tab access changed while the read was in flight.")
+                }
+                guard resp.success, let obs = resp.observation, obs.tab == tabIdent else {
+                    let errMsg = resp.error?.message ?? "Bridge observation failed."
+                    throw InteractionError(errMsg)
+                }
+                guard obs.tab.domain.lowercased() == record.domain.lowercased() else {
+                    authorizedTabs.removeValue(forKey: key)
+                    throw InteractionError("Tab \(id) navigated from '\(record.domain)' to '\(obs.tab.domain)'; authorization was revoked.")
+                }
+                let contentText = obs.elements.map { el in
+                    el.isProtected ? "[\(el.role): (protected)]" : "\(el.role): \(el.label)"
+                }.joined(separator: "\n")
+                return BrowserTabContent(
+                    id: id,
+                    title: String(obs.title.prefix(200)),
+                    url: obs.tab.url,
+                    domain: obs.tab.domain,
+                    content: contentText,
+                    truncated: contentText.utf16.count >= 16000
+                )
+            } catch {
+                if let interError = error as? InteractionError {
+                    throw interError
+                }
+                throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+            }
+        }
+
+        // 2. Default read-only AppleScript path:
         let raw = try await runAppleScript("""
         tell application "\(context.name)"
             repeat with w in windows

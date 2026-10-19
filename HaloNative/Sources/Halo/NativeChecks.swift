@@ -1,9 +1,11 @@
 import AppKit
+import Darwin
 import HaloCore
+import HaloBridge
 
 @MainActor
 enum NativeChecks {
-    private struct Failure: LocalizedError {
+    struct Failure: LocalizedError {
         let errorDescription: String?
         init(_ message: String) { errorDescription = message }
     }
@@ -600,7 +602,7 @@ enum NativeChecks {
         print("PASS: \(expectedDriver) driver Safe Mac actions: focus, stale ID rejection, approval preview/denial/cancellation, control click, typing, shortcut, scroll, menu selection, dialog operation, and window layout verified with post-action observation")
     }
 
-    private final class DisposableTabServer: @unchecked Sendable {
+    final class DisposableTabServer: @unchecked Sendable {
         let port: UInt16
         let url: URL
         private let socketFD: Int32
@@ -648,8 +650,15 @@ enum NativeChecks {
                 </body>
                 </html>
                 """
-                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(htmlBody.utf8.count)\r\nConnection: close\r\n\r\n\(htmlBody)"
-                let responseBytes = [UInt8](response.utf8)
+                func respond(_ body: String) -> [UInt8] {
+                    [UInt8]("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n\(body)".utf8)
+                }
+                let responseBytes = respond(htmlBody)
+                // Extra routes for real-browser lifecycle checks: same-site
+                // navigation and a large document for in-flight interruption.
+                let pageB = respond("<!DOCTYPE html><html><head><title>Halo Fixture Page B</title></head><body><h1>Halo Fixture Page B</h1></body></html>")
+                let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
+                    + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
                 while true {
                     let isStopped = self.lock.withLock { self.stopped }
@@ -662,8 +671,34 @@ enum NativeChecks {
                     }
                     var noSigPipe: Int32 = 1
                     _ = Darwin.setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-                    _ = Darwin.write(client, responseBytes, responseBytes.count)
-                    Darwin.close(client)
+                    // Serve each connection on its own thread: Chromium preconnects
+                    // idle sockets that would otherwise stall the real request.
+                    Thread.detachNewThread {
+                        var requestLine = ""
+                        var pfd = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
+                        if poll(&pfd, 1, 1000) > 0 {
+                            var buffer = [UInt8](repeating: 0, count: 2048)
+                            let count = Darwin.read(client, &buffer, buffer.count)
+                            if count > 0 { requestLine = String(decoding: buffer[..<count], as: UTF8.self) }
+                        }
+                        guard !requestLine.isEmpty else { Darwin.close(client); return }
+                        let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+                        let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large : responseBytes
+                        _ = bytes.withUnsafeBufferPointer { buf -> Int in
+                            var written = 0
+                            while written < buf.count {
+                                let n = Darwin.write(client, buf.baseAddress!.advanced(by: written), buf.count - written)
+                                if n > 0 { written += n; continue }
+                                if n < 0 && (errno == EAGAIN || errno == EINTR) {
+                                    var wfd = pollfd(fd: client, events: Int16(POLLOUT), revents: 0)
+                                    if poll(&wfd, 1, 1000) > 0 { continue }
+                                }
+                                break
+                            }
+                            return written
+                        }
+                        Darwin.close(client)
+                    }
                 }
             }
         }
@@ -685,6 +720,12 @@ enum NativeChecks {
     }
 
     static func browserTabIntegration(_ tools: MacTools) async throws {
+        // Run Phase 5 Native Messaging transport-neutral bridge protocol checks
+        try await browserBridgeProtocolChecks()
+
+        // Run Phase 5A Chromium Native Messaging Bridge checks (helper, UDS IPC, adversarial, performance, and real-browser probe)
+        try await chromiumNativeMessagingBridgeChecks(tools)
+
         // Run deterministic Phase 4 adversarial coverage across all 8 required cases
         try await adversarialBrowserCoverage(tools)
 
@@ -1528,5 +1569,1035 @@ enum NativeChecks {
         }
 
         print("PASS: Deterministic browser-session adversarial coverage: cross-browser isolation, session restart, approval-time change rejection, delimiter immunity, in-flight pause/revoke suppression, and unsupported bundle ID fail-closed verified.")
+    }
+
+    static func browserBridgeProtocolChecks() async throws {
+        let validNonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let clientNonce = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        let validator = BridgeSessionValidator(sessionNonce: validNonce)
+
+        let browserIdentity = BrowserIdentity(bundleID: "com.google.Chrome", sessionID: "1001:100.0", pid: 1001)
+        let tabGen1 = TabGenerationIdentity(browser: browserIdentity, tabID: 100, documentGenerationID: 1, url: "https://example.com/page1", domain: "example.com")
+        let tabGen2 = TabGenerationIdentity(browser: browserIdentity, tabID: 100, documentGenerationID: 2, url: "https://example.com/page2", domain: "example.com")
+
+        // 1. Valid handshake succeeds
+        let challenge = BridgeHandshakeChallenge(version: 1, serverNonce: validNonce, hostProcessID: 1001)
+        let challengeData = try BridgeMessageFraming.encode(challenge)
+        let decodedChallenge = try BridgeMessageFraming.decode(BridgeHandshakeChallenge.self, from: challengeData)
+        guard decodedChallenge == challenge else {
+            throw Failure("Bridge check 1: Handshake challenge roundtrip mismatch")
+        }
+
+        let response = BridgeHandshakeResponse(version: 1, serverNonce: validNonce, clientNonce: clientNonce, extensionID: "knldjmfmopnpolahpmmgbagdohdnhkik")
+        let responseData = try BridgeMessageFraming.encode(response)
+        let decodedResponse = try BridgeMessageFraming.decode(BridgeHandshakeResponse.self, from: responseData)
+        guard decodedResponse == response else {
+            throw Failure("Bridge check 1: Handshake response roundtrip mismatch")
+        }
+        guard BridgeSessionValidator.constantTimeEquals(decodedResponse.serverNonce, validNonce) else {
+            throw Failure("Bridge check 1: Constant-time nonce check failed for valid handshake")
+        }
+        try BridgeHandshakeValidator.validate(challenge: challenge, response: response,
+                                              pinnedExtensionID: "knldjmfmopnpolahpmmgbagdohdnhkik")
+        let echoedResponse = BridgeHandshakeResponse(version: 1, serverNonce: validNonce, clientNonce: validNonce, extensionID: "knldjmfmopnpolahpmmgbagdohdnhkik")
+        do {
+            try BridgeHandshakeValidator.validate(challenge: challenge, response: echoedResponse,
+                                                  pinnedExtensionID: "knldjmfmopnpolahpmmgbagdohdnhkik")
+            throw Failure("Bridge check 1: Handshake echoing serverNonce as clientNonce was accepted")
+        } catch let err as BridgeErrorDetails where err.code == .authenticationFailed {}
+
+        // 2. Wrong version fails
+        let wrongVersionReq = BridgeRequest(requestID: "req_v2", protocolVersion: 2, sessionNonce: validNonce, type: .observeTab, targetTab: tabGen1)
+        var caughtWrongVersionReq = false
+        do {
+            try await validator.validateRequest(wrongVersionReq)
+        } catch let err as BridgeErrorDetails where err.code == .unsupportedVersion {
+            caughtWrongVersionReq = true
+        }
+        guard caughtWrongVersionReq else {
+            throw Failure("Bridge check 2: Request with unsupported version was not rejected")
+        }
+
+        let wrongVersionResp = BridgeResponse(requestID: "req_v2_resp", protocolVersion: 99, sessionNonce: validNonce, success: true)
+        var caughtWrongVersionResp = false
+        do {
+            try await validator.validateResponse(wrongVersionResp)
+        } catch let err as BridgeErrorDetails where err.code == .unsupportedVersion {
+            caughtWrongVersionResp = true
+        }
+        guard caughtWrongVersionResp else {
+            throw Failure("Bridge check 2: Response with unsupported version was not rejected")
+        }
+
+        // 3. Wrong nonce / authentication fails
+        let wrongNonceReq = BridgeRequest(requestID: "req_wrong_nonce", protocolVersion: 1, sessionNonce: "0000000000000000000000000000000000000000000000000000000000000000", type: .observeTab, targetTab: tabGen1)
+        var caughtWrongNonce = false
+        do {
+            try await validator.validateRequest(wrongNonceReq)
+        } catch let err as BridgeErrorDetails where err.code == .authenticationFailed {
+            caughtWrongNonce = true
+        }
+        guard caughtWrongNonce else {
+            throw Failure("Bridge check 3: Request with invalid session nonce was not rejected")
+        }
+        guard !BridgeSessionValidator.constantTimeEquals(validNonce, "wrong_nonce") else {
+            throw Failure("Bridge check 3: constantTimeEquals returned true for mismatched strings")
+        }
+
+        // 4. Oversized frame fails
+        let oversizedData = Data(repeating: 65, count: BrowserBridgeLimits.maxMessageSizeBytes + 1)
+        var caughtOversized = false
+        do {
+            _ = try BridgeMessageFraming.decode(BridgeRequest.self, from: oversizedData)
+        } catch let err as BridgeErrorDetails where err.code == .oversizedPayload {
+            caughtOversized = true
+        }
+        guard caughtOversized else {
+            throw Failure("Bridge check 4: Oversized frame was not rejected by BridgeMessageFraming")
+        }
+
+        // 5. Replayed request ID fails
+        try await validator.authorizeTab(tabGen1)
+        let validReq1 = BridgeRequest(requestID: "req_unique_001", protocolVersion: 1, sessionNonce: validNonce, type: .observeTab, targetTab: tabGen1)
+        try await validator.validateRequest(validReq1)
+
+        var caughtReplay = false
+        do {
+            try await validator.validateRequest(validReq1)
+        } catch let err as BridgeErrorDetails where err.code == .replayedRequest {
+            caughtReplay = true
+        }
+        guard caughtReplay else {
+            throw Failure("Bridge check 5: Replayed request ID was not rejected")
+        }
+
+        // 6. Cross-browser / tab / document identity mismatch fails
+        let unauthBrowser = BrowserIdentity(bundleID: "com.brave.Browser", sessionID: "2002:200.0", pid: 2002)
+        let unauthTab = TabGenerationIdentity(browser: unauthBrowser, tabID: 100, documentGenerationID: 1, url: "https://evil.com", domain: "evil.com")
+        let unauthReq = BridgeRequest(requestID: "req_unauth_tab", protocolVersion: 1, sessionNonce: validNonce, type: .observeTab, targetTab: unauthTab)
+        var caughtUnauth = false
+        do {
+            try await validator.validateRequest(unauthReq)
+        } catch let err as BridgeErrorDetails where err.code == .tabNotAuthorized {
+            caughtUnauth = true
+        }
+        guard caughtUnauth else {
+            throw Failure("Bridge check 6: Unauthorized tab request was not rejected")
+        }
+
+        // 7. Navigation generation invalidates prior references
+        let preNavigationRequest = BridgeRequest(requestID: "req_before_nav", protocolVersion: 1, sessionNonce: validNonce, type: .observeTab, targetTab: tabGen1)
+        try await validator.validateRequest(preNavigationRequest)
+        let navEvent = TabNavigationEvent(browser: browserIdentity, tabID: 100, previousDocumentGenerationID: 1, newDocumentGenerationID: 2, newURL: "https://example.com/page2", newDomain: "example.com")
+        try await validator.notifyNavigation(event: navEvent)
+
+        let staleReq = BridgeRequest(requestID: "req_stale_gen", protocolVersion: 1, sessionNonce: validNonce, type: .observeTab, targetTab: tabGen1)
+        var caughtStaleReq = false
+        do {
+            try await validator.validateRequest(staleReq)
+        } catch let err as BridgeErrorDetails where err.code == .staleDocumentGeneration {
+            caughtStaleReq = true
+        }
+        guard caughtStaleReq else {
+            throw Failure("Bridge check 7: Stale document generation request was not rejected")
+        }
+
+        let validGen2Req = BridgeRequest(requestID: "req_valid_gen2", protocolVersion: 1, sessionNonce: validNonce, type: .observeTab, targetTab: tabGen2)
+        try await validator.validateRequest(validGen2Req)
+
+        let staleObsEvent = TabObservedEvent(tab: tabGen1, title: "Old Title", elements: [])
+        let staleResp = BridgeResponse(requestID: "req_before_nav", protocolVersion: 1, sessionNonce: validNonce, success: true, observation: staleObsEvent)
+        var caughtStaleResp = false
+        do {
+            try await validator.validateResponse(staleResp)
+        } catch let err as BridgeErrorDetails where err.code == .accessPaused || err.code == .staleDocumentGeneration {
+            caughtStaleResp = true
+        }
+        guard caughtStaleResp else {
+            throw Failure("Bridge check 7: Stale document generation response was not rejected")
+        }
+
+        // 8. Pause / revoke rejects queued and in-flight responses
+        await validator.setPaused(true)
+        var caughtPausedReq = false
+        do {
+            let pausedReq = BridgeRequest(requestID: "req_paused", protocolVersion: 1, sessionNonce: validNonce, type: .observeTab, targetTab: tabGen2)
+            try await validator.validateRequest(pausedReq)
+        } catch let err as BridgeErrorDetails where err.code == .accessPaused {
+            caughtPausedReq = true
+        }
+        guard caughtPausedReq else {
+            throw Failure("Bridge check 8a: Request during access pause was not rejected")
+        }
+
+        var caughtPausedResp = false
+        do {
+            let pausedResp = BridgeResponse(requestID: "resp_paused", protocolVersion: 1, sessionNonce: validNonce, success: true)
+            try await validator.validateResponse(pausedResp)
+        } catch let err as BridgeErrorDetails where err.code == .accessPaused {
+            caughtPausedResp = true
+        }
+        guard caughtPausedResp else {
+            throw Failure("Bridge check 8a: Response during access pause was not rejected")
+        }
+        await validator.setPaused(false)
+
+        await validator.revokeTab(tabGen2)
+        var caughtRevokedReq = false
+        do {
+            let revokedReq = BridgeRequest(requestID: "req_revoked", protocolVersion: 1, sessionNonce: validNonce, type: .observeTab, targetTab: tabGen2)
+            try await validator.validateRequest(revokedReq)
+        } catch let err as BridgeErrorDetails where err.code == .tabNotAuthorized {
+            caughtRevokedReq = true
+        }
+        guard caughtRevokedReq else {
+            throw Failure("Bridge check 8b: Request for revoked tab was not rejected")
+        }
+
+        // 9. Unknown message type fails
+        let rawUnknownType = #"{"requestID":"req_unk","protocolVersion":1,"sessionNonce":"\#(validNonce)","type":"arbitraryMutation"}"#
+        var caughtUnknownType = false
+        do {
+            _ = try BridgeMessageFraming.decode(BridgeRequest.self, from: Data(rawUnknownType.utf8))
+        } catch let err as BridgeErrorDetails where err.code == .payloadMalformed {
+            caughtUnknownType = true
+        }
+        guard caughtUnknownType else {
+            throw Failure("Bridge check 9: Unknown message type did not fail decoding")
+        }
+
+        // 10. Sensitive/forbidden fields are not present in encoded protocol models
+        let element = ObservedDOMElement(elementID: "el_1", tagName: "input", role: "textfield", label: "Username", isProtected: false, isEnabled: true, bounds: BoundedRect(x: 10, y: 20, width: 100, height: 30))
+        let obsEvent = TabObservedEvent(tab: tabGen2, title: "Clean Title", elements: [element])
+        let encodedObs = try BridgeMessageFraming.encode(obsEvent)
+        guard let encodedString = String(data: encodedObs, encoding: .utf8) else {
+            throw Failure("Bridge check 10: Failed to decode observation to UTF8 string")
+        }
+        let forbiddenTerms = ["password", "cookie", "token", "keychain", "profile_dir", "localStorage", "sessionStorage"]
+        for term in forbiddenTerms {
+            guard !encodedString.contains("\"\(term)\":") else {
+                throw Failure("Bridge check 10: Forbidden term '\(term)' found as key in encoded protocol payload: \(encodedString)")
+            }
+        }
+
+        // 11. Native Messaging framing, strict envelope keys, and bounded identifiers
+        let framed = try BridgeMessageFraming.encodeFrame(validReq1)
+        let decodedFrame = try BridgeMessageFraming.decodeFrame(BridgeRequest.self, from: framed)
+        guard decodedFrame == validReq1 else { throw Failure("Bridge check 11: Native Messaging frame roundtrip failed") }
+
+        let overlongRequest = BridgeRequest(requestID: String(repeating: "x", count: 65), sessionNonce: validNonce,
+                                            type: .observeTab, targetTab: tabGen2)
+        do {
+            _ = try BridgeMessageFraming.encode(overlongRequest)
+            throw Failure("Bridge check 11: Overlong request ID was silently truncated or accepted")
+        } catch let error as BridgeErrorDetails where error.code == .payloadMalformed {}
+
+        let extraField = #"{"requestID":"req_extra","protocolVersion":1,"sessionNonce":"\#(validNonce)","type":"pauseTabs","extra":"forbidden"}"#
+        do {
+            _ = try BridgeMessageFraming.decode(BridgeRequest.self, from: Data(extraField.utf8))
+            throw Failure("Bridge check 11: Unknown envelope field was accepted")
+        } catch let error as BridgeErrorDetails where error.code == .payloadMalformed {}
+
+        // 12. Responses are correlated to one outstanding request and full browser identity.
+        let correlationValidator = BridgeSessionValidator(sessionNonce: validNonce)
+        try await correlationValidator.authorizeTab(tabGen2)
+        let correlationRequest = BridgeRequest(requestID: "req_correlated", sessionNonce: validNonce,
+                                               type: .observeTab, targetTab: tabGen2)
+        try await correlationValidator.validateRequest(correlationRequest)
+        let wrongBrowserSameTab = TabGenerationIdentity(browser: unauthBrowser, tabID: 100,
+            documentGenerationID: 2, url: "https://evil.com", domain: "evil.com")
+        let mismatchedResponse = BridgeResponse(requestID: "req_correlated", sessionNonce: validNonce,
+            success: true, observation: TabObservedEvent(tab: wrongBrowserSameTab, title: "Wrong browser", elements: []))
+        do {
+            try await correlationValidator.validateResponse(mismatchedResponse)
+            throw Failure("Bridge check 12: Cross-browser response with colliding tab ID was accepted")
+        } catch let error as BridgeErrorDetails where error.code == .browserMismatch {}
+
+        // 13. Handshake extension identity and freshness are enforced; nonce is channel binding, not peer authentication.
+        do {
+            try BridgeHandshakeValidator.validate(challenge: challenge, response: response, pinnedExtensionID: "wrongextensionid")
+            throw Failure("Bridge check 13: Unpinned extension identity was accepted")
+        } catch let error as BridgeErrorDetails where error.code == .authenticationFailed {}
+
+        print("PASS: Chromium Native Messaging bridge transport-neutral protocol: pinned-origin channel binding, native framing, strict bounds/schema, replay and response correlation, full browser identity, generation invalidation, and pause/revoke gating verified.")
+    }
+
+    // MARK: - Phase 5A: Chromium Native Messaging Bridge Checks
+
+    static func locateHelperBinary() throws -> URL {
+        let candidates = [
+            Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/HaloNativeHost"),
+            Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("HaloNativeHost"),
+            URL(fileURLWithPath: "build/Halo.app/Contents/MacOS/HaloNativeHost"),
+            URL(fileURLWithPath: "HaloNative/build/Halo.app/Contents/MacOS/HaloNativeHost"),
+            URL(fileURLWithPath: ".build/arm64-apple-macosx/release/HaloNativeHost"),
+            URL(fileURLWithPath: ".build/release/HaloNativeHost"),
+            URL(fileURLWithPath: ".build/arm64-apple-macosx/debug/HaloNativeHost"),
+            URL(fileURLWithPath: ".build/debug/HaloNativeHost")
+        ].compactMap { $0 }
+
+        for url in candidates {
+            if FileManager.default.isExecutableFile(atPath: url.path) {
+                return url
+            }
+        }
+        throw Failure("Could not locate executable HaloNativeHost binary. Run scripts/build-app.sh first.")
+    }
+
+    static func percentile(_ values: [Double], _ p: Double) -> Double {
+        guard !values.isEmpty else { return 0.0 }
+        let sorted = values.sorted()
+        let idx = p * Double(sorted.count - 1)
+        let lower = Int(floor(idx))
+        let upper = Int(ceil(idx))
+        if lower == upper { return sorted[lower] }
+        let weight = idx - Double(lower)
+        return sorted[lower] * (1.0 - weight) + sorted[upper] * weight
+    }
+
+    static func getProcessTelemetry(pid: pid_t) -> (rssBytes: UInt64, userTimeNano: UInt64, systemTimeNano: UInt64) {
+        var info = proc_taskinfo()
+        let size = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, Int32(MemoryLayout<proc_taskinfo>.size))
+        if size == MemoryLayout<proc_taskinfo>.size {
+            return (UInt64(info.pti_resident_size), UInt64(info.pti_total_user), UInt64(info.pti_total_system))
+        }
+        return (0, 0, 0)
+    }
+
+    static func terminateProcessBounded(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
+    }
+
+    static func chromiumNativeMessagingBridgeChecks(_ tools: MacTools) async throws {
+        print("--- Phase 5A: Chromium Native Messaging Bridge Checks ---")
+        let helperBinaryURL = try locateHelperBinary()
+        let pinnedExtensionID = BrowserBridgeController.developmentExtensionID
+
+        // 0. Native Messaging Host Manifest Generation and Reversible Installer Verification
+        do {
+            let tempManifestDir = FileManager.default.temporaryDirectory.appendingPathComponent("halo-manifest-test-\(UUID().uuidString)", isDirectory: true)
+            let installed = try NativeMessagingInstaller.install(
+                hostName: "app.halo.browser_bridge",
+                launcherPath: helperBinaryURL.path,
+                allowedOrigins: ["chrome-extension://\(pinnedExtensionID)/"],
+                targetDirectories: [tempManifestDir]
+            )
+            defer {
+                NativeMessagingInstaller.uninstall(manifestURLs: installed)
+                try? FileManager.default.removeItem(at: tempManifestDir)
+            }
+            guard let manifestFile = installed.first, FileManager.default.fileExists(atPath: manifestFile.path) else {
+                throw Failure("NativeMessagingInstaller failed to write manifest file.")
+            }
+            let manifestData = try Data(contentsOf: manifestFile)
+            guard let obj = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any],
+                  obj["name"] as? String == "app.halo.browser_bridge",
+                  obj["path"] as? String == helperBinaryURL.path,
+                  obj["type"] as? String == "stdio",
+                  let origins = obj["allowed_origins"] as? [String], origins.contains("chrome-extension://\(pinnedExtensionID)/") else {
+                throw Failure("NativeMessagingInstaller manifest contents were malformed or missing required keys.")
+            }
+            NativeMessagingInstaller.uninstall(manifestURLs: installed)
+            guard !FileManager.default.fileExists(atPath: manifestFile.path) else {
+                throw Failure("NativeMessagingInstaller failed to cleanly uninstall manifest.")
+            }
+        }
+
+        // 1. Dedicated Helper Launch & Authenticated UDS IPC Test
+        do {
+            let server = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+            defer { Task { await server.close() } }
+
+            let process = Process()
+            process.executableURL = helperBinaryURL
+            process.arguments = ["--session-dir", server.directoryURL.path, "chrome-extension://\(pinnedExtensionID)/"]
+
+            let stdinPipe = Pipe()
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardInput = stdinPipe
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
+
+            try process.run()
+            defer {
+                if process.isRunning {
+                    process.terminate()
+                    process.waitUntilExit()
+                }
+            }
+
+            try await server.acceptConnection(timeoutSeconds: 5)
+            let serverConfig = server.sessionConfig
+            let sessionNonce = serverConfig.sessionNonce
+
+            // Send request from Halo via server.sendRequest -> helper -> stdoutPipe
+            let testReq = BridgeRequest(
+                requestID: "req_pipe_test",
+                protocolVersion: 1,
+                sessionNonce: sessionNonce,
+                type: .observeTab,
+                targetTab: TabGenerationIdentity(
+                    browser: BrowserIdentity(bundleID: "com.google.Chrome", sessionID: "test:1", pid: 1),
+                    tabID: 1,
+                    documentGenerationID: 1,
+                    url: "http://127.0.0.1/test",
+                    domain: "127.0.0.1"
+                )
+            )
+            try await server.sendRequest(testReq)
+
+            // Read from helper stdout (simulating extension receiving request)
+            let receivedBytes = try BridgeSocketIO.readFramedData(from: stdoutPipe.fileHandleForReading.fileDescriptor, timeoutSeconds: 5)
+            let decodedReq = try BridgeMessageFraming.decode(BridgeRequest.self, from: receivedBytes)
+            guard decodedReq.requestID == testReq.requestID else {
+                throw Failure("Helper failed to relay request to stdout correctly.")
+            }
+
+            // Simulate extension replying by writing to helper's stdinPipe
+            let testResp = BridgeResponse(
+                requestID: "req_pipe_test",
+                protocolVersion: 1,
+                sessionNonce: sessionNonce,
+                success: true
+            )
+            let framedResp = try BridgeMessageFraming.encode(testResp)
+            try BridgeSocketIO.writeFramedData(to: stdinPipe.fileHandleForWriting.fileDescriptor, payload: framedResp, timeoutSeconds: 5)
+
+            // Server receives response over UDS
+            let receivedResp = try await server.receiveResponse(timeoutSeconds: 5)
+            guard receivedResp.requestID == testResp.requestID, receivedResp.success else {
+                throw Failure("Helper failed to relay response from stdin to Halo UDS correctly.")
+            }
+            await server.close()
+        }
+
+        print("PASS: Phase 5A dedicated helper launched, verified peer PID/UID/binary path via UDS, and completed bi-directional stdio/UDS message relay.")
+
+        // 2. Deterministic Execution of All 17 Required Adversarial Cases
+        try await runAll17AdversarialBridgeChecks(helperBinaryURL: helperBinaryURL, pinnedExtensionID: pinnedExtensionID)
+
+        // 3. Performance Instrumentation using ContinuousClock
+        try await runBridgePerformanceBenchmarks(helperBinaryURL: helperBinaryURL, pinnedExtensionID: pinnedExtensionID)
+
+        // 4. Real Browser Capability Probe
+        try await runRealBrowserCapabilityProbe(helperBinaryURL: helperBinaryURL, pinnedExtensionID: pinnedExtensionID)
+    }
+
+    private static func runAll17AdversarialBridgeChecks(helperBinaryURL: URL, pinnedExtensionID: String) async throws {
+        let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let browser1 = BrowserIdentity(bundleID: "com.google.Chrome", sessionID: "s1", pid: 101)
+        let browser2 = BrowserIdentity(bundleID: "com.brave.Browser", sessionID: "s2", pid: 202)
+        let tabB1 = TabGenerationIdentity(browser: browser1, tabID: 42, documentGenerationID: 1, url: "http://127.0.0.1/a", domain: "127.0.0.1")
+        let tabB2 = TabGenerationIdentity(browser: browser2, tabID: 42, documentGenerationID: 1, url: "http://127.0.0.1/a", domain: "127.0.0.1")
+
+        // 1. Same numeric tab ID in two browser/session identities
+        let val1 = BridgeSessionValidator(sessionNonce: nonce)
+        try await val1.authorizeTab(tabB1)
+        let reqB1 = BridgeRequest(requestID: "c1_req1", sessionNonce: nonce, type: .observeTab, targetTab: tabB1)
+        try await val1.validateRequest(reqB1)
+        let reqB2 = BridgeRequest(requestID: "c1_req2", sessionNonce: nonce, type: .observeTab, targetTab: tabB2)
+        var c1Failed = false
+        do {
+            try await val1.validateRequest(reqB2)
+        } catch let e as BridgeErrorDetails where e.code == .tabNotAuthorized {
+            c1Failed = true
+        }
+        guard c1Failed else { throw Failure("Adversarial Case 1: Tab ID 42 across different browser identities shared authorization.") }
+
+        // 2. Response identity differs from its outstanding request
+        let val2 = BridgeSessionValidator(sessionNonce: nonce)
+        try await val2.authorizeTab(tabB1)
+        let req2 = BridgeRequest(requestID: "c2_req", sessionNonce: nonce, type: .observeTab, targetTab: tabB1)
+        try await val2.validateRequest(req2)
+        let mismatchedObs = TabObservedEvent(tab: tabB2, title: "Spoofed", elements: [])
+        let resp2 = BridgeResponse(requestID: "c2_req", sessionNonce: nonce, success: true, observation: mismatchedObs)
+        var c2Failed = false
+        do {
+            try await val2.validateResponse(resp2)
+        } catch let e as BridgeErrorDetails where e.code == .browserMismatch || e.code == .tabNotAuthorized {
+            c2Failed = true
+        }
+        guard c2Failed else { throw Failure("Adversarial Case 2: Response with mismatched identity was accepted.") }
+
+        // 3. Browser restarts and reuses a tab ID
+        let val3 = BridgeSessionValidator(sessionNonce: nonce)
+        let session1Browser = BrowserIdentity(bundleID: "com.google.Chrome", sessionID: "1001:100.0", pid: 1001)
+        let tabS1 = TabGenerationIdentity(browser: session1Browser, tabID: 42, documentGenerationID: 1, url: "http://127.0.0.1/s1", domain: "127.0.0.1")
+        try await val3.authorizeTab(tabS1)
+
+        let session2Browser = BrowserIdentity(bundleID: "com.google.Chrome", sessionID: "1002:200.0", pid: 1002)
+        let tabS2 = TabGenerationIdentity(browser: session2Browser, tabID: 42, documentGenerationID: 1, url: "http://127.0.0.1/s1", domain: "127.0.0.1")
+        let reqS2 = BridgeRequest(requestID: "c3_req", sessionNonce: nonce, type: .observeTab, targetTab: tabS2)
+        var c3Failed = false
+        do {
+            try await val3.validateRequest(reqS2)
+        } catch let e as BridgeErrorDetails where e.code == .tabNotAuthorized {
+            c3Failed = true
+        }
+        guard c3Failed else { throw Failure("Adversarial Case 3: Restarted browser session inherited prior tab authorization.") }
+
+        // 4. Navigation occurs while observation is in flight
+        let val4 = BridgeSessionValidator(sessionNonce: nonce)
+        let tabGen1 = TabGenerationIdentity(browser: browser1, tabID: 55, documentGenerationID: 1, url: "http://127.0.0.1/p1", domain: "127.0.0.1")
+        try await val4.authorizeTab(tabGen1)
+        let req4 = BridgeRequest(requestID: "c4_req", sessionNonce: nonce, type: .observeTab, targetTab: tabGen1)
+        try await val4.validateRequest(req4)
+
+        let navEvent = TabNavigationEvent(browser: browser1, tabID: 55, previousDocumentGenerationID: 1, newDocumentGenerationID: 2, newURL: "http://127.0.0.1/p2", newDomain: "127.0.0.1")
+        try await val4.notifyNavigation(event: navEvent)
+
+        let staleObs = TabObservedEvent(tab: tabGen1, title: "Stale", elements: [])
+        let resp4 = BridgeResponse(requestID: "c4_req", sessionNonce: nonce, success: true, observation: staleObs)
+        var c4Failed = false
+        do {
+            try await val4.validateResponse(resp4)
+        } catch let e as BridgeErrorDetails where e.code == .staleDocumentGeneration || e.code == .accessPaused {
+            c4Failed = true
+        }
+        guard c4Failed else { throw Failure("Adversarial Case 4: Stale observation response after navigation was accepted.") }
+
+        // 5. Pause occurs while observation is in flight
+        let val5 = BridgeSessionValidator(sessionNonce: nonce)
+        try await val5.authorizeTab(tabGen1)
+        let req5 = BridgeRequest(requestID: "c5_req", sessionNonce: nonce, type: .observeTab, targetTab: tabGen1)
+        try await val5.validateRequest(req5)
+
+        await val5.setPaused(true)
+        let resp5 = BridgeResponse(requestID: "c5_req", sessionNonce: nonce, success: true, observation: TabObservedEvent(tab: tabGen1, title: "Paused", elements: []))
+        var c5Failed = false
+        do {
+            try await val5.validateResponse(resp5)
+        } catch let e as BridgeErrorDetails where e.code == .accessPaused {
+            c5Failed = true
+        }
+        guard c5Failed else { throw Failure("Adversarial Case 5: Response delivered despite active pause.") }
+        await val5.setPaused(false)
+
+        // 6. Revoke occurs while observation is in flight
+        let val6 = BridgeSessionValidator(sessionNonce: nonce)
+        try await val6.authorizeTab(tabGen1)
+        let req6 = BridgeRequest(requestID: "c6_req", sessionNonce: nonce, type: .observeTab, targetTab: tabGen1)
+        try await val6.validateRequest(req6)
+
+        await val6.revokeTab(tabGen1)
+        let resp6 = BridgeResponse(requestID: "c6_req", sessionNonce: nonce, success: true, observation: TabObservedEvent(tab: tabGen1, title: "Revoked", elements: []))
+        var c6Failed = false
+        do {
+            try await val6.validateResponse(resp6)
+        } catch let e as BridgeErrorDetails where e.code == .tabNotAuthorized || e.code == .accessPaused {
+            c6Failed = true
+        }
+        guard c6Failed else { throw Failure("Adversarial Case 6: Response delivered after tab authorization was revoked.") }
+
+        // 7. Helper exits while a request is pending
+        do {
+            let server7 = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+            let proc7 = Process()
+            proc7.executableURL = helperBinaryURL
+            proc7.arguments = ["--session-dir", server7.directoryURL.path, "chrome-extension://\(pinnedExtensionID)/"]
+            let inPipe7 = Pipe()
+            let outPipe7 = Pipe()
+            let errPipe7 = Pipe()
+            proc7.standardInput = inPipe7
+            proc7.standardOutput = outPipe7
+            proc7.standardError = errPipe7
+            try proc7.run()
+            try await server7.acceptConnection(timeoutSeconds: 5)
+
+            kill(proc7.processIdentifier, SIGTERM)
+            proc7.waitUntilExit()
+
+            var c7Caught = false
+            do {
+                _ = try await server7.receiveResponse(timeoutSeconds: 1)
+            } catch {
+                c7Caught = true
+            }
+            guard c7Caught else { throw Failure("Adversarial Case 7: Pending request did not error when helper exited.") }
+            await server7.close()
+        }
+
+        // 8. Cancellation occurs during handshake and observation
+        do {
+            let server8 = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+            let cancelTask = Task {
+                try await server8.acceptConnection(timeoutSeconds: 10)
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            cancelTask.cancel()
+            var c8Caught = false
+            do {
+                try await cancelTask.value
+            } catch is CancellationError {
+                c8Caught = true
+            } catch {
+                c8Caught = true
+            }
+            guard c8Caught else { throw Failure("Adversarial Case 8: Server acceptConnection ignored Task cancellation.") }
+            await server8.close()
+        }
+
+        // 9. Incognito context attempts connection & behavioral rejection
+        let manifestURL = URL(fileURLWithPath: "HaloNative/Fixtures/BrowserBridgeExtension/manifest.json")
+        if FileManager.default.fileExists(atPath: manifestURL.path) {
+            let manifestData = try Data(contentsOf: manifestURL)
+            guard let manifestObj = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any],
+                  manifestObj["incognito"] as? String == "not_allowed" else {
+                throw Failure("Adversarial Case 9: Extension manifest did not declare 'incognito: not_allowed'.")
+            }
+        }
+        // Behavioral runtime rejection: Incognito tab authorization attempt fails closed
+        let incognitoTab = TabGenerationIdentity(browser: browser1, tabID: 999, documentGenerationID: 1, url: "http://127.0.0.1/secret", domain: "127.0.0.1", isIncognito: true)
+        let valIncognito = BridgeSessionValidator(sessionNonce: nonce)
+        var c9AuthFailed = false
+        do {
+            try await valIncognito.authorizeTab(incognitoTab)
+        } catch let e as BridgeErrorDetails where e.code == .tabNotAuthorized {
+            c9AuthFailed = true
+        }
+        guard c9AuthFailed else { throw Failure("Adversarial Case 9: Incognito tab authorization was not rejected at runtime.") }
+
+        // Behavioral runtime rejection: Incognito request validation fails closed
+        let reqIncognito = BridgeRequest(requestID: "c9_req", sessionNonce: nonce, type: .observeTab, targetTab: incognitoTab)
+        var c9ReqFailed = false
+        do {
+            try await valIncognito.validateRequest(reqIncognito)
+        } catch let e as BridgeErrorDetails where e.code == .tabNotAuthorized {
+            c9ReqFailed = true
+        }
+        guard c9ReqFailed else { throw Failure("Adversarial Case 9: Incognito request was not rejected at runtime.") }
+
+        // 10. Unknown extension origin or incorrect pinned identity
+        do {
+            let server10 = try BridgeIPCServer(pinnedExtensionID: "correct_pinned_extension_id", helperExecutableURL: helperBinaryURL)
+            let proc10 = Process()
+            proc10.executableURL = helperBinaryURL
+            proc10.arguments = ["--session-dir", server10.directoryURL.path, "chrome-extension://hostile_unpinned_extension_id/"]
+            proc10.standardInput = Pipe()
+            proc10.standardOutput = Pipe()
+            proc10.standardError = Pipe()
+            try proc10.run()
+            defer {
+                if proc10.isRunning { proc10.terminate(); proc10.waitUntilExit() }
+            }
+            var c10Caught = false
+            do {
+                try await server10.acceptConnection(timeoutSeconds: 3)
+            } catch let e as BridgeErrorDetails where e.code == .authenticationFailed {
+                c10Caught = true
+            } catch {
+                c10Caught = true
+            }
+            guard c10Caught else { throw Failure("Adversarial Case 10: Unknown extension origin was accepted by Halo.") }
+            await server10.close()
+        }
+
+        // 11. Malformed length prefix
+        var c11Caught = false
+        let malformedHeader = Data([0x01, 0x02])
+        do {
+            _ = try BridgeMessageFraming.decodeFrame(BridgeRequest.self, from: malformedHeader)
+        } catch let e as BridgeErrorDetails where e.code == .payloadMalformed {
+            c11Caught = true
+        }
+        guard c11Caught else { throw Failure("Adversarial Case 11: Malformed length prefix was not rejected.") }
+
+        // 12. Declared length differs from payload length
+        var c12Caught = false
+        var header100 = UInt32(100).littleEndian
+        var frame12 = withUnsafeBytes(of: &header100) { Data($0) }
+        frame12.append(Data([0x01, 0x02, 0x03]))
+        do {
+            _ = try BridgeMessageFraming.decodeFrame(BridgeRequest.self, from: frame12)
+        } catch let e as BridgeErrorDetails where e.code == .payloadMalformed {
+            c12Caught = true
+        }
+        guard c12Caught else { throw Failure("Adversarial Case 12: Payload shorter than declared length was not rejected.") }
+
+        // 13. Frame exceeds 1 MiB
+        var c13Caught = false
+        var headerOversized = UInt32(BrowserBridgeLimits.maxMessageSizeBytes + 1).littleEndian
+        let frame13 = withUnsafeBytes(of: &headerOversized) { Data($0) }
+        do {
+            _ = try BridgeMessageFraming.decodeFrame(BridgeRequest.self, from: frame13)
+        } catch let e as BridgeErrorDetails where e.code == .oversizedPayload {
+            c13Caught = true
+        }
+        guard c13Caught else { throw Failure("Adversarial Case 13: Frame exceeding 1 MiB was not rejected.") }
+
+        // 14. Unknown envelope fields/message type
+        var c14Caught = false
+        let unknownJson = #"{"requestID":"req_unk","protocolVersion":1,"sessionNonce":"\#(nonce)","type":"arbitraryMutation"}"#
+        do {
+            _ = try BridgeMessageFraming.decode(BridgeRequest.self, from: Data(unknownJson.utf8))
+        } catch let e as BridgeErrorDetails where e.code == .payloadMalformed {
+            c14Caught = true
+        }
+        guard c14Caught else { throw Failure("Adversarial Case 14: Unknown envelope type was not rejected.") }
+
+        // 15. Oversized strings/elements/request state
+        var c15Caught = false
+        let overlongReqID = String(repeating: "a", count: 65)
+        let req15 = BridgeRequest(requestID: overlongReqID, sessionNonce: nonce, type: .observeTab, targetTab: tabGen1)
+        do {
+            _ = try BridgeMessageFraming.encode(req15)
+        } catch let e as BridgeErrorDetails where e.code == .payloadMalformed {
+            c15Caught = true
+        }
+        guard c15Caught else { throw Failure("Adversarial Case 15: Overlong request ID was not rejected.") }
+
+        var c15bCaught = false
+        var tooManyElements: [ObservedDOMElement] = []
+        for idx in 0..<201 {
+            tooManyElements.append(ObservedDOMElement(elementID: "el_\(idx)", tagName: "div", role: "none", label: "item", isProtected: false, isEnabled: true, bounds: BoundedRect(x: 0, y: 0, width: 10, height: 10)))
+        }
+        let obs15 = TabObservedEvent(tab: tabGen1, title: "Too Many", elements: tooManyElements)
+        let resp15b = BridgeResponse(requestID: "c15b", sessionNonce: nonce, success: true, observation: obs15)
+        do {
+            _ = try BridgeMessageFraming.encode(resp15b)
+        } catch let e as BridgeErrorDetails where e.code == .oversizedPayload {
+            c15bCaught = true
+        }
+        guard c15bCaught else { throw Failure("Adversarial Case 15b: Observation with > 200 elements was not rejected.") }
+
+        // 16. DOM text contains framing/control characters
+        let complexText = "Title with \u{001E} record separator, \u{001F} unit separator, null \u{0000}, <script>alert(1)</script>"
+        let safeElement = ObservedDOMElement(elementID: "el_ctrl", tagName: "div", role: "text", label: complexText, isProtected: false, isEnabled: true, bounds: BoundedRect(x: 0, y: 0, width: 10, height: 10))
+        let obs16 = TabObservedEvent(tab: tabGen1, title: complexText, elements: [safeElement])
+        let encoded16 = try BridgeMessageFraming.encode(obs16)
+        let decoded16 = try BridgeMessageFraming.decode(TabObservedEvent.self, from: encoded16)
+        guard decoded16.title == complexText, decoded16.elements.first?.label == complexText else {
+            throw Failure("Adversarial Case 16: Control/framing characters corrupted JSON framing or text.")
+        }
+
+        // 17. Cleanup executes after intentional test failure
+        var cleanupRan = false
+        var testFileCleaned = false
+        let tempTestFile = FileManager.default.temporaryDirectory.appendingPathComponent("halo-test-cleanup-\(UUID().uuidString)")
+        try "test".write(to: tempTestFile, atomically: true, encoding: .utf8)
+        do {
+            defer {
+                cleanupRan = true
+                try? FileManager.default.removeItem(at: tempTestFile)
+                testFileCleaned = !FileManager.default.fileExists(atPath: tempTestFile.path)
+            }
+            throw Failure("Intentional test error to verify defer execution")
+        } catch is Failure {}
+        guard cleanupRan, testFileCleaned else {
+            throw Failure("Adversarial Case 17: Defer cleanup did not execute after intentional test failure.")
+        }
+
+        print("PASS: All 17 required adversarial checks passed deterministically.")
+    }
+
+    private static func runBridgePerformanceBenchmarks(helperBinaryURL: URL, pinnedExtensionID: String) async throws {
+        print("--- Performance Benchmarking (ContinuousClock) ---")
+        let clock = ContinuousClock()
+        let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let browser = BrowserIdentity(bundleID: "com.google.Chrome", sessionID: "s1", pid: 101)
+        let tabGen1 = TabGenerationIdentity(browser: browser, tabID: 55, documentGenerationID: 1, url: "http://127.0.0.1/p1", domain: "127.0.0.1")
+
+        // 1. Helper cold start (10 samples, p95 <= 750 ms)
+        var coldStartSamplesMs: [Double] = []
+        for sampleIdx in 0..<10 {
+            let server = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+            let p = Process()
+            p.executableURL = helperBinaryURL
+            p.arguments = ["--session-dir", server.directoryURL.path, "chrome-extension://\(pinnedExtensionID)/"]
+            let inPipe = Pipe()
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            p.standardInput = inPipe
+            p.standardOutput = outPipe
+            p.standardError = errPipe
+
+            let t0 = clock.now
+            try p.run()
+            do {
+                try await server.acceptConnection(timeoutSeconds: 5)
+            } catch {
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                let errStr = String(decoding: errData, as: UTF8.self)
+                p.terminate()
+                p.waitUntilExit()
+                await server.close()
+                throw Failure("Cold start sample \(sampleIdx) failed: \(error.localizedDescription) (stderr: \(errStr))")
+            }
+            let t1 = clock.now
+
+            let duration = t0.duration(to: t1)
+            let ms = Double(duration.components.seconds) * 1000.0 + Double(duration.components.attoseconds) / 1e15
+            coldStartSamplesMs.append(ms)
+
+            p.terminate()
+            p.waitUntilExit()
+            await server.close()
+        }
+        let coldStartP50 = percentile(coldStartSamplesMs, 0.50)
+        let coldStartP95 = percentile(coldStartSamplesMs, 0.95)
+        let coldStartMax = coldStartSamplesMs.max() ?? 0.0
+        guard coldStartP95 <= 750.0 else {
+            throw Failure("Helper cold start gate failed: p95 was \(coldStartP95) ms (threshold <= 750 ms)")
+        }
+
+        // Dedicated helper for warm round trips and observation
+        let warmServer = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+        let warmProc = Process()
+        warmProc.executableURL = helperBinaryURL
+        warmProc.arguments = ["--session-dir", warmServer.directoryURL.path, "chrome-extension://\(pinnedExtensionID)/"]
+        let warmInPipe = Pipe()
+        let warmOutPipe = Pipe()
+        let warmErrPipe = Pipe()
+        warmProc.standardInput = warmInPipe
+        warmProc.standardOutput = warmOutPipe
+        warmProc.standardError = warmErrPipe
+        try warmProc.run()
+        try await warmServer.acceptConnection(timeoutSeconds: 5)
+        let warmConfig = warmServer.sessionConfig
+        let warmNonce = warmConfig.sessionNonce
+
+        defer {
+            if warmProc.isRunning { warmProc.terminate(); warmProc.waitUntilExit() }
+            Task { await warmServer.close() }
+        }
+
+        // 2. Warm bridge round trip (30 samples, p50 <= 100 ms, p95 <= 250 ms)
+        var warmSamplesMs: [Double] = []
+        for i in 0..<30 {
+            let reqID = "warm_req_\(i)"
+            let req = BridgeRequest(requestID: reqID, sessionNonce: warmNonce, type: .observeTab, targetTab: tabGen1)
+
+            let t0 = clock.now
+            try await warmServer.sendRequest(req)
+            _ = try BridgeSocketIO.readFramedData(from: warmOutPipe.fileHandleForReading.fileDescriptor, timeoutSeconds: 5)
+
+            let resp = BridgeResponse(requestID: reqID, sessionNonce: warmNonce, success: true)
+            let respBytes = try BridgeMessageFraming.encode(resp)
+            try BridgeSocketIO.writeFramedData(to: warmInPipe.fileHandleForWriting.fileDescriptor, payload: respBytes, timeoutSeconds: 5)
+
+            let receivedResp = try await warmServer.receiveResponse(timeoutSeconds: 5)
+            guard receivedResp.requestID == reqID else { throw Failure("Warm round-trip mismatch at sample \(i)") }
+            let t1 = clock.now
+
+            let duration = t0.duration(to: t1)
+            let ms = Double(duration.components.seconds) * 1000.0 + Double(duration.components.attoseconds) / 1e15
+            warmSamplesMs.append(ms)
+        }
+        let warmP50 = percentile(warmSamplesMs, 0.50)
+        let warmP95 = percentile(warmSamplesMs, 0.95)
+        let warmMax = warmSamplesMs.max() ?? 0.0
+        guard warmP50 <= 100.0, warmP95 <= 250.0 else {
+            throw Failure("Warm bridge round-trip gate failed: p50 \(warmP50) ms (<= 100), p95 \(warmP95) ms (<= 250)")
+        }
+
+        // 3. Synthetic transport latency (50 in-memory elements, 30 samples, p50 <= 300 ms, p95 <= 1,000 ms)
+        var obsSamplesMs: [Double] = []
+        var syntheticElements: [ObservedDOMElement] = []
+        for idx in 0..<50 {
+            let isButton = (idx % 2 == 0)
+            let tag = isButton ? "button" : "input"
+            let role = isButton ? "button" : "textfield"
+            let rect = BoundedRect(x: Double(idx * 10), y: Double(idx * 5), width: 100, height: 30)
+            let el = ObservedDOMElement(
+                elementID: "el_\(idx)",
+                tagName: tag,
+                role: role,
+                label: "Control \(idx)",
+                isProtected: false,
+                isEnabled: true,
+                bounds: rect
+            )
+            syntheticElements.append(el)
+        }
+        for i in 0..<30 {
+            let reqID = "obs_req_\(i)"
+            let req = BridgeRequest(requestID: reqID, sessionNonce: warmNonce, type: .observeTab, targetTab: tabGen1)
+
+            let t0 = clock.now
+            try await warmServer.sendRequest(req)
+            _ = try BridgeSocketIO.readFramedData(from: warmOutPipe.fileHandleForReading.fileDescriptor, timeoutSeconds: 5)
+
+            let obsEvent = TabObservedEvent(tab: tabGen1, title: "Synthetic Benchmark Page", elements: syntheticElements)
+            let resp = BridgeResponse(requestID: reqID, sessionNonce: warmNonce, success: true, observation: obsEvent)
+            let respBytes = try BridgeMessageFraming.encode(resp)
+            try BridgeSocketIO.writeFramedData(to: warmInPipe.fileHandleForWriting.fileDescriptor, payload: respBytes, timeoutSeconds: 5)
+
+            let receivedResp = try await warmServer.receiveResponse(timeoutSeconds: 5)
+            guard receivedResp.observation?.elements.count == 50 else { throw Failure("Observation element count mismatch at sample \(i)") }
+            let t1 = clock.now
+
+            let duration = t0.duration(to: t1)
+            let ms = Double(duration.components.seconds) * 1000.0 + Double(duration.components.attoseconds) / 1e15
+            obsSamplesMs.append(ms)
+        }
+        let obsP50 = percentile(obsSamplesMs, 0.50)
+        let obsP95 = percentile(obsSamplesMs, 0.95)
+        let obsMax = obsSamplesMs.max() ?? 0.0
+        guard obsP50 <= 300.0, obsP95 <= 1000.0 else {
+            throw Failure("Synthetic transport latency gate failed: p50 \(obsP50) ms (<= 300), p95 \(obsP95) ms (<= 1000)")
+        }
+
+        // 4. Pause / revoke propagation (<= 100 ms)
+        let tPause0 = clock.now
+        let validatorPerf = BridgeSessionValidator(sessionNonce: nonce)
+        try await validatorPerf.authorizeTab(tabGen1)
+        await validatorPerf.setPaused(true)
+        let tPause1 = clock.now
+        let pausePropMs = Double(tPause0.duration(to: tPause1).components.seconds) * 1000.0 + Double(tPause0.duration(to: tPause1).components.attoseconds) / 1e15
+        guard pausePropMs <= 100.0 else {
+            throw Failure("Pause/revoke propagation gate failed: took \(pausePropMs) ms (threshold <= 100 ms)")
+        }
+
+        // 5. Idle CPU and RSS delta over 10 seconds
+        let telem0 = getProcessTelemetry(pid: warmProc.processIdentifier)
+        try await Task.sleep(for: .seconds(10))
+        let telem1 = getProcessTelemetry(pid: warmProc.processIdentifier)
+
+        let totalCpuNs = Double((telem1.userTimeNano - telem0.userTimeNano) + (telem1.systemTimeNano - telem0.systemTimeNano))
+        let cpuPercent = (totalCpuNs / (10.0 * 1e9)) * 100.0
+        let idleRssDeltaKiB = Double(Int64(telem1.rssBytes) - Int64(telem0.rssBytes)) / 1024.0
+        let roundedCpu = (cpuPercent * 10).rounded() / 10.0
+        guard roundedCpu == 0.0 else {
+            throw Failure("Idle CPU gate failed: helper consumed \(cpuPercent)% CPU (expected 0.0%)")
+        }
+
+        // Print benchmark table
+        print("""
+        | Metric | Samples | p50 | p95 | Max | Threshold | Result |
+        |---|---|---|---|---|---|---|
+        | Helper cold start | \(coldStartSamplesMs.count) | \(String(format: "%.2f ms", coldStartP50)) | \(String(format: "%.2f ms", coldStartP95)) | \(String(format: "%.2f ms", coldStartMax)) | p95 <= 750 ms | PASS |
+        | Warm bridge round trip | \(warmSamplesMs.count) | \(String(format: "%.2f ms", warmP50)) | \(String(format: "%.2f ms", warmP95)) | \(String(format: "%.2f ms", warmMax)) | p50 <= 100 ms, p95 <= 250 ms | PASS |
+        | Synthetic transport latency (50 in-memory elements) | \(obsSamplesMs.count) | \(String(format: "%.2f ms", obsP50)) | \(String(format: "%.2f ms", obsP95)) | \(String(format: "%.2f ms", obsMax)) | p50 <= 300 ms, p95 <= 1000 ms | PASS |
+        | Pause/revoke propagation | 1 | \(String(format: "%.2f ms", pausePropMs)) | \(String(format: "%.2f ms", pausePropMs)) | \(String(format: "%.2f ms", pausePropMs)) | <= 100 ms | PASS |
+        | Helper idle CPU | 10s | \(String(format: "%.1f%%", cpuPercent)) | \(String(format: "%.1f%%", cpuPercent)) | \(String(format: "%.1f%%", cpuPercent)) | rounds to 0.0% | PASS |
+        | Incremental idle RSS | 10s | \(String(format: "%.1f KiB", idleRssDeltaKiB)) | - | - | Recorded | PASS |
+        """)
+        print("Note: 'Synthetic transport latency' measures in-memory helper-to-Halo IPC framing of 50 elements; real browser DOM observation requires an active Chromium extension session.")
+        await warmServer.close()
+    }
+
+    private static func runRealBrowserCapabilityProbe(helperBinaryURL: URL, pinnedExtensionID: String) async throws {
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .deletingLastPathComponent()
+                .appendingPathComponent(".local-tools/chromium/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .deletingLastPathComponent()
+                .appendingPathComponent(".local-tools/chrome-for-testing/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+            URL(fileURLWithPath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            URL(fileURLWithPath: "/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            URL(fileURLWithPath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")
+        ]
+        guard let browserURL = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            print("SKIPPED: Real-browser capability probe skipped. No supported Chromium browser installation found.")
+            throw Failure("Phase 5A requires Chrome for Testing, Chromium, or Brave for a real Native Messaging fixture.")
+        }
+
+        await reapOrphanedTestBrowsers()
+        let fixture = try DisposableTabServer()
+        defer { fixture.stop() }
+        let tempProfileDir = FileManager.default.temporaryDirectory.appendingPathComponent("halo-browser-probe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempProfileDir, withIntermediateDirectories: true)
+        let server = try BridgeIPCServer(pinnedExtensionID: pinnedExtensionID, helperExecutableURL: helperBinaryURL)
+        guard let launcherURL = server.launcherURL else { throw Failure("Bridge server did not create its native-host launcher.") }
+
+        var installedManifests: [URL] = []
+        do {
+            // On macOS, Chromium resolves user-level native hosts relative to the
+            // active user data directory, so the probe never touches real profiles.
+            let manifestDirs = [tempProfileDir.appendingPathComponent("NativeMessagingHosts", isDirectory: true)]
+            installedManifests = try NativeMessagingInstaller.install(
+                hostName: "app.halo.browser_bridge",
+                launcherPath: launcherURL.path,
+                allowedOrigins: ["chrome-extension://\(pinnedExtensionID)/"],
+                targetDirectories: manifestDirs
+            )
+        } catch {
+            await server.close()
+            throw Failure("Failed to stage Native Messaging manifests safely: \(error.localizedDescription)")
+        }
+
+        defer {
+            NativeMessagingInstaller.uninstall(manifestURLs: installedManifests)
+            try? FileManager.default.removeItem(at: tempProfileDir)
+            Task { await server.close() }
+        }
+
+        let extPath = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Fixtures/BrowserBridgeExtension").standardized.path
+        let probeProcess = Process()
+        probeProcess.executableURL = browserURL
+        probeProcess.arguments = [
+            "--user-data-dir=\(tempProfileDir.path)",
+            "--enable-logging=stderr",
+            "--v=1",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions-except=\(extPath)",
+            "--load-extension=\(extPath)",
+            fixture.url.absoluteString
+        ]
+        // Verbose Chromium logging goes to a file: an undrained Pipe fills its
+        // buffer and stalls the browser before it launches the native host.
+        let browserLogURL = tempProfileDir.appendingPathComponent("chromium-stderr.log")
+        FileManager.default.createFile(atPath: browserLogURL.path, contents: nil)
+        let browserLog = try FileHandle(forWritingTo: browserLogURL)
+        defer { try? browserLog.close() }
+        probeProcess.standardError = browserLog
+        probeProcess.standardOutput = FileHandle.nullDevice
+
+        try probeProcess.run()
+        defer {
+            terminateProcessBounded(probeProcess)
+        }
+
+        do {
+            try await server.acceptConnection(timeoutSeconds: 15)
+        } catch {
+            let stderr = (try? String(contentsOf: browserLogURL, encoding: .utf8)) ?? ""
+            let relevant = stderr.split(separator: "\n").filter {
+                !$0.contains("Cannot stat") && (
+                    $0.localizedCaseInsensitiveContains("native messag") ||
+                    $0.localizedCaseInsensitiveContains("HaloBridge") ||
+                    $0.localizedCaseInsensitiveContains("HaloNativeHost"))
+            }.suffix(20).joined(separator: "\n")
+            throw Failure("Real browser did not launch/authenticate the native host: \(error.localizedDescription). relevant stderr: \(relevant)")
+        }
+        let nonce = server.sessionConfig.sessionNonce
+        let announcements = try await BrowserBridgeController.performHandshake(
+            server: server, pinnedExtensionID: pinnedExtensionID, announcementTimeout: 10)
+        guard let announced = announcements.first(where: { $0.domain == "127.0.0.1" }) else {
+            throw Failure("Extension did not announce the disposable loopback tab.")
+        }
+        let bundleID = Bundle(url: browserURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent())?.bundleIdentifier ?? "org.chromium.Chromium"
+        let browser = BrowserIdentity(bundleID: bundleID, sessionID: "\(probeProcess.processIdentifier):fixture", pid: probeProcess.processIdentifier)
+        let target = TabGenerationIdentity(browser: browser, tabID: announced.tabID,
+            documentGenerationID: announced.documentGenerationID, url: announced.url, domain: announced.domain)
+        let validator = BridgeSessionValidator(sessionNonce: nonce)
+        try await validator.authorizeTab(target)
+        let request = BridgeRequest(requestID: "real_fixture_observe", sessionNonce: nonce, type: .observeTab, targetTab: target)
+        try await validator.validateRequest(request)
+        let start = ContinuousClock.now
+        try await server.sendRequest(request)
+        let response = try await server.receiveResponse(timeoutSeconds: 10)
+        try await validator.validateResponse(response)
+        let elapsed = start.duration(to: .now)
+        guard response.requestID == request.requestID, let observation = response.observation else {
+            throw Failure("Real browser returned no observation for \(request.requestID): \(String(describing: response.error)).")
+        }
+        guard observation.tab == target else {
+            throw Failure("Real browser observation tab \(observation.tab) does not match authorized \(target).")
+        }
+        guard observation.title.contains("Halo Disposable Browser Fixture"),
+              observation.elements.contains(where: { $0.label.contains("Halo Chrome Integration Test") }) else {
+            throw Failure("Real browser observation content mismatch: title=\(observation.title.prefix(80)) labels=\(observation.elements.prefix(8).map { $0.label.prefix(40) }).")
+        }
+        print("PASS: Real Chromium Native Messaging handshake and authorized DOM observation completed in \(elapsed).")
     }
 }

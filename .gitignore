@@ -47,3 +47,6 @@ native/speech/mercy-speech
 HaloNative/.build/
 HaloNative/build/
 HaloNative/.native/
+
+# Downloaded test browsers
+.local-tools/

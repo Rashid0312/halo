@@ -30,6 +30,9 @@ cp Resources/* "$APP/Contents/Resources/"
 cp -R ../models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 "$APP/Contents/Resources/models/"
 cp ../models/silero_vad.onnx "$APP/Contents/Resources/models/"
 cp .build/release/Halo "$APP/Contents/MacOS/Halo"
+if [ -f .build/release/HaloNativeHost ]; then
+    cp .build/release/HaloNativeHost "$APP/Contents/MacOS/HaloNativeHost"
+fi
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,6 +54,9 @@ PLIST
 xattr -cr "$APP"
 codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP/Contents/Frameworks/libonnxruntime.dylib"
 codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP/Contents/Frameworks/libsherpa-onnx-c-api.dylib"
+if [ -f "$APP/Contents/MacOS/HaloNativeHost" ]; then
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP/Contents/MacOS/HaloNativeHost"
+fi
 xattr -cr "$APP"
 codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP"
 codesign --verify --deep --strict "$APP"
