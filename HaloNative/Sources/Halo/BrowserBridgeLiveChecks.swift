@@ -539,7 +539,7 @@ extension NativeChecks {
         }
         func elements() async throws -> [String: [String: Any]] {
             let read = try await run("read_browser_tab", ["tab_id": tabC])
-            guard read["ok"] as? Bool == true, let list = read["elements"] as? [[String: Any]] else {
+            guard read["ok"] as? Bool == true, let page = read["page"] as? String, case let list = parsePage(page), !list.isEmpty else {
                 throw Failure("read_browser_tab returned no element references: \(read)")
             }
             var byLabel: [String: [String: Any]] = [:]
@@ -1013,7 +1013,7 @@ extension NativeChecks {
 
         try await openFixture("/crowded", title: "Halo Crowded Fixture")
         let crowdedRead = try await run("read_browser_tab", ["tab_id": tabC])
-        let crowdedElements = crowdedRead["elements"] as? [[String: Any]] ?? []
+        let crowdedElements = parsePage(crowdedRead["page"] as? String ?? "")
         let crowdedLabels = crowdedElements.compactMap { $0["label"] as? String }
         guard crowdedElements.count <= 200, crowdedLabels.contains("Target action"),
               crowdedElements.first(where: { $0["label"] as? String == "Target action" })?["clickable"] as? Bool == true,
@@ -1388,5 +1388,34 @@ extension NativeChecks {
             throw Failure("Bridge coverage list does not match the extension manifest's host_permissions.")
         }
         print("PASS: Browser selection and bridge coverage: one browser or the most recently used one is chosen, ambiguous or duplicate browsers are refused, and the bridge covers exactly the extension's host permissions (all http and https sites).")
+    }
+}
+
+extension NativeChecks {
+    /// Parses read_browser_tab's compact `id · role · label · actions` lines
+    /// back into fields for checks.
+    static func parsePage(_ page: String) -> [[String: Any]] {
+        page.split(separator: "\n").compactMap { line in
+            let parts = line.components(separatedBy: " · ")
+            guard parts.count >= 4 else { return nil }
+            let action = parts[parts.count - 1]
+            var element: [String: Any] = ["id": parts[0], "role": parts[1],
+                                          "label": parts[2..<(parts.count - 1)].joined(separator: " · "),
+                                          "clickable": false, "typable": false]
+            switch action {
+            case "click": element["clickable"] = true
+            case "submit": element["clickable"] = true; element["click_kind"] = "submit"
+            case "follow": element["clickable"] = true; element["click_kind"] = "link"
+            case "type": element["typable"] = true
+            case "scroll": element["scrollable"] = true
+            case let a where a.hasPrefix("choose: "):
+                element["selectable"] = true
+                element["options"] = a.dropFirst("choose: ".count).components(separatedBy: ", ")
+            case let a where a.hasPrefix("blocked: "):
+                element["blocked"] = String(a.dropFirst("blocked: ".count))
+            default: break
+            }
+            return element
+        }
     }
 }

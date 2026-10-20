@@ -213,7 +213,8 @@ async function handleHostMessage(msg) {
           isIncognito: false
         },
         title: (tab.title || "").substring(0, 32768),
-        elements: domResponse.elements.slice(0, 200)
+        elements: domResponse.elements.slice(0, 200),
+        text: typeof domResponse.text === "string" ? domResponse.text.substring(0, 8000) : undefined
       };
 
       nativePort.postMessage({
@@ -298,9 +299,10 @@ async function handleClick(msg, requestID, sessionNonce) {
   const debuggee = { tabId: tabID };
   let attached = false;
   try {
+    await detachStale(tabID);
     await chrome.debugger.attach(debuggee, "1.3");
     attached = true;
-    const prep = await chrome.tabs.sendMessage(tabID, {
+    const prep = await pageMessage(tabID, {
       action: "prepareClick", elementID: msg.elementID, expected: msg.expectedElement
     });
     if (!prep || prep.error) {
@@ -308,7 +310,7 @@ async function handleClick(msg, requestID, sessionNonce) {
       return;
     }
     if (!(await unchanged())) {
-      await chrome.tabs.sendMessage(tabID, { action: "cancelClick" }).catch(() => {});
+      await pageMessage(tabID, { action: "cancelClick" }).catch(() => {});
       sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before the click");
       return;
     }
@@ -321,7 +323,7 @@ async function handleClick(msg, requestID, sessionNonce) {
 
     let outcome = null;
     try {
-      outcome = await chrome.tabs.sendMessage(tabID, { action: "clickOutcome" });
+      outcome = await pageMessage(tabID, { action: "clickOutcome" });
     } catch (_) {
       outcome = null; // The click replaced the document before it could answer.
     }
@@ -391,22 +393,23 @@ async function handleType(msg, requestID, sessionNonce) {
   const debuggee = { tabId: tabID };
   let attached = false;
   try {
+    await detachStale(tabID);
     await chrome.debugger.attach(debuggee, "1.3");
     attached = true;
-    const prep = await chrome.tabs.sendMessage(tabID, {
+    const prep = await pageMessage(tabID, {
       action: "prepareType", elementID: msg.elementID, expected: msg.expectedElement
     });
     if (!prep || prep.error) {
       sendError(requestID, sessionNonce, (prep && prep.error) || "elementChanged", (prep && prep.message) || "The field could not be prepared");
       return;
     }
-    const focus = await chrome.tabs.sendMessage(tabID, { action: "typeFocusHeld" });
+    const focus = await pageMessage(tabID, { action: "typeFocusHeld" });
     if (!(await unchanged()) || !focus || !focus.held) {
       sendError(requestID, sessionNonce, "elementChanged", "The page or field focus changed before typing");
       return;
     }
     await chrome.debugger.sendCommand(debuggee, "Input.insertText", { text: text });
-    const outcome = await chrome.tabs.sendMessage(tabID, { action: "typeOutcome", text: text }).catch(() => null);
+    const outcome = await pageMessage(tabID, { action: "typeOutcome", text: text }).catch(() => null);
     nativePort.postMessage({
       requestID: requestID,
       protocolVersion: 1,
@@ -482,7 +485,7 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
       return;
     }
     try {
-      const result = await chrome.tabs.sendMessage(tabID, {
+      const result = await pageMessage(tabID, {
         action: "applySelect", elementID: msg.elementID, expected: msg.expectedElement, option: msg.option
       });
       if (!result || result.error) {
@@ -506,9 +509,10 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
   const debuggee = { tabId: tabID };
   let attached = false;
   try {
+    await detachStale(tabID);
     await chrome.debugger.attach(debuggee, "1.3");
     attached = true;
-    const prep = await chrome.tabs.sendMessage(tabID, {
+    const prep = await pageMessage(tabID, {
       action: "prepareScroll", elementID: msg.elementID || null, expected: msg.expectedElement || null
     });
     if (!prep || prep.error) {
@@ -525,13 +529,33 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
     await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
       type: "mouseWheel", x: prep.x, y: prep.y, deltaX: deltaX, deltaY: deltaY
     });
-    const outcome = await chrome.tabs.sendMessage(tabID, { action: "scrollOutcome" }).catch(() => null);
+    const outcome = await pageMessage(tabID, { action: "scrollOutcome" }).catch(() => null);
     respond(Boolean(outcome && outcome.moved));
   } catch (err) {
     sendError(requestID, sessionNonce, "internalError", "Scroll failed: " + String(err && err.message));
   } finally {
     if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
   }
+}
+
+// A page that stops answering must never leave an action hanging: every
+// message to the page has a deadline, below Halo's own 10 s limit.
+function pageMessage(tabID, message, ms = 5000) {
+  return Promise.race([
+    chrome.tabs.sendMessage(tabID, message),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("The page didn't respond in time; nothing was done")), ms))
+  ]);
+}
+
+// Clears a debugger attachment this extension left on the tab (for example
+// after an interrupted action), so the next action can attach.
+async function detachStale(tabID) {
+  try {
+    const targets = await chrome.debugger.getTargets();
+    if (targets.some((t) => t.tabId === tabID && t.attached && t.extensionId === chrome.runtime.id)) {
+      await chrome.debugger.detach({ tabId: tabID }).catch(() => {});
+    }
+  } catch (_) {}
 }
 
 function sendError(requestID, sessionNonce, code, message) {

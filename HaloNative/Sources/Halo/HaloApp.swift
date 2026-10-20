@@ -344,6 +344,41 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if CommandLine.arguments.contains("--time-provider") {
+            Task {
+                // Latency of the configured DeepSeek key, with and without Halo's
+                // tool list. Prints timings and sizes only; key and replies hidden.
+                let definitions = (try? await macTools.definitions()) ?? Data("[]".utf8)
+                print("Tool definitions: \(definitions.count) bytes; system prompt: \(DeepSeekProvider.assistantInstructions.utf8.count) bytes")
+                for (label, withTools) in [("no tools", false), ("Halo's full tool list", true)] {
+                    for run in 1...3 {
+                        var request = URLRequest(url: URL(string: "https://api.deepseek.com/chat/completions")!)
+                        request.httpMethod = "POST"
+                        request.timeoutInterval = 90
+                        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                        var body: [String: Any] = ["model": "deepseek-flash", "stream": true, "max_tokens": 50, "thinking": ["type": "disabled"],
+                                                   "messages": [["role": "system", "content": DeepSeekProvider.assistantInstructions],
+                                                                ["role": "user", "content": "Reply with OK."]]]
+                        if withTools, let rows = try? JSONSerialization.jsonObject(with: definitions) as? [[String: Any]] { body["tools"] = rows }
+                        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+                        let start = ContinuousClock.now
+                        var firstByte: Duration?
+                        do {
+                            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                            for try await line in bytes.lines where line.hasPrefix("data:") { if firstByte == nil { firstByte = start.duration(to: .now) } }
+                            let total = start.duration(to: .now)
+                            print("\(label) run \(run): HTTP \(status), first data \(firstByte.map { "\($0)" } ?? "none"), total \(total)")
+                        } catch {
+                            print("\(label) run \(run): failed after \(start.duration(to: .now)): \(error.localizedDescription)")
+                        }
+                    }
+                }
+                exit(0)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--check-provider") {
             Task {
                 do {
@@ -372,6 +407,20 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         BrowserActivityTracker.shared.start()
         browserBridge.resumeIfEnabled()
+        // Test-only: accept prompts posted by a local tester, through the same
+        // path as typing in the panel. Off unless launched with this flag.
+        if CommandLine.arguments.contains("--accept-test-prompts") {
+            TimingLog.shared.startMainThreadMonitor()
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name("app.halo.native.dev.testPrompt"),
+                                                                object: nil, queue: .main) { [weak self] note in
+                guard let prompt = note.object as? String, !prompt.isEmpty else { return }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.showPanel(focusComposer: false)
+                    self.conversation.send(prompt)
+                }
+            }
+        }
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "circle.hexagongrid.fill", accessibilityDescription: "Halo")
         item.button?.toolTip = "Mercy — open Halo"
@@ -687,8 +736,8 @@ struct HaloSettings: View {
                     .settingsNote()
             }
             settingsCard("Visuals", icon: "paintpalette") {
-                LabeledContent("Fluid gradient", value: "Metal · 60 FPS")
-                Text("The atmospheric background automatically becomes still when Reduce Motion is enabled in macOS.")
+                LabeledContent("Fluid gradient", value: "Still")
+                Text("The background is a still gradient. Animating it blocked Halo while it worked, so Mercy keeps it still.")
                     .settingsNote()
             }
         case .voice:
@@ -713,7 +762,9 @@ struct HaloSettings: View {
             }
         case .privacy:
             settingsCard("Action authorization", icon: "bolt.shield") {
-                Text("Halo shows the exact command, script, file contents, screenshot, or interface action before carrying out a sensitive step. macOS permission prompts can still appear separately.")
+                Toggle("Don't ask before browser actions", isOn: $macTools.autoApproveBrowser)
+                Toggle("Don't ask before controlling Mac apps", isOn: $macTools.autoApproveMacUI)
+                Text("When on, what you ask Mercy to do in Chrome or in Mac apps happens without a confirmation; each step still appears in the activity list, and Stop ends it. Shell commands, AppleScript, file changes, and screenshots always ask. Sign-in, payments, account changes, sending messages, uploads, and downloads are never done in the browser.")
                     .settingsNote()
             }
             settingsCard("Browser bridge", icon: "globe") {

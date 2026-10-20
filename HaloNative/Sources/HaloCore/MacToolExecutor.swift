@@ -3,6 +3,12 @@ import Foundation
 public protocol MacToolExecutor: Sendable {
     func definitions() async throws -> Data
     func execute(name: String, arguments: String) async throws -> String
+    /// Shows a provider status line (e.g. a retry) in the activity list.
+    func reportStatus(_ text: String) async
+}
+
+public extension MacToolExecutor {
+    func reportStatus(_ text: String) async {}
 }
 
 public struct ToolFragment: Decodable, Sendable {

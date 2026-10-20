@@ -242,6 +242,21 @@
     return style.visibility !== "hidden" && style.display !== "none";
   }
 
+  // The page's readable text (what a person reads: titles, dates, prices),
+  // capped. innerText excludes form field values, which stay unread.
+  function visibleText() {
+    const raw = (document.body && document.body.innerText) || "";
+    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+    let text = "";
+    for (const line of lines) {
+      const room = 8000 - text.length;
+      if (room <= 1) break;
+      // A long line is cut at the cap rather than dropped.
+      text += line.substring(0, room - 1) + "\n";
+    }
+    return text;
+  }
+
   function observe(generationID) {
     currentGeneration = generationID;
     const elements = [];
@@ -387,7 +402,14 @@
     return { moved: false };
   }
 
-  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  // Chrome pauses requestAnimationFrame in background tabs, so never wait on
+  // it alone: the next frame or 50 ms, whichever comes first.
+  const nextFrame = () => new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    requestAnimationFrame(finish);
+    setTimeout(finish, 50);
+  });
 
   // Armed for exactly one approved click: any click sequence that lands outside
   // the approved element is blocked, and whether the trusted click reached the
@@ -522,7 +544,7 @@
       return false;
     }
     if (request.action === "observe") {
-      sendResponse({ elements: observe(request.generationID || 1) });
+      sendResponse({ elements: observe(request.generationID || 1), text: visibleText() });
       return false;
     }
     if (request.action === "prepareClick") {

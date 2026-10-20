@@ -58,7 +58,10 @@ private struct FluidGradientMetalView: NSViewRepresentable {
         view.colorPixelFormat = .bgra8Unorm_srgb
         view.clearColor = MTLClearColor(red: 0.07, green: 0.07, blue: 0.10, alpha: 1)
         view.framebufferOnly = true
-        view.preferredFramesPerSecond = 30
+        // Always a still frame: an animated Metal background froze Halo's main
+        // thread for up to 83 s while the panel resized or lost the foreground
+        // (measured 2026-10-20: 91.6 s vs 6.2 s for the same request).
+        view.preferredFramesPerSecond = 1
         view.enableSetNeedsDisplay = false
         view.isPaused = false
         context.coordinator.attach(device: view.device, pixelFormat: view.colorPixelFormat)
@@ -67,8 +70,8 @@ private struct FluidGradientMetalView: NSViewRepresentable {
 
     func updateNSView(_ view: MTKView, context: Context) {
         context.coordinator.configuration = configuration
-        context.coordinator.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        view.preferredFramesPerSecond = context.coordinator.reduceMotion ? 1 : 30
+        context.coordinator.reduceMotion = true
+        view.preferredFramesPerSecond = 1
     }
 
     static func dismantleNSView(_ view: MTKView, coordinator: Renderer) {

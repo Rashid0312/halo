@@ -13,7 +13,9 @@ final class BrainRouter: ReplyProvider {
                 do {
                     let provider: any ReplyProvider
                     if auth.provider == "chatgpt" {
+                        TimingLog.shared.mark("brain: ChatGPT token")
                         let (model, token) = try await auth.modelAndToken()
+                        TimingLog.shared.mark("brain: ChatGPT token ready")
                         provider = ChatGPTProvider(token: token, model: model, tools: tools)
                     } else { provider = DeepSeekProvider(key: deepSeekKey, tools: tools) }
                     try Task.checkCancellation()

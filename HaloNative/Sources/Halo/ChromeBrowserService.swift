@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import HaloBridge
+import HaloCore
 
 public struct BrowserTab: Sendable, Codable, Equatable {
     public let id: Int
@@ -447,9 +448,11 @@ public actor ChromeBrowserService {
     }
 
     public func listTabs(browserAppID: String? = nil, authorizedOnly: Bool = false) async throws -> [BrowserTab] {
+        TimingLog.shared.mark("  listTabs: entered service")
         guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
         let epoch = accessEpoch
         let context = try browserContext(browserAppID)
+        TimingLog.shared.mark("  listTabs: browser resolved")
         // Sanitize both framing characters inside AppleScript before concatenation.
         // This keeps tab enumeration independent of Chrome's optional JavaScript-from-
         // Apple-Events setting while strict field counts reject malformed output.
@@ -488,6 +491,7 @@ public actor ChromeBrowserService {
             return outList as text
         end tell
         """)
+        TimingLog.shared.mark("  listTabs: AppleScript returned")
         try Task.checkCancellation()
         guard !isPaused, epoch == accessEpoch else {
             throw InteractionError("Browser tab access changed while the listing was in flight.")
@@ -535,6 +539,18 @@ public actor ChromeBrowserService {
               current.url == approved.url, current.domain == approved.domain else {
             throw InteractionError("The browser tab changed while approval was open. Inspect it and approve again.")
         }
+        return try await recordAuthorization(current)
+    }
+
+    /// Authorizes a tab taken from a listing made just now, with no approval
+    /// window in between (the user's settings approve browser actions), so the
+    /// re-listing that guards a human approval is unnecessary.
+    public func authorizeListedTab(_ tab: BrowserTab) async throws -> AuthorizedTabRecord {
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        return try await recordAuthorization(tab)
+    }
+
+    private func recordAuthorization(_ current: BrowserTab) async throws -> AuthorizedTabRecord {
         let key = AuthorizedTabKey(browserBundleID: current.browserBundleID,
                                    browserSessionID: current.browserSessionID, tabID: current.id)
         let record = AuthorizedTabRecord(key: key, domain: current.domain, title: current.title,
@@ -772,7 +788,7 @@ public actor ChromeBrowserService {
             }
             guard resp.success else {
                 if resp.error?.code == .hostNotGranted { throw SiteAccessWithheld() }
-                let message = resp.error?.message ?? "The browser bridge refused the operation."
+                let message = Self.plainBridgeError(resp.error?.message ?? "The browser bridge refused the operation.")
                 // Pages re-render; a changed or replaced element is never acted on,
                 // but a fresh read usually offers its current equivalent.
                 if resp.error?.code == .elementChanged {
@@ -784,8 +800,22 @@ public actor ChromeBrowserService {
         } catch {
             if let interError = error as? InteractionError { throw interError }
             if error is SiteAccessWithheld { throw error }
-            throw InteractionError("The authenticated browser bridge failed closed: \(error.localizedDescription)")
+            let plain = Self.plainBridgeError(error.localizedDescription)
+            throw InteractionError(plain == error.localizedDescription
+                ? "The browser connection stopped safely (failed closed); nothing was done: \(plain)" : plain)
         }
+    }
+
+    /// Bridge failures in words the user (and the model) can act on, never raw
+    /// socket or debugger internals that invite guessing.
+    static func plainBridgeError(_ raw: String) -> String {
+        if raw.localizedCaseInsensitiveContains("deadline") || raw.localizedCaseInsensitiveContains("didn't respond in time") {
+            return "The page didn't respond in time; nothing was done. Try again."
+        }
+        if raw.contains("Another debugger") {
+            return "Another tool (such as Chrome DevTools) is controlling this tab, so nothing was done. Close it and try again."
+        }
+        return raw
     }
 
     /// Chrome withholds the extension's access to this site (user-restricted).
@@ -1053,7 +1083,8 @@ public actor ChromeBrowserService {
             } else {
                 bridgeElements[key] = (obs.tab.documentGenerationID, latest)
             }
-            let contentText = obs.elements.map { el in
+            // Prefer the page's readable text; element lines are the fallback.
+            let contentText = obs.text.flatMap { $0.isEmpty ? nil : $0 } ?? obs.elements.map { el in
                 el.isProtected ? "[\(el.role): (protected)]" : "\(el.role): \(el.label)"
             }.joined(separator: "\n")
             var content = BrowserTabContent(

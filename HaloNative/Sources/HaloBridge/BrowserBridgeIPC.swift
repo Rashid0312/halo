@@ -195,11 +195,11 @@ public enum BridgeSocketIO {
     }
 
     /// Reads exactly count bytes from a file descriptor with a deadline.
-    public static func readExact(from fd: Int32, count: Int, deadline: Date) throws -> Data {
+    public static func readExact(from fd: Int32, count: Int, deadline: Date, honorCancellation: Bool = true) throws -> Data {
         var data = Data()
         data.reserveCapacity(count)
         while data.count < count {
-            try Task.checkCancellation()
+            if honorCancellation { try Task.checkCancellation() }
             if Date() > deadline {
                 throw BridgeErrorDetails(code: .internalError, message: "Socket read deadline exceeded.")
             }
@@ -275,7 +275,14 @@ public enum BridgeSocketIO {
         guard declared <= UInt32(BrowserBridgeLimits.maxMessageSizeBytes) else {
             throw BridgeErrorDetails(code: .oversizedPayload, message: "Frame declared length \(declared) exceeds max limit.")
         }
-        return try readExact(from: fd, count: Int(declared), deadline: deadline)
+        // Once a frame has started, cancellation must not leave its remainder in
+        // the socket (the next read would start mid-message). Finish it, bounded
+        // by the deadline; a deadline mid-frame means the stream is unusable.
+        do {
+            return try readExact(from: fd, count: Int(declared), deadline: deadline, honorCancellation: false)
+        } catch {
+            throw BridgeErrorDetails(code: .internalError, message: "Bridge stream interrupted mid-frame.")
+        }
     }
 
     /// Writes a 4-byte little-endian framed payload to a socket descriptor.
@@ -578,7 +585,14 @@ public actor BridgeIPCServer {
         guard clientFD >= 0, !isClosed else {
             throw BridgeErrorDetails(code: .internalError, message: "Client socket is not connected.")
         }
-        let payload = try BridgeSocketIO.readFramedData(from: clientFD, timeoutSeconds: timeoutSeconds)
+        let payload: Data
+        do {
+            payload = try BridgeSocketIO.readFramedData(from: clientFD, timeoutSeconds: timeoutSeconds)
+        } catch let error as BridgeErrorDetails where error.code == .oversizedPayload || error.message.contains("mid-frame") {
+            // The stream is out of step; drop the helper so it reconnects cleanly.
+            dropClient()
+            throw error
+        }
         return try BridgeMessageFraming.decode(BridgeResponse.self, from: payload)
     }
 

@@ -48,7 +48,7 @@ extension NativeChecks {
         func elements(_ tabID: Int) async throws -> [[String: Any]] {
             let read = try await run("read_browser_tab", ["tab_id": tabID])
             guard read["ok"] as? Bool == true else { throw Failure("read_browser_tab failed: \(read)") }
-            return read["elements"] as? [[String: Any]] ?? []
+            return parsePage(read["page"] as? String ?? "")
         }
         /// Opens a tab, waits for it to load, and authorizes it through the tool.
         func openAndAuthorize(_ url: String, host: String) async throws -> (id: Int, url: String) {

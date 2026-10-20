@@ -49,7 +49,10 @@ public struct ChatGPTProvider: ReplyProvider {
                             request.httpBody = try JSONSerialization.data(withJSONObject: body)
                             return request
                         }
+                        TimingLog.shared.mark("ChatGPT: request sent")
                         var (bytes, response) = try await session.bytes(for: request(body))
+                        TimingLog.shared.mark("ChatGPT: response headers")
+                        var sawFirstEvent = false
                         guard var http = response as? HTTPURLResponse else { throw Failure("ChatGPT returned an invalid response.") }
                         if http.statusCode == 400 && useReasoning {
                             var data = Data()
@@ -71,6 +74,7 @@ public struct ChatGPTProvider: ReplyProvider {
                         for try await line in bytes.lines {
                             try Task.checkCancellation()
                             guard let event = try Self.event(line) else { continue }
+                            if !sawFirstEvent { sawFirstEvent = true; TimingLog.shared.mark("ChatGPT: first data") }
                             switch event["type"] as? String {
                             case "response.output_text.delta":
                                 if let delta = event["delta"] as? String { continuation.yield(delta) }

@@ -331,11 +331,14 @@ public struct TabObservedEvent: Sendable, Codable, Equatable {
     public let tab: TabGenerationIdentity
     public let title: String
     public let elements: [ObservedDOMElement]
+    /// The page's readable text (innerText, never field values), capped.
+    public let text: String?
 
-    public init(tab: TabGenerationIdentity, title: String, elements: [ObservedDOMElement]) {
+    public init(tab: TabGenerationIdentity, title: String, elements: [ObservedDOMElement], text: String? = nil) {
         self.tab = tab
         self.title = title
         self.elements = elements
+        self.text = text
     }
 }
 
@@ -663,6 +666,7 @@ private enum BridgeModelValidation {
                 throw BridgeErrorDetails(code: .oversizedPayload, message: "Observation contains too many elements.")
             }
             try observation.elements.forEach(element)
+            if let text = observation.text { try boundedUTF8(text, max: 16_000, field: "observation.text", allowEmpty: true) }
         }
         if let nav = value.navigation {
             try browser(nav.browser)

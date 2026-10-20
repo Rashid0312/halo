@@ -135,7 +135,11 @@ struct MacReplyProvider: ReplyProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    if let input = messages.last?.text, let answer = try await catalog.handle(input) {
+                    TimingLog.shared.mark("router: local app shortcut check")
+                    var local: String?
+                    if let input = messages.last?.text { local = try await catalog.handle(input) }
+                    TimingLog.shared.mark("router: shortcut \(local == nil ? "not used" : "answered")")
+                    if let answer = local {
                         continuation.yield(answer)
                     } else if CommandLine.arguments.contains("--check-web-answer"), let input = messages.last?.text, Conversation.looksLikeWebResearch(input) {
                         let evidence = try await research(input)

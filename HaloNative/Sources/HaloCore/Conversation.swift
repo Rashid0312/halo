@@ -129,6 +129,7 @@ public final class Conversation {
     }
 
     public func send(_ input: String) {
+        TimingLog.shared.beginTurn("prompt sent (\(providerName))")
         begin(input) { [provider] history in provider.reply(to: history) }
     }
 
@@ -139,6 +140,7 @@ public final class Conversation {
 
     public func reportActivity(_ title: String) {
         guard isResponding, !title.isEmpty else { return }
+        TimingLog.shared.mark("activity: \(title)")
         completeActiveStep()
         activity = title
         activitySteps.append(ActivityStep(title: title))
