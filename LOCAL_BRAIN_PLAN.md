@@ -8,16 +8,32 @@ Replace the cloud brains (ChatGPT, DeepSeek) with Halo's own on-device model tha
 normal work by itself, including on websites it has never seen. ChatGPT is used only as a
 teacher while building; the shipped product runs fully local.
 
-## Decisions
+## Decisions (revised 2026-10-21)
+
+Halo becomes a **hybrid**: a small model on the Mac does the work and keeps sensitive data local; DeepSeek helps with big tasks and only ever sees what a native privacy gate lets through.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Model | Qwen3.5-4B, 4-bit (~3.1 GB) | Best published tool-use scores under 5B (BFCL-V4 50.3, TAU2 79.9, vendor-reported), reads screenshots, Apache 2.0 |
-| Upgrade path | Qwen3.5-9B | Only if 4B misses the pass mark |
-| Rejected | Gemma 4 E4B | No published tool-use scores; ~8B stored weights; training likely exceeds 16 GB |
-| Training tool | `mlx-lm` (LoRA on the 4-bit model) | Native on Apple Silicon; supports Qwen3.5; Soup adds a layer over the same thing |
-| Thinking | Off | Voice needs fast replies |
-| Shipping | Download on first launch (Hugging Face) | Keeps the app small and updates fast |
+| Local model | **Gemma 4 E2B**, 4-bit (3.6 GB download, 3.3 GB memory) | Measured fastest on the M1: reads 916 tokens/s (Qwen3.5-4B 176, Qwen3.5-2B 451), writes 38 tokens/s, calls tools directly without announcing them. Apache 2.0. Tool-use quality is unpublished, so the exam decides |
+| Comparison candidate | Qwen3.5-2B (1.75 GB) | Smaller download; trained on the same data as a fallback |
+| Rejected | Qwen3.5-4B (34 s/step uncached, ~10 s/task at best); Gemma 4 E4B (5.2 GB, writes 20 tokens/s); helper-model speculative decoding (unsupported for Qwen3.5; slower and garbled for Gemma) | Measured 2026-10-21 |
+| Cloud partner | **DeepSeek** (the user's key) | Chosen by the user. Fast (~0.5 s to first data). Note: DeepSeek stores API data on servers in China; the privacy gate limits what it sees |
+| Training tool | `mlx-lm` LoRA | Supports Gemma 4 and Qwen3.5 |
+| Shipping | First-launch download | |
+
+## Hybrid design
+
+| Gemma (on the Mac) | DeepSeek (cloud) |
+| --- | --- |
+| Runs every tool; nothing runs on the Mac without it | Never runs tools |
+| Reads all sensitive content | Plans big tasks, long writing, public-web research |
+| Handles short tasks alone | Sees only what passes the privacy gate |
+
+**Privacy gate (native code, never the model's judgment).** Sensitive by source: file contents, screenshots (never sent), email and messages, signed-in pages (Gmail, LinkedIn, banking, any site the user marks), and anything the scrubber flags. In their place DeepSeek gets Gemma's short summary or nothing. Public pages, search results, and the scrubbed request may pass. When a task needs sensitive content the gate blocks, Halo asks the user first (with "don't ask again").
+
+**Handoff to DeepSeek** when Gemma says escalate, two failed tool calls in a row, more than ~4 steps, a tool result too large to read quickly, or the user asks. The task continues with everything done so far. Escalated runs are recorded (after the gate) as lessons, so Gemma takes over more each round. Measured by the exam in hybrid mode: pass rate, seconds per task, and % escalated.
+
+**Speed requirements** (measured on the M1): cache the fixed prompt (~5,800 tokens; 33 s once, then 0.3–1 s to the first word; 244 MB on disk), short page reads, fewer steps, short spoken answers.
 
 ## Design review against Incredible (2026-10-21)
 

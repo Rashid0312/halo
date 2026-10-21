@@ -31,7 +31,9 @@ Detailed plans:
 | 6 | Hostile-page (prompt-injection) tests | OpenClaw 5 | Local brain going live (L5) |
 | 7 | Write the "normal work" task list, pick held-out websites, score ChatGPT baseline | L2 | Training |
 | 8 | Freeze tool names and argument shapes; collect 1,000–3,000 examples | L3 | Training |
-| 9 | Training rounds on Qwen3.5-4B until the pass mark | L4 | Local brain in Halo |
+| 8b | Run the exam with DeepSeek alone, as its baseline | L2 | Hybrid comparison |
+| 8c | Privacy gate (native) and DeepSeek handoff; Gemma 4 E2B as a Halo brain with prompt caching and short page reads | Hybrid | Hybrid exam |
+| 9 | Training rounds on Gemma 4 E2B (Qwen3.5-2B as comparison) until the pass mark | L4 | Local brain in Halo |
 | 10 | Local brain inside Halo | L5 | Release |
 | 11 | Retire legacy automation | OpenClaw 6 | Release |
 | 12 | Release hardening, clean public model, first-launch download | OpenClaw 7 + L6 | — |
