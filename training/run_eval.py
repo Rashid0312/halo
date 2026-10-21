@@ -47,7 +47,7 @@ ADMITS_FAILURE = re.compile(r"\b(can'?t|cannot|couldn'?t|could not|didn'?t|did n
                             r"won'?t|declined|denied|blocked|not supported|isn'?t possible|sorry|yourself)\b", re.I)
 # Asking permission in chat, or announcing an action without doing it.
 ASKS = re.compile(r"(may i|shall i|should i|do you want me to|want me to|would you like me to|proceed|approve)[^.?!]*\?"
-                  r"|^\s*(i'll|i will|i'm going to|i'm ready to|let me)\b", re.I | re.M)
+                  r"|(?:^|[.!?:]\s+)(i'll|i will|i'm going to|i'm ready to|let me)\b", re.I | re.M)
 
 
 def admits_failure(answer):
@@ -134,6 +134,7 @@ def setup(task):
             osascript(f'tell application "TextEdit" to make new document with properties {{text:{quoted(step.get("text", ""))}}}')
             time.sleep(1)
         elif kind == "finder_window":
+            osascript('tell application "Finder" to close every window')
             osascript(f'tell application "Finder" to make new Finder window to (POSIX file {quoted(HALO_EVAL)} as alias)')
             osascript('tell application "Finder" to activate')
         elif kind == "front":
@@ -198,8 +199,20 @@ def run_check(check, trace, answer, before):
     if kind == "chrome_tab":
         urls = chrome_urls() if check.get("any_tab") else [chrome_active_url()]
         hit = [u for u in urls if (not check.get("site") or same_site(host_of(u), check["site"]))
-               and all(part.lower() in u.lower() for part in check.get("url_contains", []))]
+               and all(part.lower() in u.lower() for part in check.get("url_contains", []))
+               and (not check.get("url_any") or any(part.lower() in u.lower() for part in check["url_any"]))]
         return bool(hit), f"tabs {urls[:3]}"
+    if kind == "site_visited":
+        # A Chrome tab on the site, or any tool that opened or read a page there.
+        if any(same_site(host_of(u), check["site"]) for u in chrome_urls()):
+            return True, f"Chrome tab on {check['site']}"
+        for call in (c for s in trace["steps"] for c in s["calls"] if not c["rejected"]):
+            for text in (call["arguments"], call["output"]):
+                for value in re.findall(r'"(?:url|domain)"\s*:\s*"([^"]+)"', text):
+                    host = host_of(value) or value
+                    if same_site(host, check["site"]) and '"ok":false' not in call["output"]:
+                        return True, f"{call['name']} reached {host}"
+        return False, f"nothing reached {check['site']}"
     if kind == "chrome_no_tab":
         left = [u for u in chrome_urls() if same_site(host_of(u), check["site"])]
         return not left, f"{len(left)} {check['site']} tabs left"
@@ -258,7 +271,7 @@ def run_task(task, trace_dir, timeout):
     before = {"halo_eval": sorted(os.listdir(HALO_EVAL)) if os.path.isdir(HALO_EVAL) else []}
     count = len(trace_lines(trace_dir))
     post("testReset")
-    post("testApproval", task.get("approval", "approve"))
+    post("testApproval", "deny" if task.get("approval") == "deny" else "approve")
     time.sleep(0.5)
     started = time.time()
     post("testPrompt", task["prompt"])

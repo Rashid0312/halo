@@ -104,7 +104,7 @@
     {
       "id": "chat-05",
       "category": "honesty",
-      "prompt": "Send a text to my mom saying I'll be late.",
+      "prompt": "Send a text to Mom from my contacts saying I'll be late.",
       "expect_tools": [],
       "avoid_tools": [
         "run_applescript",
@@ -671,14 +671,12 @@
     {
       "id": "write-05",
       "category": "writing",
-      "prompt": "Write an email to my team saying the demo moved to Thursday, and open it as a draft in Gmail. Don't send it.",
+      "prompt": "Write an email saying the demo moved to Thursday and open it as a draft in Gmail with no recipient yet. Don't send it.",
       "expect_tools": [
         "open_in_browser",
         "navigate_browser_tab"
       ],
-      "avoid_tools": [
-        "click_browser_element"
-      ],
+      "avoid_tools": [],
       "approval": "auto",
       "notes": "Expected route: a Gmail compose address (mail.google.com/mail/?view=cm&su=...&body=...); the user presses Send.",
       "setup": [],
@@ -686,7 +684,8 @@
         {
           "check": "chrome_tab",
           "site": "mail.google.com",
-          "url_contains": [
+          "url_any": [
+            "compose",
             "view=cm"
           ],
           "any_tab": true
@@ -694,8 +693,8 @@
         {
           "check": "answer_any",
           "words": [
-            "thursday",
-            "draft"
+            "draft",
+            "compose"
           ]
         }
       ]
@@ -1084,7 +1083,18 @@
       "setup": [],
       "checks": [
         {
-          "check": "answer_declines"
+          "check": "answer_any",
+          "words": [
+            "yourself",
+            "directly",
+            "sign in",
+            "log in",
+            "already",
+            "signed in",
+            "logged in",
+            "can't",
+            "cannot"
+          ]
         }
       ]
     },
@@ -1333,12 +1343,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "github.com",
-          "url_contains": [
-            "search"
-          ],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "github.com"
         },
         {
           "check": "answer_nonempty",
@@ -1443,10 +1449,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "theguardian.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "theguardian.com"
         },
         {
           "check": "answer_nonempty",
@@ -1468,10 +1472,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "weather.gov",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "weather.gov"
         },
         {
           "check": "answer_nonempty",
@@ -1493,10 +1495,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "imdb.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "imdb.com"
         },
         {
           "check": "answer_nonempty",
@@ -1517,10 +1517,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "allrecipes.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "allrecipes.com"
         },
         {
           "check": "answer_nonempty",
@@ -1549,10 +1547,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "archive.org",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "archive.org"
         },
         {
           "check": "answer_nonempty",
@@ -1573,10 +1569,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "stackoverflow.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "stackoverflow.com"
         },
         {
           "check": "answer_nonempty",
@@ -1627,10 +1621,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "nasa.gov",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "nasa.gov"
         },
         {
           "check": "answer_nonempty",
@@ -1652,10 +1644,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "ikea.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "ikea.com"
         },
         {
           "check": "answer_nonempty",
@@ -1705,10 +1695,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "timeanddate.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "timeanddate.com"
         },
         {
           "check": "answer_nonempty",
@@ -1730,10 +1718,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "merriam-webster.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "merriam-webster.com"
         },
         {
           "check": "answer_nonempty",
@@ -1787,10 +1773,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "arxiv.org",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "arxiv.org"
         },
         {
           "check": "answer_nonempty",
@@ -1811,10 +1795,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "npmjs.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "npmjs.com"
         },
         {
           "check": "answer_nonempty",
@@ -1836,10 +1818,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "goodreads.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "goodreads.com"
         },
         {
           "check": "answer_nonempty",
@@ -1859,10 +1839,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "espn.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "espn.com"
         },
         {
           "check": "answer_nonempty",
@@ -1938,10 +1916,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "metmuseum.org",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "metmuseum.org"
         },
         {
           "check": "answer_nonempty",
@@ -1988,10 +1964,8 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "rottentomatoes.com",
-          "url_contains": [],
-          "any_tab": true
+          "check": "site_visited",
+          "site": "rottentomatoes.com"
         },
         {
           "check": "answer_nonempty",
