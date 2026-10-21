@@ -1,20 +1,44 @@
 import Foundation
 import HaloCore
 
-@MainActor
-final class BrainRouter: ReplyProvider {
+/// What the brain needs to start a request, readable off the main thread.
+/// ChatGPTAuth publishes it whenever the provider, model, or token changes.
+final class BrainSnapshot: @unchecked Sendable {
+    struct State: Sendable {
+        var provider = "deepseek"
+        /// Empty until the account's model list has loaded and validated it.
+        var model = ""
+        var accessToken = ""
+        var expiresAt = Date.distantPast
+    }
+    private let lock = NSLock()
+    private var state = State()
+    var value: State { lock.withLock { state } }
+    func update(_ change: (inout State) -> Void) { lock.withLock { change(&state) } }
+}
+
+/// Chooses the brain per request without waiting on the main thread: a UI
+/// stall must never hold up Mercy's work. Only a missing model list or a
+/// token near expiry hops to ChatGPTAuth on the main actor.
+final class BrainRouter: ReplyProvider, Sendable {
     let auth: ChatGPTAuth
     let tools: MacTools?
     let deepSeekKey: String
     init(auth: ChatGPTAuth, tools: MacTools?, deepSeekKey: String) { self.auth = auth; self.tools = tools; self.deepSeekKey = deepSeekKey }
-    nonisolated func reply(to messages: [Message]) -> AsyncThrowingStream<String, Error> {
+    func reply(to messages: [Message]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
+            let task = Task.detached(priority: .userInitiated) { [auth, tools, deepSeekKey] in
                 do {
                     let provider: any ReplyProvider
-                    if auth.provider == "chatgpt" {
+                    let snapshot = auth.snapshot.value
+                    if snapshot.provider == "chatgpt" {
                         TimingLog.shared.mark("brain: ChatGPT token")
-                        let (model, token) = try await auth.modelAndToken()
+                        let model: String, token: String
+                        if !snapshot.model.isEmpty, !snapshot.accessToken.isEmpty, snapshot.expiresAt.timeIntervalSinceNow > 120 {
+                            (model, token) = (snapshot.model, snapshot.accessToken)
+                        } else {
+                            (model, token) = try await auth.modelAndToken()
+                        }
                         TimingLog.shared.mark("brain: ChatGPT token ready")
                         provider = ChatGPTProvider(token: token, model: model, tools: tools)
                     } else { provider = DeepSeekProvider(key: deepSeekKey, tools: tools) }

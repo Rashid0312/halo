@@ -425,6 +425,77 @@ public actor ChromeBrowserService {
         return id
     }
 
+    public enum TabCommand: String, Sendable { case reload, back, forward, switchTo }
+
+    /// Closes tabs by id, one AppleScript per tab so indexes never shift under
+    /// the loop. Returns the ids that were found and closed.
+    public func closeTabs(ids: [Int], browserAppID: String? = nil) async throws -> [Int] {
+        var closed: [Int] = []
+        for id in ids {
+            let context = try browserContext(browserAppID)
+            let raw = try await runAppleScript("""
+            tell application "\(context.name)"
+                repeat with w in windows
+                    set matches to (every tab of w whose id is \(id))
+                    if (count of matches) > 0 then
+                        close item 1 of matches
+                        return "CLOSED"
+                    end if
+                end repeat
+                return "NOT_FOUND"
+            end tell
+            """)
+            if raw.trimmingCharacters(in: .whitespacesAndNewlines) == "CLOSED" { closed.append(id) }
+            await revoke(tabID: id, browserAppID: context.bundleID)
+        }
+        return closed
+    }
+
+    /// Reload, back, forward, or bring a tab to the front of its window (Chrome
+    /// itself is not activated, so the user's focus stays where it is).
+    public func tabCommand(_ command: TabCommand, id: Int, browserAppID: String? = nil) async throws {
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        let context = try browserContext(browserAppID)
+        let action: String
+        switch command {
+        case .reload: action = "reload t"
+        case .back: action = "go back t"
+        case .forward: action = "go forward t"
+        case .switchTo: action = "set active tab index of w to i\n                    set index of w to 1"
+        }
+        let raw = try await runAppleScript("""
+        tell application "\(context.name)"
+            repeat with w in windows
+                set i to 0
+                repeat with t in tabs of w
+                    set i to i + 1
+                    if (id of t) is \(id) then
+                        \(action)
+                        return "DONE"
+                    end if
+                end repeat
+            end repeat
+            return "NOT_FOUND"
+        end tell
+        """)
+        guard raw.trimmingCharacters(in: .whitespacesAndNewlines) == "DONE" else {
+            throw InteractionError("Tab \(id) was not found in open windows.")
+        }
+    }
+
+    /// Opens a new browser window, optionally at an http(s) address.
+    public func newWindow(url: String?, browserAppID: String? = nil) async throws {
+        if let url, let refusal = Self.navigationRefusal(url) { throw InteractionError(refusal) }
+        let context = try browserContext(browserAppID)
+        let escaped = (url ?? "").replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        _ = try await runAppleScript("""
+        tell application "\(context.name)"
+            set w to make new window
+            \(url == nil ? "" : "set URL of active tab of w to \"\(escaped)\"")
+        end tell
+        """)
+    }
+
     public func closeTab(id: Int, browserAppID: String? = nil) async throws {
         let context = try browserContext(browserAppID)
         _ = try? await runAppleScript("""
@@ -913,6 +984,8 @@ public actor ChromeBrowserService {
                                                    kind: kind.rawValue, destination: kind == .button ? nil : target.destination)
         // Any click may navigate (links and submissions always do); its result
         // still counts, and the navigation is applied like any other.
+        TimingLog.shared.mark("  click: sent to extension")
+        defer { TimingLog.shared.mark("  click: finished (incl. page read after)") }
         let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
                                                     validator: validator, requiredGeneration: target.generation,
                                                     timeout: 10, allowsNavigation: true) {
@@ -922,6 +995,7 @@ public actor ChromeBrowserService {
         guard let action = resp.actionResult, action.elementID == target.elementID else {
             throw InteractionError("The browser bridge returned no click result.")
         }
+        TimingLog.shared.mark("  click: extension answered")
         await applyPendingBridgeMessages()
         let stillAuthorized = authorizedTabs[target.key] != nil
         let after = stillAuthorized ? try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID) : nil
@@ -1025,6 +1099,20 @@ public actor ChromeBrowserService {
             throw InteractionError("The browser bridge returned no scroll result.")
         }
         return BrowserClickResult(verified: action.performed, after: nil)
+    }
+
+    /// Controls the page's main video or audio. `verified` means the media
+    /// state now shows the command took effect (playing, paused, muted…).
+    public func media(_ target: BrowserElementTarget, command: BridgeMediaCommand, value: Double? = nil) async throws
+        -> (verified: Bool, state: BridgeMediaState?) {
+        let (server, validator, context) = try await actionChannel(target, verb: "changed")
+        let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
+                                                    validator: validator, requiredGeneration: target.generation, timeout: 10) {
+            BridgeRequest(requestID: $1, sessionNonce: $2, type: .mediaControl, targetTab: $0,
+                          media: BridgeMedia(command: command, value: value))
+        }
+        guard let action = resp.actionResult else { throw InteractionError("The browser bridge returned no media result.") }
+        return (action.performed, action.media)
     }
 
     /// Navigates the tab to one approved address. Old element references die

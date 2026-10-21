@@ -358,6 +358,46 @@ public enum BridgeRequestType: String, Sendable, Codable, Equatable {
     case scrollTab
     /// Phase 5B.3: navigate the tab to one approved http(s) URL.
     case navigateTab
+    /// Control the page's main video or audio (play, pause, mute, seek, volume, full screen).
+    case mediaControl
+}
+
+public enum BridgeMediaCommand: String, Sendable, Codable, Equatable, CaseIterable {
+    case status, play, pause, toggle, mute, unmute, seek, volume, fullscreen, exitFullscreen = "exit_fullscreen"
+}
+
+public struct BridgeMedia: Sendable, Codable, Equatable {
+    public let command: BridgeMediaCommand
+    /// Seconds to seek by (−3,600…3,600) for `seek`; level 0…1 for `volume`.
+    public let value: Double?
+
+    public init(command: BridgeMediaCommand, value: Double? = nil) {
+        self.command = command
+        self.value = value
+    }
+}
+
+/// The main media element's state after a `mediaControl` request.
+public struct BridgeMediaState: Sendable, Codable, Equatable {
+    /// "video" or "audio".
+    public let kind: String
+    public let paused: Bool
+    public let muted: Bool
+    public let volume: Double
+    public let currentTime: Double
+    /// Absent for live streams.
+    public let duration: Double?
+    public let fullscreen: Bool
+
+    public init(kind: String, paused: Bool, muted: Bool, volume: Double, currentTime: Double, duration: Double?, fullscreen: Bool) {
+        self.kind = kind
+        self.paused = paused
+        self.muted = muted
+        self.volume = volume
+        self.currentTime = currentTime
+        self.duration = duration
+        self.fullscreen = fullscreen
+    }
 }
 
 public enum BridgeScrollDirection: String, Sendable, Codable, Equatable {
@@ -400,11 +440,14 @@ public struct BridgeActionResult: Sendable, Codable, Equatable {
     public let tab: TabGenerationIdentity
     public let elementID: String
     public let performed: Bool
+    /// `mediaControl` only: the media element afterwards.
+    public let media: BridgeMediaState?
 
-    public init(tab: TabGenerationIdentity, elementID: String, performed: Bool) {
+    public init(tab: TabGenerationIdentity, elementID: String, performed: Bool, media: BridgeMediaState? = nil) {
         self.tab = tab
         self.elementID = elementID
         self.performed = performed
+        self.media = media
     }
 }
 
@@ -425,11 +468,13 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
     public let scroll: BridgeScroll?
     /// Approved destination for `navigateTab` only.
     public let url: String?
+    /// Approved media command for `mediaControl` only.
+    public let media: BridgeMedia?
 
     public init(requestID: String, protocolVersion: UInt32 = BrowserBridgeLimits.currentProtocolVersion, sessionNonce: String,
                 type: BridgeRequestType, targetTab: TabGenerationIdentity? = nil,
                 elementID: String? = nil, expectedElement: BridgeElementFingerprint? = nil, text: String? = nil,
-                option: String? = nil, scroll: BridgeScroll? = nil, url: String? = nil) {
+                option: String? = nil, scroll: BridgeScroll? = nil, url: String? = nil, media: BridgeMedia? = nil) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
         self.sessionNonce = sessionNonce
@@ -441,6 +486,7 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
         self.option = option
         self.scroll = scroll
         self.url = url
+        self.media = media
     }
 }
 
@@ -527,9 +573,9 @@ private enum BridgeModelValidation {
         try nonce(value.sessionNonce, field: "sessionNonce")
         // Each action carries exactly its own payload fields and nothing else.
         let hasElement = value.elementID != nil || value.expectedElement != nil
-        let payloads = (text: value.text != nil, option: value.option != nil, scroll: value.scroll != nil, url: value.url != nil)
+        let payloads = (text: value.text != nil, option: value.option != nil, scroll: value.scroll != nil, url: value.url != nil, media: value.media != nil)
         func forbidPayloads(except allowed: String? = nil) throws {
-            let present = [("text", payloads.text), ("option", payloads.option), ("scroll", payloads.scroll), ("url", payloads.url)]
+            let present = [("text", payloads.text), ("option", payloads.option), ("scroll", payloads.scroll), ("url", payloads.url), ("media", payloads.media)]
                 .filter { $0.1 && $0.0 != allowed }
             guard present.isEmpty else {
                 throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids \(present.map(\.0).joined(separator: ", ")).")
@@ -586,6 +632,22 @@ private enum BridgeModelValidation {
             try forbidPayloads(except: "url")
             guard let url = value.url else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Navigation requires a URL.") }
             try navigationURL(url)
+        case .mediaControl:
+            guard !hasElement else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Media control forbids element fields.") }
+            try forbidPayloads(except: "media")
+            guard let media = value.media else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Media control requires a command.") }
+            switch media.command {
+            case .seek:
+                guard let seconds = media.value, seconds.isFinite, seconds != 0, abs(seconds) <= 3_600 else {
+                    throw BridgeErrorDetails(code: .payloadMalformed, message: "Seek requires a nonzero number of seconds up to an hour.")
+                }
+            case .volume:
+                guard let level = media.value, level.isFinite, (0...1).contains(level) else {
+                    throw BridgeErrorDetails(code: .payloadMalformed, message: "Volume requires a level from 0 to 1.")
+                }
+            default:
+                guard media.value == nil else { throw BridgeErrorDetails(code: .payloadMalformed, message: "This media command takes no value.") }
+            }
         }
     }
 
@@ -705,6 +767,12 @@ private enum BridgeModelValidation {
         if let action = value.actionResult {
             try tab(action.tab)
             try elementReference(action.elementID)
+            if let media = action.media {
+                let numbers = [media.volume, media.currentTime] + (media.duration.map { [$0] } ?? [])
+                guard ["video", "audio"].contains(media.kind), numbers.allSatisfy({ $0.isFinite && $0 >= 0 }), media.volume <= 1 else {
+                    throw BridgeErrorDetails(code: .payloadMalformed, message: "Media state is invalid.")
+                }
+            }
         }
         if let handshake = value.handshake {
             try nonce(handshake.serverNonce, field: "handshake.serverNonce")
@@ -746,7 +814,7 @@ public enum BridgeMessageFraming {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope must be a JSON object.")
                 }
                 let allowed: Set<String> = type == BridgeRequest.self
-                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement", "text", "option", "scroll", "url"]
+                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement", "text", "option", "scroll", "url", "media"]
                     : ["requestID", "protocolVersion", "sessionNonce", "success", "error", "handshake", "observation", "navigation", "tabClosed", "tabAnnouncement", "actionResult"]
                 guard Set(object.keys).isSubset(of: allowed) else {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope contains unknown fields.")

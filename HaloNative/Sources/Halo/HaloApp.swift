@@ -398,6 +398,8 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         macTools.onActivity = { [weak self] title in self?.conversation.reportActivity(title) }
         catalog.onRefresh = { [weak self] words in self?.voice.contextualWords = words }
         Task { await catalog.refresh() }
+        // Fills the brain snapshot so the first request needn't wait on the main thread.
+        if auth.provider == "chatgpt" { Task { try? await auth.loadModels() } }
         voice.onStart = { [weak self] in self?.conversation.stop() }
         voice.onTranscript = { [weak self] text in self?.conversation.send(text) }
         conversation.onReplyStart = { [weak self] in self?.voice.beginReply() }
@@ -418,6 +420,16 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
                     guard let self else { return }
                     self.showPanel(focusComposer: false)
                     self.conversation.send(prompt)
+                    // Test-only: block the main thread right after sending, to
+                    // prove the request and browser tools never wait on it.
+                    if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--simulate-main-stall=") }),
+                       let seconds = Double(arg.dropFirst("--simulate-main-stall=".count)), seconds > 0 {
+                        DispatchQueue.main.async {
+                            TimingLog.shared.mark("simulated main stall start (\(seconds) s)")
+                            Thread.sleep(forTimeInterval: seconds)
+                            TimingLog.shared.mark("simulated main stall end")
+                        }
+                    }
                 }
             }
         }
@@ -438,6 +450,13 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        // Panel-state marks in timing.log, to correlate with main-thread freezes.
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                TimingLog.shared.mark(self.panel.occlusionState.contains(.visible) ? "panel: visible" : "panel: occluded")
+            }
+        }
         panel.hasShadow = false
         panel.isMovable = false
         panel.level = .floating
@@ -519,7 +538,8 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
 
     private func animatePanel(to frame: NSRect) {
         guard panel.frame != frame else { return }
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        TimingLog.shared.mark("panel: resizing")
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !PanelExperiment.on("resize") {
             panel.setFrame(frame, display: true)
         } else {
             NSAnimationContext.runAnimationGroup { context in
@@ -537,6 +557,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         macTools.ui.rememberFrontmost()
         if focusComposer || anchorScreen == nil { anchorScreen = item?.button?.window?.screen ?? NSScreen.main }
         let wasVisible = panel.isVisible
+        TimingLog.shared.mark(wasVisible ? "panel: shown" : "panel: sliding in")
         presentation.isExpanded = true
         let target = panelFrame(expanded: true)
         if !wasVisible {
@@ -581,6 +602,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         let transition = UUID()
         panelTransition = transition
         isRetracting = true
+        TimingLog.shared.mark("panel: sliding out")
         let target = panel.frame.offsetBy(dx: panel.frame.width + 16, dy: 0)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.25
@@ -590,6 +612,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in
                 guard let self, self.panelTransition == transition else { return }
                 self.panel.orderOut(nil)
+                TimingLog.shared.mark("panel: hidden")
                 self.presentation.isExpanded = false
                 self.isRetracting = false
                 self.panel.alphaValue = 1

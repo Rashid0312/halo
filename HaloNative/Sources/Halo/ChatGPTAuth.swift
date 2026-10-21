@@ -22,10 +22,10 @@ final class ChatGPTAuth {
         var scopes: [String]
     }
     var provider = UserDefaults.standard.string(forKey: "brainProvider") ?? "deepseek" {
-        didSet { UserDefaults.standard.set(provider, forKey: "brainProvider"); onProviderChange?() }
+        didSet { UserDefaults.standard.set(provider, forKey: "brainProvider"); publishSnapshot(); onProviderChange?() }
     }
     var selectedModel = UserDefaults.standard.string(forKey: "chatgptModel") ?? "" {
-        didSet { UserDefaults.standard.set(selectedModel, forKey: "chatgptModel"); onProviderChange?() }
+        didSet { UserDefaults.standard.set(selectedModel, forKey: "chatgptModel"); publishSnapshot(); onProviderChange?() }
     }
     private(set) var models: [Model] = []
     private(set) var signingIn = false
@@ -34,6 +34,8 @@ final class ChatGPTAuth {
     private(set) var sharing = false
     private(set) var email = ""
     @ObservationIgnored var onProviderChange: (() -> Void)?
+    /// Provider, model, and token for BrainRouter to read off the main thread.
+    nonisolated let snapshot = BrainSnapshot()
     @ObservationIgnored private var session: Session?
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var refreshTask: Task<String, Error>?
@@ -45,6 +47,14 @@ final class ChatGPTAuth {
         if let data = try? Credentials.read(account: "chatgpt-session"), let saved = try? JSONDecoder().decode(Session.self, from: data) { session = saved }
         updateState()
         if !sharing { provider = "deepseek" }
+        publishSnapshot()
+    }
+
+    private func publishSnapshot() {
+        let model = models.contains { $0.id == selectedModel } ? selectedModel : ""
+        let token = sharing ? session?.accessToken ?? "" : ""
+        let expiry = session?.expiresAt ?? .distantPast
+        snapshot.update { $0 = .init(provider: provider, model: model, accessToken: token, expiresAt: expiry) }
     }
 
     func startSignIn() {
@@ -143,6 +153,7 @@ final class ChatGPTAuth {
         }
         guard !models.isEmpty else { throw ChatGPTFailure("This ChatGPT account has no available models for Halo.") }
         if !models.contains(where: { $0.id == selectedModel }) { selectedModel = models[0].id }
+        publishSnapshot()
     }
 
     func modelAndToken() async throws -> (String, String) {
@@ -166,7 +177,7 @@ final class ChatGPTAuth {
     }
 
     private func save(_ value: Session) throws { try Credentials.write(account: "chatgpt-session", data: JSONEncoder().encode(value)); session = value }
-    private func updateState() { signedIn = !(session?.refreshToken.isEmpty ?? true); sharing = signedIn && (session?.scopes.contains("chatgpt.tokens.use.direct") ?? false); email = signedIn ? session?.email ?? "" : "" }
+    private func updateState() { signedIn = !(session?.refreshToken.isEmpty ?? true); sharing = signedIn && (session?.scopes.contains("chatgpt.tokens.use.direct") ?? false); email = signedIn ? session?.email ?? "" : ""; publishSnapshot() }
     private static func session(_ t: [String: Any], client: String, subject: String, email: String, idToken: String, previous: Session? = nil) throws -> Session {
         guard let access = t["access_token"] as? String, !access.isEmpty,
               let refresh = t["refresh_token"] as? String ?? previous?.refreshToken, !refresh.isEmpty else { throw ChatGPTFailure("ChatGPT returned incomplete credentials. Sign in again.") }

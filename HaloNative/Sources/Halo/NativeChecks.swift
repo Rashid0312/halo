@@ -801,6 +801,20 @@ enum NativeChecks {
                     + #"<div style="display:none">"# + (0..<300).map { "<button type=\"button\">Hidden control \($0)</button>" }.joined() + "</div>"
                     + #"<div style="margin-top:3000px">"# + (0..<250).map { "<button type=\"button\">Below fold \($0)</button>" }.joined() + "</div>"
                     + #"<button type="button" style="position:fixed;top:10px;left:10px">Target action</button></body></html>"#)
+                // A video playing a generated 60 s silent WAV: seekable, with sound
+                // (so autoplay rules apply), and no media file to ship.
+                let mediaPage = respond(#"""
+                <!DOCTYPE html><html><head><title>Halo Media Fixture</title></head>
+                <body><h1>Halo Media Fixture</h1><div id="player" style="width:480px;height:270px"><video id="v" style="width:480px;height:270px"></video></div>
+                <script>
+                const rate = 8000, seconds = 60, n = rate * seconds, buf = new ArrayBuffer(44 + n), d = new DataView(buf);
+                const w = (o, s) => [...s].forEach((c, i) => d.setUint8(o + i, c.charCodeAt(0)));
+                w(0, "RIFF"); d.setUint32(4, 36 + n, true); w(8, "WAVEfmt "); d.setUint32(16, 16, true); d.setUint16(20, 1, true);
+                d.setUint16(22, 1, true); d.setUint32(24, rate, true); d.setUint32(28, rate, true); d.setUint16(32, 1, true);
+                d.setUint16(34, 8, true); w(36, "data"); d.setUint32(40, n, true); new Uint8Array(buf, 44).fill(128);
+                document.getElementById("v").src = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+                </script></body></html>
+                """#)
                 let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
                     + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
@@ -830,7 +844,8 @@ enum NativeChecks {
                         let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large
                             : path.hasPrefix("/click") ? clickPage : path.hasPrefix("/type") ? typePage
                             : path.hasPrefix("/select") ? selectPage : path.hasPrefix("/forms") ? formsPage
-                            : path.hasPrefix("/shadow") ? shadowPage : path.hasPrefix("/crowded") ? crowdedPage : responseBytes
+                            : path.hasPrefix("/shadow") ? shadowPage : path.hasPrefix("/crowded") ? crowdedPage
+                            : path.hasPrefix("/media") ? mediaPage : responseBytes
                         _ = bytes.withUnsafeBufferPointer { buf -> Int in
                             var written = 0
                             while written < buf.count {

@@ -197,6 +197,18 @@ struct CoreChecks {
         precondition(AppResolver.launchTarget(in: "open Safari and Stremio") == nil)
         precondition(AppResolver.speechVocabulary(apps: apps).contains("Stremio"))
         print("PASS: app resolution uses installed bundles, aliases, uncertainty, and speech vocabulary")
+        for prompt in ["open netflix and tell me what I watched last", "close all my tabs except Netflix", "go to example.com",
+                       "read https://example.org/a", "pause the YouTube video", "what's on this web page?", "zoom in on the site"] {
+            precondition(ToolScope.isBrowserRequest(prompt), prompt)
+        }
+        for prompt in ["open Stremio", "arrange my windows side by side", "make a table in Numbers", "what time is it?"] {
+            precondition(!ToolScope.isBrowserRequest(prompt), prompt)
+        }
+        let allTools = Data(#"[{"type":"function","function":{"name":"list_apps"}},{"type":"function","function":{"name":"open_app"}},{"type":"function","function":{"name":"read_browser_tab"}}]"#.utf8)
+        let browserTools = try JSONSerialization.jsonObject(with: ToolScope.definitions(allTools, for: "open youtube.com")) as? [[String: Any]] ?? []
+        precondition(browserTools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String } == ["read_browser_tab"])
+        precondition(ToolScope.definitions(allTools, for: "open Stremio") == allTools)
+        print("PASS: browser requests drop Mac app-discovery tools; other requests keep every tool")
         blankInputDoesNotStartTurn()
         print("PASS: blank input is ignored")
         try await streamedOutputIsBatchedAndBounded()

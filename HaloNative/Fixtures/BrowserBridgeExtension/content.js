@@ -516,7 +516,141 @@
     return { ready: true };
   }
 
+  // Media control: the page's main video or audio is the largest visible
+  // video, preferring one that is playing; an audio element counts when the
+  // page has no video. Uses this world's media API, which page scripts can't
+  // override. Play and full screen may need a user gesture, which the
+  // background grants through the debugger before `mediaAfterGesture`.
+  let pendingMedia = null;
+
+  function mainMedia() {
+    let best = null, bestScore = -1;
+    for (const el of deepQueryAll("video, audio")) {
+      const rect = el.getBoundingClientRect();
+      const video = el.tagName === "VIDEO";
+      if (video && !isRendered(el, rect)) continue;
+      const score = (video ? rect.width * rect.height + 1 : 0.5) * (el.paused ? 1 : 4);
+      if (score > bestScore) { best = el; bestScore = score; }
+    }
+    return best;
+  }
+
+  function mediaState(el) {
+    return {
+      kind: el.tagName === "VIDEO" ? "video" : "audio",
+      paused: el.paused,
+      muted: el.muted,
+      volume: Math.min(1, Math.max(0, el.volume)),
+      currentTime: Math.max(0, el.currentTime || 0),
+      duration: Number.isFinite(el.duration) ? el.duration : null,
+      fullscreen: Boolean(document.fullscreenElement)
+    };
+  }
+
+  // The player around a video (same size, so the site's controls come along),
+  // or the video itself.
+  function playerContainer(el) {
+    const rect = el.getBoundingClientRect();
+    let container = el;
+    for (let node = el.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+      const r = node.getBoundingClientRect();
+      if (r.width > rect.width * 1.15 + 4 || r.height > rect.height * 1.15 + 4) break;
+      container = node;
+    }
+    return container;
+  }
+
+  function mediaPerformed(command, before, after, value) {
+    switch (command) {
+      case "play": return !after.paused;
+      case "pause": return after.paused;
+      case "toggle": return after.paused !== before.paused;
+      case "mute": return after.muted;
+      case "unmute": return !after.muted;
+      case "volume": return Math.abs(after.volume - value) < 0.02 && (value === 0 || !after.muted);
+      case "seek": {
+        const moved = after.currentTime - before.currentTime;
+        const atEnd = value > 0 ? after.duration !== null && after.currentTime >= after.duration - 1 : after.currentTime <= 1;
+        return Math.sign(moved) === Math.sign(value) || atEnd;
+      }
+      case "fullscreen": return after.fullscreen;
+      case "exit_fullscreen": return !after.fullscreen;
+      default: return true;
+    }
+  }
+
+  function withDeadline(promise, ms) {
+    return Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))]);
+  }
+
+  async function mediaApply(request) {
+    const el = mainMedia();
+    if (!el) return { error: "elementChanged", message: "This page has no video or audio playing or visible." };
+    const before = mediaState(el);
+    pendingMedia = { el, before, command: request.command, value: request.value };
+    const finish = () => {
+      const after = mediaState(el);
+      pendingMedia = null;
+      return { done: true, performed: mediaPerformed(request.command, before, after, request.value), state: after };
+    };
+    const command = request.command === "toggle" ? (el.paused ? "play" : "pause") : request.command;
+    switch (command) {
+      case "status": return finish();
+      case "play":
+        await withDeadline(el.play().catch(() => {}), 1500);
+        return el.paused ? { needs: "gesture" } : finish();
+      case "pause": el.pause(); return finish();
+      case "mute": el.muted = true; return finish();
+      case "unmute": el.muted = false; return finish();
+      case "volume":
+        el.volume = request.value;
+        if (request.value > 0) el.muted = false;
+        return finish();
+      case "seek":
+        // Netflix's player fails when its video's time is set directly; it
+        // seeks 10 s per arrow key instead.
+        if (/(^|\.)netflix\.com$/.test(location.hostname)) {
+          return { needs: "keys", key: request.value > 0 ? "ArrowRight" : "ArrowLeft", presses: Math.min(30, Math.max(1, Math.round(Math.abs(request.value) / 10))) };
+        }
+        el.currentTime = Math.max(0, Math.min(Number.isFinite(el.duration) ? el.duration : Infinity, el.currentTime + request.value));
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return finish();
+      case "fullscreen":
+        return document.fullscreenElement ? finish() : { needs: "gesture" };
+      case "exit_fullscreen":
+        if (document.fullscreenElement) await withDeadline(document.exitFullscreen().catch(() => {}), 1500);
+        return finish();
+      default:
+        pendingMedia = null;
+        return { error: "payloadMalformed", message: "Unknown media command." };
+    }
+  }
+
+  // Runs right after the background granted a user gesture, or pressed keys.
+  async function mediaAfterGesture() {
+    const pending = pendingMedia;
+    pendingMedia = null;
+    if (!pending || !pending.el.isConnected) return { error: "elementChanged", message: "The video or audio left the page." };
+    const { el, before, command, value } = pending;
+    const wanted = command === "toggle" ? (before.paused ? "play" : "pause") : command;
+    if (wanted === "play") await withDeadline(el.play().catch(() => {}), 1500);
+    if (wanted === "fullscreen" && !document.fullscreenElement) {
+      await withDeadline(playerContainer(el).requestFullscreen().catch(() => {}), 1500);
+    }
+    if (wanted === "seek") await new Promise((resolve) => setTimeout(resolve, 400));
+    const after = mediaState(el);
+    return { done: true, performed: mediaPerformed(command, before, after, value), state: after };
+  }
+
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "mediaApply") {
+      mediaApply(request).then(sendResponse, (err) => sendResponse({ error: "internalError", message: String(err && err.message) }));
+      return true;
+    }
+    if (request.action === "mediaAfterGesture") {
+      mediaAfterGesture().then(sendResponse, (err) => sendResponse({ error: "internalError", message: String(err && err.message) }));
+      return true;
+    }
     if (request.action === "applySelect") {
       sendResponse(applySelect(request));
       return false;

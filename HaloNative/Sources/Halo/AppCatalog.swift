@@ -11,6 +11,8 @@ final class AppCatalog {
     private(set) var status = "Finding installed apps…"
     private(set) var isRefreshing = false
     var onRefresh: (([String]) -> Void)?
+    /// Mirrors `!suggestions.isEmpty` for the router to read off the main thread.
+    nonisolated let hasSuggestions = LockedFlag()
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "appAliases"),
@@ -75,6 +77,7 @@ final class AppCatalog {
     func cancelSuggestion() {
         suggestions = []
         pendingQuery = ""
+        hasSuggestions.set(false)
     }
 
     func handle(_ input: String) async throws -> String? {
@@ -99,6 +102,7 @@ final class AppCatalog {
         case .suggestions(let candidates):
             suggestions = candidates
             pendingQuery = target
+            hasSuggestions.set(true)
             return candidates.count == 1 ? "Did you mean \(candidates[0].name)? Say yes or choose the app below." : "Which app did you mean: \(candidates.map(\.name).joined(separator: ", "))?"
         case .missing: return nil // Let the model inspect actual apps/files rather than inventing an app match.
         }
@@ -127,17 +131,30 @@ final class AppCatalog {
     }
 }
 
+final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    var value: Bool { lock.withLock { flag } }
+    func set(_ value: Bool) { lock.withLock { flag = value } }
+}
+
 struct MacReplyProvider: ReplyProvider {
     let fallback: any ReplyProvider
     var researchFallback: (any ReplyProvider)? = nil
     let catalog: AppCatalog
     func reply(to messages: [Message]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task {
+            let task = Task.detached(priority: .userInitiated) { [catalog] in
                 do {
                     TimingLog.shared.mark("router: local app shortcut check")
                     var local: String?
-                    if let input = messages.last?.text { local = try await catalog.handle(input) }
+                    // Only "open <app>" or an answer to app suggestions needs the
+                    // catalog, which lives on the main thread; everything else
+                    // goes straight to the brain without waiting for the UI.
+                    if let input = messages.last?.text,
+                       AppResolver.launchTarget(in: input) != nil || catalog.hasSuggestions.value {
+                        local = try await catalog.handle(input)
+                    }
                     TimingLog.shared.mark("router: shortcut \(local == nil ? "not used" : "answered")")
                     if let answer = local {
                         continuation.yield(answer)

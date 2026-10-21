@@ -25,7 +25,7 @@ public struct ChatGPTProvider: ReplyProvider {
                     var input: [[String: Any]] = messages.suffix(20).map {
                         ["role": $0.isUser ? "user" : "assistant", "content": [["type": $0.isUser ? "input_text" : "output_text", "text": $0.text]]]
                     }
-                    let definitions = try await tools?.definitions()
+                    let definitions = try await tools?.definitions(for: messages.last(where: \.isUser)?.text ?? "")
                     let functions = try definitions.map { try JSONSerialization.jsonObject(with: $0) as? [[String: Any]] ?? [] }.map {
                         $0.compactMap { row -> [String: Any]? in
                             guard var function = row["function"] as? [String: Any] else { return nil }
@@ -33,13 +33,17 @@ public struct ChatGPTProvider: ReplyProvider {
                             return function
                         }
                     }
+                    // Least thinking first: tool steps rarely need more, and every
+                    // level adds seconds before the first step. Models that reject
+                    // a level fall back to the next one, then to none.
+                    var reasoningEfforts = ["minimal", "low"]
                     var useReasoning = true
                     for _ in 0..<12 {
                         try Task.checkCancellation()
                         var body: [String: Any] = ["model": model, "instructions": DeepSeekProvider.assistantInstructions,
                                                    "input": input, "store": false, "stream": true, "include": ["reasoning.encrypted_content"]]
                         if let functions, !functions.isEmpty { body["tools"] = functions }
-                        if useReasoning { body["reasoning"] = ["effort": "low"] }
+                        if useReasoning, let effort = reasoningEfforts.first { body["reasoning"] = ["effort": effort] }
                         func request(_ body: [String: Any]) throws -> URLRequest {
                             var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
                             request.httpMethod = "POST"; request.timeoutInterval = 35
@@ -58,7 +62,9 @@ public struct ChatGPTProvider: ReplyProvider {
                             var data = Data()
                             for try await byte in bytes { if data.count < 16384 { data.append(byte) } }
                             if String(decoding: data, as: UTF8.self).lowercased().contains("reasoning") {
-                                useReasoning = false; body.removeValue(forKey: "reasoning")
+                                reasoningEfforts.removeFirst()
+                                if let next = reasoningEfforts.first { body["reasoning"] = ["effort": next] }
+                                else { useReasoning = false; body.removeValue(forKey: "reasoning") }
                                 (bytes, response) = try await session.bytes(for: request(body))
                                 guard let retried = response as? HTTPURLResponse else { throw Failure("ChatGPT returned an invalid response.") }
                                 http = retried

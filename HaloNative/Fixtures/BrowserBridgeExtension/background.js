@@ -231,7 +231,7 @@ async function handleHostMessage(msg) {
     await handleClick(msg, requestID, sessionNonce);
   } else if (msg.type === "typeText") {
     await handleType(msg, requestID, sessionNonce);
-  } else if (msg.type === "selectOption" || msg.type === "scrollTab" || msg.type === "navigateTab") {
+  } else if (msg.type === "selectOption" || msg.type === "scrollTab" || msg.type === "navigateTab" || msg.type === "mediaControl") {
     await handlePhase5B3(msg, requestID, sessionNonce);
   } else if (msg.type === "pauseTabs" || msg.type === "revokeTab") {
     nativePort.postMessage({
@@ -323,7 +323,9 @@ async function handleClick(msg, requestID, sessionNonce) {
 
     let outcome = null;
     try {
-      outcome = await pageMessage(tabID, { action: "clickOutcome" });
+      // A link or submit is replacing the document, which may never answer;
+      // navigation (or the submit signal) confirms those instead.
+      outcome = await pageMessage(tabID, { action: "clickOutcome" }, kind === "button" ? 5000 : 600);
     } catch (_) {
       outcome = null; // The click replaced the document before it could answer.
     }
@@ -457,6 +459,11 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
     return;
   }
 
+  if (msg.type === "mediaControl") {
+    await handleMedia(msg, requestID, sessionNonce, unchanged);
+    return;
+  }
+
   if (msg.type === "navigateTab") {
     let url;
     try { url = new URL(msg.url); } catch (_) { url = null; }
@@ -535,6 +542,61 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
     sendError(requestID, sessionNonce, "internalError", "Scroll failed: " + String(err && err.message));
   } finally {
     if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
+  }
+}
+
+// Media control. The content script acts through the media API; when the page
+// needs a user gesture (play blocked by autoplay rules, full screen) the
+// debugger grants one with an empty evaluation, and site keys are pressed as
+// trusted input. The debugger is attached to this tab only for that moment.
+const MEDIA_COMMANDS = ["status", "play", "pause", "toggle", "mute", "unmute", "seek", "volume", "fullscreen", "exit_fullscreen"];
+const MEDIA_KEYS = { ArrowRight: 39, ArrowLeft: 37 };
+
+async function handleMedia(msg, requestID, sessionNonce, unchanged) {
+  const target = msg.targetTab;
+  const tabID = target.tabID;
+  const media = msg.media || {};
+  if (!MEDIA_COMMANDS.includes(media.command)) {
+    sendError(requestID, sessionNonce, "payloadMalformed", "Unknown media command");
+    return;
+  }
+  const respond = (result) => nativePort.postMessage({
+    requestID: requestID, protocolVersion: 1, sessionNonce: sessionNonce, success: true,
+    actionResult: { tab: target, elementID: "el_page", performed: Boolean(result.performed), media: result.state }
+  });
+  const fail = (result, fallback) =>
+    sendError(requestID, sessionNonce, (result && result.error) || "elementChanged", (result && result.message) || fallback);
+  try {
+    const first = await pageMessage(tabID, { action: "mediaApply", command: media.command, value: media.value });
+    if (!first || first.error) { fail(first, "The media could not be controlled"); return; }
+    if (first.done) { respond(first); return; }
+    const debuggee = { tabId: tabID };
+    let attached = false;
+    try {
+      await detachStale(tabID);
+      await chrome.debugger.attach(debuggee, "1.3");
+      attached = true;
+      if (!(await unchanged())) {
+        sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before the media action");
+        return;
+      }
+      if (first.needs === "keys" && MEDIA_KEYS[first.key]) {
+        const key = { key: first.key, code: first.key, windowsVirtualKeyCode: MEDIA_KEYS[first.key] };
+        for (let i = 0; i < first.presses; i++) {
+          await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...key });
+          await chrome.debugger.sendCommand(debuggee, "Input.dispatchKeyEvent", { type: "keyUp", ...key });
+        }
+      } else {
+        await chrome.debugger.sendCommand(debuggee, "Runtime.evaluate", { expression: "0", userGesture: true });
+      }
+      const after = await pageMessage(tabID, { action: "mediaAfterGesture" });
+      if (!after || after.error) { fail(after, "The media could not be controlled"); return; }
+      respond(after);
+    } finally {
+      if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
+    }
+  } catch (err) {
+    sendError(requestID, sessionNonce, "internalError", "Media control failed: " + String(err && err.message));
   }
 }
 

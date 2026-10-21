@@ -1,5 +1,15 @@
 import AppKit
 import SwiftUI
+
+/// Test-only switches for diagnosing panel rendering stalls:
+/// launch with `--panel-off=symbol,spinner,material,shadow,gradient,resize`.
+enum PanelExperiment {
+    static let off: Set<String> = {
+        guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--panel-off=") }) else { return [] }
+        return Set(arg.dropFirst("--panel-off=".count).split(separator: ",").map(String.init))
+    }()
+    static func on(_ name: String) -> Bool { !off.contains(name) }
+}
 import Observation
 import HaloCore
 
@@ -84,14 +94,14 @@ struct ConversationView: View {
         Image(systemName: busy ? "waveform" : "circle.hexagongrid.fill")
             .font(.system(size: 16, weight: .medium))
             .foregroundStyle(ice)
-            .symbolEffect(.variableColor, options: .repeating, isActive: busy)
+            .symbolEffect(.variableColor, options: .repeating, isActive: busy && PanelExperiment.on("symbol"))
             .frame(width: 22, height: 22)
     }
 
     private var capsule: some View {
         ZStack {
-            FluidGradient(configuration: .bar)
-            Capsule().fill(.ultraThinMaterial.opacity(0.62))
+            if PanelExperiment.on("gradient") { FluidGradient(configuration: .bar) } else { Color(red: 0.42, green: 0.45, blue: 0.75) }
+            if PanelExperiment.on("material") { Capsule().fill(.ultraThinMaterial.opacity(0.62)) } else { Capsule().fill(Color.black.opacity(0.3)) }
             Button(action: expand) {
                 HStack(spacing: 10) {
                     mark
@@ -107,15 +117,15 @@ struct ConversationView: View {
         }
         .clipShape(Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .shadow(color: .black.opacity(0.18), radius: PanelExperiment.on("shadow") ? 12 : 0, y: 4)
         .accessibilityLabel("Open Halo")
         .help("Open Mercy")
     }
 
     private var expanded: some View {
         ZStack {
-            FluidGradient(configuration: .halo)
-            Rectangle().fill(.ultraThinMaterial.opacity(0.70))
+            if PanelExperiment.on("gradient") { FluidGradient(configuration: .halo) } else { Color(red: 0.42, green: 0.45, blue: 0.75) }
+            if PanelExperiment.on("material") { Rectangle().fill(.ultraThinMaterial.opacity(0.70)) } else { Rectangle().fill(Color.black.opacity(0.3)) }
             VStack(spacing: 0) {
                 header
                 conversationBody
@@ -131,7 +141,7 @@ struct ConversationView: View {
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(
             LinearGradient(colors: [.white.opacity(0.32), .white.opacity(0.06), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.7))
-        .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
+        .shadow(color: .black.opacity(0.2), radius: PanelExperiment.on("shadow") ? 20 : 0, y: 8)
         .transition(.opacity)
     }
 
@@ -140,7 +150,7 @@ struct ConversationView: View {
             VStack(alignment: .leading, spacing: 7) {
                 Button { withAnimation(.easeInOut(duration: 0.18)) { showActivity.toggle() } } label: {
                     HStack(spacing: 7) {
-                        if conversation.isResponding { ProgressView().controlSize(.mini) }
+                        if conversation.isResponding && PanelExperiment.on("spinner") { ProgressView().controlSize(.mini) }
                         Text(conversation.activity.isEmpty ? conversation.status : conversation.activity)
                             .font(.system(size: 11, weight: .medium)).lineLimit(1)
                         Spacer()

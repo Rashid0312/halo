@@ -1024,6 +1024,49 @@ extension NativeChecks {
         }
         pass("Crowded page: hidden controls skipped, on-screen controls listed first within the 200-element limit.")
 
+        // Media: the page's main video, through the media API, with a granted
+        // gesture where autoplay rules or full screen need one.
+        let noMedia = try await run("browser_media", ["tab_id": tabC, "action": "play"])
+        guard noMedia["ok"] as? Bool == false else { throw Failure("Media control succeeded on a page without media: \(noMedia)") }
+        try await openFixture("/media", title: "Halo Media Fixture")
+        func media(_ args: [String: Any]) async throws -> (result: [String: Any], state: [String: Any]) {
+            var all = args; all["tab_id"] = tabC
+            let result = try await run("browser_media", all)
+            return (result, result["media"] as? [String: Any] ?? [:])
+        }
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        approvals = []
+        let played = try await media(["action": "play"])
+        guard played.result["verified"] as? Bool == true, played.state["paused"] as? Bool == false, approvals.count == 1,
+              approvals.first?.preview.contains("Play") == true, approvals.first?.path.contains("Halo Media Fixture") == true else {
+            throw Failure("Media play failed: \(played.result) approvals=\(approvals.map(\.preview))")
+        }
+        let skipped = try await media(["action": "seek", "seconds": 20])
+        let volume = try await media(["action": "volume", "level": 0.3])
+        let muted = try await media(["action": "mute"])
+        let mediaPaused = try await media(["action": "pause"])
+        guard skipped.result["verified"] as? Bool == true, (skipped.state["position_s"] as? Int ?? 0) >= 19,
+              volume.result["verified"] as? Bool == true, volume.state["volume"] as? Double == 0.3,
+              muted.state["muted"] as? Bool == true, mediaPaused.state["paused"] as? Bool == true else {
+            throw Failure("Media seek/volume/mute/pause failed: \(skipped.result) \(volume.result) \(muted.result) \(mediaPaused.result)")
+        }
+        approvals = []
+        let status = try await media(["action": "status"])
+        decide = { tools.resolve(id: $0.id, allow: false) }
+        let deniedPlay = try await media(["action": "play"])
+        let afterDenial = try await media(["action": "status"])
+        guard status.result["ok"] as? Bool == true, approvals.count == 1, deniedPlay.result["denied"] as? Bool == true,
+              afterDenial.state["paused"] as? Bool == true else {
+            throw Failure("Media status or denial failed: \(status.result) \(deniedPlay.result) \(afterDenial.result) approvals=\(approvals.count)")
+        }
+        decide = { tools.resolve(id: $0.id, allow: true) }
+        let full = try await media(["action": "fullscreen"])
+        let windowed = try await media(["action": "exit_fullscreen"])
+        guard full.result["verified"] as? Bool == true, windowed.result["verified"] as? Bool == true else {
+            throw Failure("Media full screen failed: \(full.result) \(windowed.result)")
+        }
+        pass("Media: play past autoplay rules, seek, volume, mute, pause, and full screen on the main video, each verified by its state; status needs no approval; a denied play changes nothing; a page without media fails.")
+
         // 13. Disable: no manifest, session, socket, or helper may remain.
         let finalSession = await service.activeBridgeServer()?.directoryURL
         controller.enabled = false
@@ -1251,6 +1294,22 @@ extension NativeChecks {
             try rejects("navigation to \(url)", BridgeRequest(requestID: "n2", sessionNonce: nonce, type: .navigateTab, targetTab: tab, url: url))
         }
         try rejects("url on an observe", BridgeRequest(requestID: "n3", sessionNonce: nonce, type: .observeTab, targetTab: tab, url: "https://example.com/"))
+
+        // Media control: one command, a value only where it belongs, no element.
+        for media in [BridgeMedia(command: .pause), BridgeMedia(command: .seek, value: -10), BridgeMedia(command: .volume, value: 0.5),
+                      BridgeMedia(command: .exitFullscreen)] {
+            _ = try BridgeMessageFraming.encode(BridgeRequest(requestID: "m_ok", sessionNonce: nonce, type: .mediaControl, targetTab: tab, media: media))
+        }
+        for (label, media) in [("seek 0", BridgeMedia(command: .seek, value: 0)), ("seek 2 h", BridgeMedia(command: .seek, value: 7_200)),
+                               ("seek without seconds", BridgeMedia(command: .seek)), ("volume 1.5", BridgeMedia(command: .volume, value: 1.5)),
+                               ("play with a value", BridgeMedia(command: .play, value: 1))] {
+            try rejects("media \(label)", BridgeRequest(requestID: "m1", sessionNonce: nonce, type: .mediaControl, targetTab: tab, media: media))
+        }
+        try rejects("media without a command", BridgeRequest(requestID: "m2", sessionNonce: nonce, type: .mediaControl, targetTab: tab))
+        try rejects("media with an element", BridgeRequest(requestID: "m3", sessionNonce: nonce, type: .mediaControl, targetTab: tab,
+                                                           elementID: "el_3_ab", expectedElement: fingerprint, media: BridgeMedia(command: .play)))
+        try rejects("media on a click", BridgeRequest(requestID: "m4", sessionNonce: nonce, type: .clickElement, targetTab: tab,
+                                                      elementID: "el_3_ab", expectedElement: fingerprint, media: BridgeMedia(command: .play)))
         guard ChromeBrowserService.navigationRefusal("https://example.com/a?b=c#d") == nil,
               ["javascript:alert(1)", "file:///x", "http://u:p@h/", "ftp://h/", "nope"].allSatisfy({ ChromeBrowserService.navigationRefusal($0) != nil }) else {
             throw Failure("Navigation policy accepted an unsafe address or refused a normal one.")
