@@ -158,6 +158,10 @@ struct MacReplyProvider: ReplyProvider {
                     TimingLog.shared.mark("router: shortcut \(local == nil ? "not used" : "answered")")
                     if let answer = local {
                         continuation.yield(answer)
+                        // Recorded so test runs see the turn finish; the export skips shortcut turns.
+                        let draft = TraceRecorder.shared.begin(brain: "shortcut", instructions: "", messages: messages, tools: nil)
+                        draft?.appendText(answer)
+                        draft?.finish()
                     } else if CommandLine.arguments.contains("--check-web-answer"), let input = messages.last?.text, Conversation.looksLikeWebResearch(input) {
                         let evidence = try await research(input)
                         var enriched = messages

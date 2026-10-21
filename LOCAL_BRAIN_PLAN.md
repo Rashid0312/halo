@@ -45,7 +45,7 @@ Deterministic native code (never learned): action execution, permissions, approv
 | --- | --- | --- |
 | L0. Groundwork in Halo | Complete (2026-10-21) | One shared agent loop, tool-call validator, short scoped tool list; cloud brains still pass in the real app |
 | L1. Recorder | Complete (2026-10-21) — switch it on in Settings → Privacy → Training data | Opt-in, scrubbed traces export to training JSONL |
-| L2. Task list and test set | In progress — 87-task draft in `training/eval_tasks.json`; test hooks done; outcome checks next | Written "normal work" list, held-out websites, scoring script, ChatGPT baseline |
+| L2. Task list and test set | In progress — 87 tasks with outcome checks; `training/run_eval.py` runs and scores them; ChatGPT baseline next | Written "normal work" list, held-out websites, scoring script, ChatGPT baseline |
 | L3. Data collection | Not started | 1,000–3,000 clean examples across many websites |
 | L4. Training rounds | Not started | Pass mark met on the test set |
 | L5. Local brain in Halo | Not started | "Local" brain works in the real app on the M1 at acceptable speed and memory |

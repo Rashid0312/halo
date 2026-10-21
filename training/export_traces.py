@@ -139,8 +139,11 @@ def main():
     test_domains = [d.strip().lower() for d in args.test_domains.split(",") if d.strip()]
     override = open(args.system, encoding="utf-8").read() if args.system else None
     splits = {"train": [], "valid": [], "test": []}
-    skipped = {"error or cancelled": 0, "corrected": 0, "no tools offered": 0}
+    skipped = {"handled without the model": 0, "error or cancelled": 0, "corrected": 0, "no tools offered": 0}
     for index, trace in enumerate(traces):
+        if trace["brain"] == "shortcut":
+            skipped["handled without the model"] += 1
+            continue
         if trace["outcome"]["end"] != "answered":
             skipped["error or cancelled"] += 1
             continue
