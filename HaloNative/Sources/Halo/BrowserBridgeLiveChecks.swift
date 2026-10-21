@@ -1433,6 +1433,19 @@ extension NativeChecks {
         try refuses("two copies of one browser") { try SystemBrowserRuntime.choose(from: [chrome, chromeCopy], requested: nil, lastActive: "com.google.Chrome") }
         try refuses("requested browser not running") { try SystemBrowserRuntime.choose(from: [chrome], requested: "com.brave.Browser", lastActive: nil) }
         try refuses("no browser") { try SystemBrowserRuntime.choose(from: [finder], requested: nil, lastActive: nil) }
+        // Models often pass a browser's name instead of its bundle ID.
+        guard try SystemBrowserRuntime.choose(from: [chrome, brave], requested: "Google Chrome", lastActive: nil) == chrome,
+              try SystemBrowserRuntime.choose(from: [chrome, brave], requested: "brave", lastActive: nil) == brave,
+              ChromeBrowserService.browserBundleID(for: "Microsoft Edge") == "com.microsoft.edgemac",
+              ChromeBrowserService.browserBundleID(for: "Safari") == nil else {
+            throw Failure("Browser selection did not accept browser names.")
+        }
+        try refuses("Safari") { try SystemBrowserRuntime.choose(from: [chrome], requested: "Safari", lastActive: nil) }
+        guard BrowserToolRunner.sameSite("www.wikipedia.org", "wikipedia.org"), BrowserToolRunner.sameSite("en.wikipedia.org", "www.wikipedia.org"),
+              BrowserToolRunner.sameSite("m.youtube.com", "youtube.com"), !BrowserToolRunner.sameSite("evil-wikipedia.org", "wikipedia.org"),
+              !BrowserToolRunner.sameSite("wikipedia.org.evil.com", "wikipedia.org"), !BrowserToolRunner.sameSite("accounts.google.com", "youtube.com") else {
+            throw Failure("open_in_browser same-site matching is wrong.")
+        }
 
         guard ChromeBrowserService.bridgeCovers("http://127.0.0.1:8080/a"), ChromeBrowserService.bridgeCovers("https://www.youtube.com/"),
               ChromeBrowserService.bridgeCovers("https://example.com/x?y=1"),

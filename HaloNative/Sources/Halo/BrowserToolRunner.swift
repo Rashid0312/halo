@@ -36,12 +36,27 @@ final class BrowserToolRunner: Sendable {
     private var autoApproveBrowser: Bool { autoApprove.value }
     func setAutoApprove(_ value: Bool) { autoApprove.set(value) }
 
+    /// Whether two hosts are the same site: equal once "www." or "m." is
+    /// dropped, or one a subdomain of the other (wikipedia.org,
+    /// www.wikipedia.org, en.wikipedia.org).
+    static func sameSite(_ a: String, _ b: String) -> Bool {
+        func base(_ host: String) -> String {
+            let host = host.lowercased()
+            for prefix in ["www.", "m."] where host.hasPrefix(prefix) { return String(host.dropFirst(prefix.count)) }
+            return host
+        }
+        let a = base(a), b = base(b)
+        return a == b || a.hasSuffix("." + b) || b.hasSuffix("." + a)
+    }
+
     func execute(name: String, arguments: String) async throws -> String {
         notify(.executed(name))
         guard let data = arguments.data(using: .utf8),
-              let args = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              var args = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return Self.json(["ok": false, "error": "Invalid tool arguments"])
         }
+        // Models fill an optional browser with "" instead of leaving it out.
+        if (args["browser_app_id"] as? String)?.trimmingCharacters(in: .whitespaces).isEmpty == true { args["browser_app_id"] = nil }
         notify(.activity(Self.activities[name] ?? ""))
         defer { notify(.activity("Reviewing the result…")) }
         do {
@@ -162,17 +177,24 @@ final class BrowserToolRunner: Sendable {
                 if let refusal = ChromeBrowserService.navigationRefusal(url) { return Self.json(["ok": false, "error": refusal]) }
                 let browserAppID = args["browser_app_id"] as? String
                 let host = URLComponents(string: url)?.host?.lowercased() ?? ""
-                let existing = try await browserService.listTabs(browserAppID: browserAppID).first { $0.domain == host }
+                let existing = try await browserService.listTabs(browserAppID: browserAppID).first { Self.sameSite($0.domain, host) }
                 let approved = try await requestApproval(.browser, title: "Open this website in the browser?",
                                                          path: host, content: existing == nil ? "Open \(url) in a new tab." : "Use the open \(host) tab.")
                 try Task.checkCancellation()
                 guard approved else { return Self.json(["ok": false, "denied": true, "error": "The user declined opening this website."]) }
                 let tabID: Int
                 if let existing { tabID = existing.id } else { tabID = try await browserService.openTab(url: url, browserAppID: browserAppID) }
-                // Wait (bounded) for the tab to load before reading it.
+                // Wait (bounded) for the tab to load before reading it. Sites often
+                // redirect within themselves (wikipedia.org → www.wikipedia.org);
+                // a redirect to another site stops here rather than being read.
                 var loaded: BrowserTab?
                 for _ in 0..<40 {
-                    loaded = try await browserService.listTabs(browserAppID: browserAppID).first { $0.id == tabID && !$0.title.isEmpty && $0.domain == host }
+                    let tab = try await browserService.listTabs(browserAppID: browserAppID).first { $0.id == tabID && !$0.title.isEmpty }
+                    if let tab, !tab.domain.isEmpty, !Self.sameSite(tab.domain, host) {
+                        return Self.json(["ok": false, "tab_id": tabID,
+                                          "error": "\(host) redirected to \(tab.domain). It was not read; use read_browser_tab on this tab if that site is expected."])
+                    }
+                    loaded = tab
                     if loaded != nil { break }
                     try await Task.sleep(for: .milliseconds(250))
                 }

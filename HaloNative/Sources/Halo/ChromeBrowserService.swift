@@ -169,12 +169,12 @@ internal struct SystemBrowserRuntime: BrowserAutomationRuntime {
     ///   otherwise refuse and ask which.
     /// - Several instances of the chosen browser (separate profiles or test
     ///   copies): refuse, since AppleScript cannot address a specific instance.
-    static func choose(from running: [RunningBrowser], requested: String?, lastActive: String?) throws -> RunningBrowser {
+    static func choose(from running: [RunningBrowser], requested rawRequest: String?, lastActive: String?) throws -> RunningBrowser {
         let supported = running.filter { ChromeBrowserService.supportedBrowserBundleIDs[$0.bundleID] != nil }
         let bundleID: String
-        if let requested {
-            guard ChromeBrowserService.supportedBrowserBundleIDs[requested] != nil else {
-                throw InteractionError("Unsupported Chromium browser bundle ID '\(requested)'.")
+        if let rawRequest {
+            guard let requested = ChromeBrowserService.browserBundleID(for: rawRequest) else {
+                throw InteractionError("'\(rawRequest)' is not a supported browser. Halo's browser tools work with Google Chrome, Brave, Microsoft Edge, and Chromium; leave browser_app_id out to use the one that is open.")
             }
             guard supported.contains(where: { $0.bundleID == requested }) else {
                 throw InteractionError("The requested Chromium browser is not running.")
@@ -337,6 +337,17 @@ public actor ChromeBrowserService {
         "com.microsoft.edgemac": "Microsoft Edge",
     ]
 
+    /// A supported bundle ID for a bundle ID or a browser's name ("Google
+    /// Chrome", "chrome", "Brave"), since models often pass the name.
+    public static func browserBundleID(for raw: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespaces)
+        if supportedBrowserBundleIDs[text] != nil { return text }
+        let lower = text.lowercased()
+        if let match = supportedBrowserBundleIDs.first(where: { $0.key.lowercased() == lower || $0.value.lowercased() == lower }) { return match.key }
+        return ["chrome": "com.google.Chrome", "google chrome": "com.google.Chrome", "brave": "com.brave.Browser",
+                "edge": "com.microsoft.edgemac", "chromium": "org.chromium.Chromium"][lower]
+    }
+
     public init() {
         self.runtime = SystemBrowserRuntime()
     }
@@ -358,7 +369,8 @@ public actor ChromeBrowserService {
         authorizedTabs.keys.contains { $0.tabID == tabID }
     }
 
-    public func revoke(tabID: Int, browserAppID: String? = nil) async {
+    public func revoke(tabID: Int, browserAppID rawBrowserAppID: String? = nil) async {
+        let browserAppID = rawBrowserAppID.map { Self.browserBundleID(for: $0) ?? $0 }
         let revokedKeys = authorizedTabs.keys.filter { key in
             key.tabID == tabID && (browserAppID == nil || key.browserBundleID == browserAppID)
         }

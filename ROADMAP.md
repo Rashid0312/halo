@@ -27,7 +27,7 @@ Detailed plans:
 | 2 | Move the Electron app out of this repo; Swift build fetches its own speech libraries and models | — | Done |
 | 3 | Shared agent loop, tool-call validator, short scoped tool list | L0 | Done |
 | 4 | Recorder, opt-in and scrubbed; start recording | L1 | Done — switch on in Settings → Privacy |
-| 5 | Finish browser actions while examples accumulate; includes: `browser_app_id` needs a description (models guess "Safari"), and `open_in_browser` timed out loading Wikipedia | OpenClaw 5 | Tool freeze |
+| 5 | Finish browser actions while examples accumulate (browser-name guessing and the same-site redirect timeout fixed 2026-10-21) | OpenClaw 5 | Tool freeze |
 | 6 | Hostile-page (prompt-injection) tests | OpenClaw 5 | Local brain going live (L5) |
 | 7 | Write the "normal work" task list, pick held-out websites, score ChatGPT baseline | L2 | Training |
 | 8 | Freeze tool names and argument shapes; collect 1,000–3,000 examples | L3 | Training |
