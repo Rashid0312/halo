@@ -109,6 +109,49 @@ def front_window_frame(app):
     return x, y, w, h
 
 
+# --- cleanup ---------------------------------------------------------------------
+# Runs leave tabs, apps, and windows behind. Before a run, remember what the user
+# already had open; after each task, close only what the run opened.
+
+KEEP_RUNNING = {"Halo", "Finder", "Google Chrome", "System Events", "osascript"}
+
+
+def chrome_tab_ids():
+    if not app_running("Google Chrome"):
+        return set()
+    out = osascript('tell application "Google Chrome" to get id of every tab of every window')
+    return {v.strip() for v in out.replace("{", "").replace("}", "").split(",") if v.strip()}
+
+
+def running_app_names():
+    out = osascript('tell application "System Events" to get name of every application process whose background only is false')
+    return {n.strip() for n in out.split(",") if n.strip()}
+
+
+def snapshot():
+    return {"tabs": chrome_tab_ids(), "apps": running_app_names()}
+
+
+def cleanup(before):
+    """Close what the run opened since `before`: Chrome tabs, apps, Finder windows, TextEdit documents."""
+    for tab_id in chrome_tab_ids() - before["tabs"]:
+        try:
+            osascript('tell application "Google Chrome" to close (every tab of every window whose id is ' + tab_id + ')')
+        except Exception:
+            pass
+    for app in running_app_names() - before["apps"] - KEEP_RUNNING:
+        try:
+            if app == "TextEdit":
+                osascript('tell application "TextEdit" to close every document saving no')
+            osascript(f'tell application {quoted(app)} to quit')
+        except Exception:
+            pass
+    try:
+        osascript('tell application "Finder" to close (every Finder window whose name is "HaloEval" or name is "HaloPractice")')
+    except Exception:
+        pass
+
+
 # --- setup -----------------------------------------------------------------------
 
 def setup(task):
@@ -406,12 +449,14 @@ def run(args, tasks):
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
     trace_dir = os.path.join(OUT, stamp, "traces")
     os.makedirs(trace_dir, exist_ok=True)
+    before = snapshot()
     if not args.no_launch:
         launch(trace_dir)
     results = []
     for round_number in range(args.repeat):
         for task in tasks:
             result = run_task(task, trace_dir, args.timeout)
+            cleanup(before)
             result["round"] = round_number + 1
             results.append(result)
             print(f"{task['id']:<12} {result['result']:<12} {result['seconds']:>6} s", flush=True)

@@ -12,7 +12,9 @@ temporary folder; a recording is copied into the training folder
 forbidden tool ran, and the answer neither asks permission nor claims a
 success the checks contradict. Tasks run least-collected first, tracked in
 ~/Library/Application Support/Halo/Collect/counts.json, so repeated nights
-spread across the list. Recordings that mention a held-out exam site are
+spread across the list. After each task it closes the Chrome tabs, apps, and
+windows the run opened; what the user had open before is left alone.
+Recordings that mention a held-out exam site are
 dropped. Leave the Mac alone while it runs.
 """
 
@@ -71,11 +73,13 @@ def main():
     os.makedirs(trace_dir, exist_ok=True)
     volume = run_eval.osascript("output volume of (get volume settings)")
     kept = 0
+    opened_before = run_eval.snapshot()  # the user's own tabs and apps, never closed
     try:
         run_eval.launch(trace_dir)
         for task in tasks:
             before = len(run_eval.trace_lines(trace_dir))
             result = run_eval.run_task(task, trace_dir, args.timeout)
+            run_eval.cleanup(opened_before)
             lines = run_eval.trace_lines(trace_dir)
             good = result["passed"] and len(lines) > before and json.loads(lines[before])["brain"] != "shortcut"
             # A practice run can still pass through a held-out site (a search result,
