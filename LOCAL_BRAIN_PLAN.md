@@ -84,7 +84,7 @@ Deterministic native code (never learned): action execution, permissions, approv
 
 ## L4 — Training rounds
 
-- [ ] Set up `~/halo-train` venv with `mlx-lm`; confirm `mlx-community/Qwen3.5-4B-4bit` loads.
+- [x] `~/halo-train` venv with mlx-lm 0.32.2; `mlx-community/Qwen3.5-4B-4bit` loads and, untrained, already makes correct calls for running_apps and read_file (2026-10-21). Chat template needs `enable_thinking=False`.
 - [ ] Train: `mlx_lm.lora --train --batch-size 1 --mask-prompt --grad-checkpoint --max-seq-length 4096`.
 - [ ] Score on the test set; collect examples for failures; retrain (expect 3–5 rounds).
 - [ ] Pass mark: ≥ 90% on the normal-work list, plus a target on held-out sites set after the baseline.
@@ -94,7 +94,8 @@ Deterministic native code (never learned): action execution, permissions, approv
 ## L5 — Local brain in Halo
 
 - [ ] `MLXBackend` in-process via mlx-swift; check the Metal library builds with Halo's build scripts.
-- [ ] Reuse the model's cache between rounds of one request.
+- [ ] **Must-do: cache the fixed prompt.** Measured 2026-10-21 on the M1 with the untrained model: Halo's system prompt plus tool list is ~5,800 tokens and takes ~34 s to read before every step (prefill ~170 tokens/s; writing ~20 tokens/s; 2.5 GB peak memory). That block is identical every time, so compute it once, save it (mlx-lm prompt cache), and reuse it across steps and requests; each step then reads only the new tokens.
+- [ ] Shorter tool descriptions, trained into the model, to shrink the cached block further.
 - [ ] "Local" option in Brain settings.
 - [ ] Measure on the M1: time to first step, words per second, memory.
 - [ ] Approval gates unchanged — a small model is easier to trick with page content.

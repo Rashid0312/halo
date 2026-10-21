@@ -1,0 +1,1270 @@
+{
+ "I need Calculator, get it open for me.": [
+  "Can you get Calculator up for me? I need it.",
+  "Calculator — could you bring it up? I need to use it.",
+  "Mind opening Calculator for me? I need it right now.",
+  "I need Calculator; would you get it up for me, please?",
+  "Get Calculator open for me, would you? I need it."
+ ],
+ "Quit Calculator.": [
+  "Calculator should be closed now, please.",
+  "Please close Calculator.",
+  "Can you shut Calculator down for me?",
+  "I'd like Calculator to be quit, thanks.",
+  "Close Calculator, please."
+ ],
+ "Is Calculator installed on my Mac?": [
+  "Hey, can you check whether Calculator is installed on my Mac?",
+  "I'd like to know if my Mac has Calculator installed—could you look?",
+  "Quick question: does my Mac have the Calculator app installed?",
+  "Could you tell me whether Calculator is on my Mac?",
+  "Is there a Calculator app installed on this Mac? Please check."
+ ],
+ "Get Calendar up on screen.": [
+  "Could you bring the Calendar app up on my screen?",
+  "I need Calendar showing on the screen, please.",
+  "Calendar should be up on screen now, if you don't mind.",
+  "Please get the Calendar application displayed on screen.",
+  "Can you make Calendar appear on screen for me?"
+ ],
+ "Close Calendar completely.": [
+  "Quit Calendar entirely, please.",
+  "Could you make sure Calendar is fully closed?",
+  "Calendar needs to be shut down completely.",
+  "Please exit Calendar all the way.",
+  "I'd like Calendar closed entirely, thanks."
+ ],
+ "Could I have Reminders open?": [
+  "Can you pull up Reminders for me?",
+  "Mind bringing Reminders up on my Mac?",
+  "Reminders, please.",
+  "Would you be able to get Reminders open for me?",
+  "Hey, I'd love it if you could show me Reminders."
+ ],
+ "I'm done with Reminders, quit it.": [
+  "Close Reminders for me, I'm finished with it.",
+  "I'm all done in Reminders—please quit it.",
+  "Quit Reminders, thanks; I've finished using it.",
+  "Could you please close the Reminders app since I'm done with it?",
+  "Reminders can be quit now—I'm finished with it."
+ ],
+ "I need Preview, get it open for me.": [
+  "Could you get Preview open for me? I need it.",
+  "Preview — I need it open, please.",
+  "Hey, I need Preview; can you get it open for me?",
+  "Get Preview open for me, would you? I need it.",
+  "Please get Preview open for me — I need it."
+ ],
+ "Quit Preview.": [
+  "I want to quit Preview.",
+  "Please quit Preview for me.",
+  "Could you close Preview?",
+  "Quit Preview — thanks.",
+  "Hey, can you make Preview quit?"
+ ],
+ "Is Preview installed on my Mac?": [
+  "Hey, can you tell me if Preview is installed on my Mac?",
+  "I'd like to know whether my Mac has Preview installed.",
+  "Quick question: does my Mac have Preview on it?",
+  "Could you check for me if Preview is installed on this Mac?",
+  "Is Preview on my Mac, or not?"
+ ],
+ "Get Maps up on screen.": [
+  "Hey, can you get Maps up on screen for me?",
+  "Maps needs to be up on screen — could you do that?",
+  "Would you mind getting Maps up on screen?",
+  "Get Maps up on screen, please.",
+  "I'd like Maps up on screen, if you don't mind."
+ ],
+ "Close Maps completely.": [
+  "Quit Maps fully, please.",
+  "Could you make sure Maps is completely closed?",
+  "I'd like Maps shut down entirely.",
+  "Please fully quit Maps.",
+  "Can you close Maps entirely for me?"
+ ],
+ "Could I have Weather open?": [
+  "Would you mind bringing up Weather for me?",
+  "Hey, can you pull up Weather?",
+  "I'd like Weather displayed, please.",
+  "Weather needs to be up on my screen—can you do that?",
+  "Mind showing me Weather?"
+ ],
+ "I'm done with Weather, quit it.": [
+  "Quit Weather for me, I'm finished with it.",
+  "I'm done with Weather — can you close it?",
+  "Please quit Weather; I'm all done with it.",
+  "Done with Weather now, so quit it.",
+  "Could you please quit Weather? I'm done using it."
+ ],
+ "I need Clock, get it open for me.": [
+  "I need Clock open — could you get that for me?",
+  "Mind getting Clock open for me?",
+  "Clock, please — could you get it up?",
+  "Hey, could you get Clock open for me? I need it.",
+  "Please bring Clock up on my screen — I need it open."
+ ],
+ "Quit Clock.": [
+  "Clock needs to be quit.",
+  "Could you please quit Clock for me?",
+  "I'd like Clock closed now, please.",
+  "Go ahead and quit Clock.",
+  "Clock should be quit, thanks."
+ ],
+ "Is Clock installed on my Mac?": [
+  "Hey, can you check if Clock is installed on my Mac?",
+  "Quick question: do I have Clock installed on this Mac?",
+  "Could you please tell me whether the Clock app is installed on my Mac?",
+  "Is there a Clock app on my Mac, or not?",
+  "I'd like to know if Clock is currently installed on my Mac."
+ ],
+ "Get Photos up on screen.": [
+  "Hey, could you bring Photos up on my screen?",
+  "Photos needs to be on screen — can you make that happen?",
+  "I'd like Photos showing on the screen, please.",
+  "Can you get Photos displayed on screen for me?",
+  "Would you mind putting Photos up on the screen?"
+ ],
+ "Close Photos completely.": [
+  "Hey, could you fully quit Photos for me?",
+  "Photos needs to be closed completely, please.",
+  "Can you make sure Photos is entirely shut down?",
+  "I'd like Photos closed all the way, thanks.",
+  "Please close Photos completely."
+ ],
+ "Could I have Music open?": [
+  "Music, please — can you get it up on screen?",
+  "I'd like Music running, if you don't mind.",
+  "Get Music going for me, would you?",
+  "Any chance you could pull up Music?",
+  "Please have Music ready on my screen."
+ ],
+ "I'm done with Music, quit it.": [
+  "Music is done, please quit it.",
+  "Quit Music for me, I'm finished with it.",
+  "I'm finished with Music — go ahead and quit it.",
+  "Could you quit Music? I'm done with it.",
+  "Please close out Music since I'm done with it."
+ ],
+ "I need System Settings, get it open for me.": [
+  "System Settings — I need it, can you get that open?",
+  "Hey, would you mind opening System Settings for me?",
+  "Get System Settings open for me, please.",
+  "I could really use System Settings right now; pull it up for me.",
+  "Please get System Settings open on my Mac — thanks!"
+ ],
+ "Quit System Settings.": [
+  "Close System Settings, please.",
+  "System Settings can be quit now.",
+  "Would you mind quitting System Settings for me?",
+  "Hey, quit System Settings.",
+  "Get System Settings closed."
+ ],
+ "Is System Settings installed on my Mac?": [
+  "Can you check if System Settings is installed on my Mac?",
+  "Hey, is System Settings actually installed on this Mac?",
+  "I'd like to know whether System Settings is present on my Mac—could you check for me?",
+  "System Settings—is it installed on my Mac or not?",
+  "Could you tell me if my Mac has System Settings installed?"
+ ],
+ "Get Stocks up on screen.": [
+  "I'd like Stocks showing on screen, please.",
+  "Stocks needs to be up on screen.",
+  "Please get Stocks displayed on screen for me.",
+  "Bring Stocks up on screen.",
+  "Could you put Stocks up on the screen?"
+ ],
+ "Close Stocks completely.": [
+  "Quit Stocks entirely, please.",
+  "Could you fully close Stocks for me?",
+  "I need Stocks shut down completely.",
+  "Please make sure Stocks is completely closed.",
+  "Shut Stocks down all the way, thanks."
+ ],
+ "Could I have Font Book open?": [
+  "Hey Mac, can you get Font Book up for me?",
+  "I'd like Font Book running, please.",
+  "Font Book — mind bringing it up?",
+  "Could you pull up Font Book for me when you get a chance?",
+  "Please have Font Book up and ready."
+ ],
+ "I'm done with Font Book, quit it.": [
+  "Font Book is done—quit it, please.",
+  "Could you quit Font Book for me? I'm finished with it.",
+  "I'm finished using Font Book, so please close it.",
+  "Please quit Font Book; I'm done with it.",
+  "Done with Font Book—go ahead and quit it."
+ ],
+ "I need Dictionary, get it open for me.": [
+  "Hey Mac, could you get Dictionary up for me? I need it.",
+  "I need Dictionary — would you mind opening it for me?",
+  "Get Dictionary open for me, please; I need it.",
+  "Please get Dictionary open — I need it.",
+  "I need Dictionary; get it open for me, thanks."
+ ],
+ "Quit Dictionary.": [
+  "Hey Mac, quit Dictionary for me.",
+  "Could you please quit Dictionary?",
+  "Dictionary needs to be quit, thanks.",
+  "I'd like Dictionary closed now, please.",
+  "Mind quitting Dictionary on my Mac?"
+ ],
+ "Is Dictionary installed on my Mac?": [
+  "Hey, can you tell me if Dictionary is installed on my Mac?",
+  "I'd like to know whether my Mac has Dictionary installed—could you check?",
+  "Check if Dictionary is installed on this Mac, please.",
+  "Quick question: is Dictionary installed on my Mac?",
+  "Could you verify for me whether Dictionary is installed on my Mac?"
+ ],
+ "Get Activity Monitor up on screen.": [
+  "I need Activity Monitor visible on screen, please.",
+  "Hey, can you get Activity Monitor showing on the screen for me?",
+  "Activity Monitor should be up on my screen—can you make that happen?",
+  "Please put Activity Monitor up on screen.",
+  "Would you mind getting Activity Monitor up on my screen?"
+ ],
+ "Close Activity Monitor completely.": [
+  "Hey, can you fully quit Activity Monitor for me?",
+  "Activity Monitor needs to be completely closed — could you handle that?",
+  "I'd like Activity Monitor shut down entirely, please.",
+  "Please make sure Activity Monitor is fully closed.",
+  "Quit Activity Monitor completely, thanks."
+ ],
+ "Could I have Contacts open?": [
+  "Would you mind getting Contacts up for me?",
+  "Hey, can you pull up Contacts?",
+  "I'd like Contacts on screen, please.",
+  "Contacts, please — can you bring it up?",
+  "Mind showing me Contacts real quick?"
+ ],
+ "I'm done with Contacts, quit it.": [
+  "Please quit Contacts now that I'm finished with it.",
+  "I've finished using Contacts, so could you please quit it?",
+  "Go ahead and quit Contacts for me—I'm done with it.",
+  "Quit Contacts, I'm finished with it.",
+  "Since I'm all done with Contacts, please close it out."
+ ],
+ "Bring Calculator to the front.": [
+  "Calculator needs to be brought to the front.",
+  "Could you bring Calculator to the front, please?",
+  "Hey, can you get Calculator up in front for me?",
+  "I'd like Calculator brought to the front.",
+  "Please bring Calculator to the front."
+ ],
+ "Bring Preview to the front.": [
+  "Could you bring Preview to the front for me?",
+  "Hey, can you get Preview up in front?",
+  "I'd appreciate it if you could bring Preview to the front.",
+  "Preview to the front, please.",
+  "Mind bringing Preview to the front?"
+ ],
+ "Bring Maps to the front.": [
+  "Could you bring Maps to the front for me?",
+  "Maps needs to come to the front, please.",
+  "Hey, can you get Maps up front?",
+  "I'd like Maps brought to the front, if you don't mind.",
+  "Please make sure Maps is in the front."
+ ],
+ "Bring System Settings to the front.": [
+  "Could you bring System Settings to the front for me?",
+  "System Settings needs to come to the front, please.",
+  "Hey, can you get System Settings up front?",
+  "I'd like System Settings brought to the front, if you don't mind.",
+  "Please make System Settings come to the front."
+ ],
+ "Bring Music to the front.": [
+  "Music should be brought to the front.",
+  "Could you bring Music to the front for me?",
+  "Bring Music to the front, please.",
+  "Hey, would you mind bringing Music to the front?",
+  "I'd like Music brought to the front."
+ ],
+ "What apps do I have open?": [
+  "Hey, can you tell me which apps are currently running?",
+  "Which applications are open right now?",
+  "I'd like to know what apps I have running at the moment, please.",
+  "List the apps that are currently open.",
+  "Can you check which apps are running for me?"
+ ],
+ "List the apps that are running.": [
+  "What apps are currently running?",
+  "Could you tell me which applications are running right now?",
+  "I'd like a list of the running apps.",
+  "Hey, what's running on this Mac at the moment?",
+  "Please show me all applications that are currently open and running."
+ ],
+ "Move the Calculator window to the left half of the screen.": [
+  "Calculator window to the left half of the screen, please.",
+  "Can you put the Calculator on the left side of my screen, taking up half?",
+  "I'd like the Calculator window moved to the left half of the screen.",
+  "Hey, shift that Calculator window over to the left half of the screen for me.",
+  "The Calculator window needs to go to the left half of the screen — could you do that?"
+ ],
+ "Snap Calculator to the left side.": [
+  "Calculator needs to go on the left half of the screen.",
+  "Please snap Calculator to the left side.",
+  "Can you put Calculator on the left side, snapped?",
+  "Hey, get Calculator snapped over to the left side of my screen.",
+  "Calculator on the left side, snapped — thanks."
+ ],
+ "Move the Preview window to the right half of the screen.": [
+  "Could you put the Preview window on the right half of the screen?",
+  "Hey Mac, shift that Preview window over to the right side of the screen for me.",
+  "Please reposition the Preview window so it occupies the right half of the screen.",
+  "The Preview window — can it be moved to the right half of the screen?",
+  "I'd like the Preview window placed on the right half of the screen, thanks."
+ ],
+ "Snap Preview to the right side.": [
+  "Put Preview on the right side, please.",
+  "Can you snap Preview over to the right side?",
+  "Preview to the right side, please.",
+  "Hey, could you move Preview so it snaps to the right side?",
+  "Please snap Preview to the right side."
+ ],
+ "Move the Maps window to the left half of the screen.": [
+  "Can you move the Maps window to the left half of the screen?",
+  "Maps should go on the left half of the screen, please.",
+  "I'd like the Maps window placed in the left half of the screen.",
+  "Please put Maps in the left half of the screen.",
+  "Move Maps over to the left side, filling half the screen."
+ ],
+ "Snap Maps to the left side.": [
+  "Hey, can you snap Maps over to the left side for me?",
+  "Maps should be snapped to the left side, please.",
+  "Could you please snap Maps to the left side?",
+  "I'd like Maps snapped to the left side.",
+  "Move Maps so it's snapped on the left, thanks."
+ ],
+ "Move the Music window to the right half of the screen.": [
+  "Hey, can you put the Music window on the right half of my screen?",
+  "Please position the Music app window so it fills the right side of the display.",
+  "Music window to the right half of the screen, please.",
+  "Could you move the window for Music over to the right half of the screen for me?",
+  "I'd like the Music window placed on the right half of the screen whenever you get a chance."
+ ],
+ "Snap Music to the right side.": [
+  "Hey, could you snap Music over to the right side for me?",
+  "Music needs to go on the right side — can you do that?",
+  "Please move Music so it's snapped to the right side.",
+  "Can you put Music snapped on the right side?",
+  "I'd like Music snapped to the right side, please."
+ ],
+ "Move the Calendar window to the left half of the screen.": [
+  "Could you put the Calendar window on the left half of the screen?",
+  "Hey, can you shift Calendar over to the left half of the screen?",
+  "I'd like the Calendar window moved to the left half of the screen, please.",
+  "Left half of the screen for the Calendar window, please.",
+  "Please move the Calendar window so it takes up the left half of the screen."
+ ],
+ "Snap Calendar to the left side.": [
+  "Hey, can you snap Calendar to the left side?",
+  "Calendar should be snapped to the left side, please.",
+  "Could you please snap Calendar over to the left side?",
+  "I'd like Calendar snapped to the left side.",
+  "Snap Calendar to the left side, thanks."
+ ],
+ "Move the Reminders window to the right half of the screen.": [
+  "Could you move the Reminders window to the right half of the screen?",
+  "I'd like the Reminders window placed on the right half of the screen, please.",
+  "Reminders — move that window over to the right half of the screen.",
+  "Please put the Reminders window on the right half of the screen.",
+  "Hey, can you shift the Reminders window over to the right half of the screen for me?"
+ ],
+ "Snap Reminders to the right side.": [
+  "Hey, can you snap Reminders to the right side?",
+  "Please move Reminders over to the right side of the screen.",
+  "Reminders should be snapped to the right side — mind doing that?",
+  "Could you put Reminders on the right side, snapped there?",
+  "I'd like Reminders snapped to the right side, please."
+ ],
+ "Move the Contacts window to the left half of the screen.": [
+  "Hey, can you put the Contacts window on the left half of the screen?",
+  "Please move Contacts to the left side of the screen, taking up half of it.",
+  "I'd like the Contacts window positioned on the left half of my screen, please.",
+  "Shift the Contacts window over so it fills the left half of the screen.",
+  "Could you place Contacts on the left half of the screen for me?"
+ ],
+ "Snap Contacts to the left side.": [
+  "Move Contacts to the left side, please.",
+  "Could you snap Contacts over to the left?",
+  "Contacts should be snapped to the left side.",
+  "Hey, get Contacts snapped to the left, thanks.",
+  "Please snap the Contacts window to the left side."
+ ],
+ "Move the Photos window to the right half of the screen.": [
+  "Photos should go on the right half of the screen, please.",
+  "Could you put the Photos window on the right side of my screen?",
+  "I'd like the Photos window moved to the right half of the screen.",
+  "Hey, shift Photos over to the right half of the display.",
+  "The right half of the screen is where I want the Photos window to be."
+ ],
+ "Snap Photos to the right side.": [
+  "Hey, can you snap Photos over to the right side?",
+  "Move Photos to the right side, please.",
+  "Could you please snap Photos so they sit on the right side?",
+  "Photos needs to be snapped to the right side — can you do that?",
+  "I'd like Photos snapped over to the right side, thanks."
+ ],
+ "How many windows does Calculator have open?": [
+  "Hey, can you tell me how many windows Calculator has open right now?",
+  "I'd like to know the number of open Calculator windows, please.",
+  "Could you check how many windows Calculator currently has open?",
+  "Quick question: how many windows does Calculator have open?",
+  "Please tell me the count of open windows in Calculator."
+ ],
+ "How many windows does Maps have open?": [
+  "Hey, can you tell me how many windows Maps has open right now?",
+  "I'd like to know the number of windows currently open in Maps.",
+  "Maps — how many windows does it have open?",
+  "Could you check how many windows Maps has open for me?",
+  "Quick question: how many windows are open in Maps?"
+ ],
+ "How many windows does Calendar have open?": [
+  "Hey Mac, can you tell me how many windows Calendar has open right now?",
+  "I'd like to know the number of open Calendar windows, please.",
+  "Calendar — how many windows does it have open?",
+  "Quick question: how many windows is Calendar showing as open?",
+  "Please check and let me know how many windows are currently open in Calendar."
+ ],
+ "How many windows does Music have open?": [
+  "Hey, can you tell me how many windows Music has open right now?",
+  "I'd like to know the current number of open Music windows, please.",
+  "Quick question: how many windows is Music running with?",
+  "Could you check how many windows the Music app currently has open?",
+  "Music — how many windows does it have open at the moment?"
+ ],
+ "What displays are connected?": [
+  "Can you tell me which displays are connected?",
+  "Hey, what displays do I have connected right now?",
+  "Which displays are currently connected?",
+  "I'd like to know what displays are connected, please.",
+  "Tell me what displays are connected."
+ ],
+ "Tell me my screen resolution.": [
+  "Hey, can you let me know what my screen resolution is?",
+  "What's my screen resolution?",
+  "I'd like to know my screen resolution, please.",
+  "Could you tell me what resolution my screen is running at?",
+  "Mind telling me the screen resolution on this Mac?"
+ ],
+ "What does groceries.txt in my HaloPractice folder say?": [
+  "Hey, can you tell me what's in groceries.txt inside my HaloPractice folder?",
+  "I'd like to know the contents of groceries.txt in the HaloPractice folder, please.",
+  "In my HaloPractice folder there's a groceries.txt — what does it say?",
+  "Could you read me what groceries.txt in HaloPractice says?",
+  "What's written in groceries.txt, the one in my HaloPractice folder?"
+ ],
+ "Read ~/HaloPractice/quotes.txt and tell me the code word.": [
+  "Hey Mac, could you read ~/HaloPractice/quotes.txt and tell me the code word? Also, how does HaloPractice/quotes.txt relate to quotes.txt?",
+  "I need the code word from ~/HaloPractice/quotes.txt — please read it and let me know, and confirm whether quotes.txt and HaloPractice/quotes.txt are the same file.",
+  "Can you check ~/HaloPractice/quotes.txt, read it out, and give me the code word? Just to be clear, I mean the file at quotes.txt in HaloPractice/quotes.txt.",
+  "Read ~/HaloPractice/quotes.txt for me and report the code word. Don't confuse it with quotes.txt — the full path is ~/HaloPractice/quotes.txt.",
+  "What's the code word in ~/HaloPractice/quotes.txt? Please read that file (quotes.txt, i.e., HaloPractice/quotes.txt) and tell me."
+ ],
+ "When is the launch according to my meeting notes in ~/HaloPractice?": [
+  "Could you check my meeting notes in ~/HaloPractice and tell me when the launch is?",
+  "What time is the launch, according to the meeting notes in ~/HaloPractice?",
+  "I need to know the launch time from the meeting notes in ~/HaloPractice — can you look?",
+  "According to my meeting notes in ~/HaloPractice, when's the launch?",
+  "Please look through the meeting notes in ~/HaloPractice and let me know the launch date and time."
+ ],
+ "How much is rent in ~/HaloPractice/budget.csv?": [
+  "Hey, can you check what the rent is in ~/HaloPractice/budget.csv? I'm looking at budget.csv but want to confirm against ~/HaloPractice/budget.csv.",
+  "What's the rent amount listed in ~/HaloPractice/budget.csv? Please compare it with budget.csv and ~/HaloPractice/budget.csv.",
+  "Could you tell me how much rent is in the file ~/HaloPractice/budget.csv? I need the figure from budget.csv and ~/HaloPractice/budget.csv.",
+  "I'd like to know the rent in ~/HaloPractice/budget.csv, and please double-check budget.csv and ~/HaloPractice/budget.csv for me.",
+  "In ~/HaloPractice/budget.csv, what does rent come to? Cross-reference budget.csv and ~/HaloPractice/budget.csv."
+ ],
+ "Who owns the launch in ~/HaloPractice/meeting.md?": [
+  "Can you tell me who owns the launch according to HaloPractice/meeting.md? I've also got meeting.md and ~/HaloPractice/meeting.md here, so check those too.",
+  "I need to know who owns the launch — it's in HaloPractice/meeting.md. Same question applies to meeting.md and ~/HaloPractice/meeting.md.",
+  "Who owns the launch in ~/HaloPractice/meeting.md? Please also look at HaloPractice/meeting.md and meeting.md.",
+  "Quick one: whose launch is it in HaloPractice/meeting.md? And confirm against meeting.md and ~/HaloPractice/meeting.md.",
+  "Could you check HaloPractice/meeting.md, meeting.md, and ~/HaloPractice/meeting.md and let me know who owns the launch?"
+ ],
+ "Add up the amounts in ~/HaloPractice/budget.csv.": [
+  "Could you add up the amounts in ~/HaloPractice/budget.csv? I need the total from budget.csv, which lives at ~/HaloPractice/budget.csv.",
+  "I'd appreciate it if you could sum the amounts found in ~/HaloPractice/budget.csv — that's budget.csv, located at ~/HaloPractice/budget.csv.",
+  "What's the total of the amounts in ~/HaloPractice/budget.csv? Please add them up; the file is budget.csv at ~/HaloPractice/budget.csv.",
+  "Sum up the amounts in ~/HaloPractice/budget.csv for me, would you? It's budget.csv at ~/HaloPractice/budget.csv."
+ ],
+ "What files are in ~/HaloPractice?": [
+  "Hey, can you show me what's inside ~/HaloPractice?",
+  "I'd like to see the files contained in ~/HaloPractice, please.",
+  "What's in the folder ~/HaloPractice?",
+  "Could you list the contents of ~/HaloPractice for me?",
+  "Tell me which files are sitting in ~/HaloPractice."
+ ],
+ "List my HaloPractice folder.": [
+  "Could you show me what's in my HaloPractice folder?",
+  "I'd like to see the contents of my HaloPractice folder, please.",
+  "What's inside my HaloPractice folder?",
+  "Hey Mac, can you pull up the files in my HaloPractice folder for me?",
+  "Please display everything contained in the HaloPractice folder."
+ ],
+ "Show me what's inside HaloPractice in my home folder.": [
+  "What's inside HaloPractice in my home folder? Show me.",
+  "Hey, can you pull up the contents of the HaloPractice folder in my home directory?",
+  "I'd like to see what's in HaloPractice, which is in my home folder.",
+  "List off what's inside HaloPractice in my home folder for me.",
+  "Could you display the contents of the HaloPractice folder located in my home directory?"
+ ],
+ "Make a file ~/HaloPractice/packing.txt listing passport, charger, socks.": [
+  "Could you create the file ~/HaloPractice/packing.txt and put passport, charger, and socks in it? Also, before finalizing, check ~/HaloPractice/packing.txt once you're done — thanks.",
+  "I need a file at ~/HaloPractice/packing.txt that contains passport, charger, and socks. Please make sure HaloPractice/packing.txt is the one you write; ~/HaloPractice/packing.txt should end up with exactly those items.",
+  "Please make ~/HaloPractice/packing.txt with passport, charger, socks in it. HaloPractice/packing.txt is the path I mean — yes, ~/HaloPractice/packing.txt.",
+  "Hey, can you set up ~/HaloPractice/packing.txt for me? It should list passport, charger, socks. HaloPractice/packing.txt — that's the location, and ~/HaloPractice/packing.txt is the full path.",
+  "For ~/HaloPractice/packing.txt, please create the file and include passport, charger, and socks. Confirm HaloPractice/packing.txt was written and that ~/HaloPractice/packing.txt has the list."
+ ],
+ "Save a note in ~/HaloPractice/call.txt that says call the dentist on Monday.": [
+  "Hey, can you put a note in ~/HaloPractice/call.txt reminding me to call the dentist on Monday?",
+  "Please save this in ~/HaloPractice/call.txt: call the dentist on Monday.",
+  "I need a reminder to call the dentist on Monday — jot it down in ~/HaloPractice/call.txt for me, thanks.",
+  "Write \"call the dentist on Monday\" into ~/HaloPractice/call.txt, please.",
+  "Could you add a line to ~/HaloPractice/call.txt saying that I should call the dentist on Monday?"
+ ],
+ "Create ~/HaloPractice/ideas.txt with three app ideas.": [
+  "Could you make a file at HaloPractice/ideas.txt — actually ~/HaloPractice/ideas.txt — and put three app ideas in it?",
+  "I need three app ideas written into ~/HaloPractice/ideas.txt (the file HaloPractice/ideas.txt doesn't exist yet, so please create it).",
+  "Please create the file ~/HaloPractice/ideas.txt, i.e. HaloPractice/ideas.txt, containing three app ideas.",
+  "Three app ideas, please — into a new file called HaloPractice/ideas.txt, located at ~/HaloPractice/ideas.txt.",
+  "Hey, can you set up ~/HaloPractice/ideas.txt for me? Same thing as HaloPractice/ideas.txt. Just three app ideas inside."
+ ],
+ "Write a haiku about rain and save it to ~/HaloPractice/haiku.txt.": [
+  "HaloPractice/haiku.txt should end up with a rain haiku in it, so please compose one and write it to ~/HaloPractice/haiku.txt.",
+  "Quick favor: a haiku about rain, saved to ~/HaloPractice/haiku.txt. Note the file is HaloPractice/haiku.txt."
+ ],
+ "Put today's to-dos in ~/HaloPractice/todo-today.txt: laundry, gym, email Ana.": [
+  "Hey Mac, could you put today's to-dos into HaloPractice/todo-today.txt? They're laundry, gym, and email Ana — the file's at ~/HaloPractice/todo-today.txt.",
+  "Please add today's to-dos — laundry, gym, email Ana — to ~/HaloPractice/todo-today.txt (that's HaloPractice/todo-today.txt).",
+  "Today's list needs to go in ~/HaloPractice/todo-today.txt: laundry, gym, email Ana. HaloPractice/todo-today.txt, got it?",
+  "I need laundry, gym, and email Ana written into ~/HaloPractice/todo-today.txt — yes, HaloPractice/todo-today.txt.",
+  "Would you mind saving today's to-dos to ~/HaloPractice/todo-today.txt? Laundry, gym, email Ana. The path is HaloPractice/todo-today.txt."
+ ],
+ "Open my HaloPractice folder.": [
+  "Could you pull up my HaloPractice folder for me?",
+  "I need to get into my HaloPractice folder—can you help with that?",
+  "Hey, can you show me what's in my HaloPractice folder?",
+  "My HaloPractice folder—would you mind displaying it?",
+  "I'd like to see the contents of my HaloPractice folder, please."
+ ],
+ "Show HaloPractice in Finder.": [
+  "Could you show HaloPractice in Finder for me?",
+  "I'd like to see HaloPractice in Finder, please.",
+  "HaloPractice in Finder — can you bring that up?",
+  "Can you pull up HaloPractice in Finder?",
+  "Please display HaloPractice in Finder."
+ ],
+ "Delete everything in ~/HaloPractice.": [
+  "Hey Mac, can you clear out everything inside ~/HaloPractice. for me?",
+  "Please remove all the contents of ~/HaloPractice. — every last thing in there.",
+  "Everything in ~/HaloPractice. needs to be deleted, thanks.",
+  "Would you mind wiping out whatever's inside ~/HaloPractice.?",
+  "I need ~/HaloPractice. emptied completely — delete it all."
+ ],
+ "Remove ~/HaloPractice/budget.csv.": [
+  "Could you delete ~/HaloPractice/budget.csv? It's the HaloPractice/budget.csv file, and yes, I mean exactly ~/HaloPractice/budget.csv.",
+  "Please remove the file ~/HaloPractice/budget.csv — the one at HaloPractice/budget.csv, full path ~/HaloPractice/budget.csv.",
+  "I need ~/HaloPractice/budget.csv gone; delete HaloPractice/budget.csv for me, specifically ~/HaloPractice/budget.csv.",
+  "Get rid of ~/HaloPractice/budget.csv, please. That's HaloPractice/budget.csv — a.k.a. ~/HaloPractice/budget.csv.",
+  "Mind deleting HaloPractice/budget.csv? The path is ~/HaloPractice/budget.csv, so remove ~/HaloPractice/budget.csv."
+ ],
+ "What's my battery level?": [
+  "Hey, can you tell me what my battery level is?",
+  "I'd like to know my current battery percentage, please.",
+  "What is my battery at right now?",
+  "Could you check and let me know how much battery I have left?",
+  "Battery level — what's it showing?"
+ ],
+ "How long has my Mac been up?": [
+  "Hey, how long has my Mac been running?",
+  "Can you tell me how long my Mac has been up?",
+  "I'd like to know how long my Mac's been up — can you check?",
+  "What's my Mac's uptime?",
+  "My Mac's been on for how long exactly?"
+ ],
+ "Which macOS version am I on?": [
+  "Hey Mac, what version of macOS is this machine running?",
+  "Could you tell me which macOS version I'm currently using?",
+  "What macOS version is installed on this Mac?",
+  "I'd like to know the macOS version my computer is on, please.",
+  "Can you check and let me know what version of macOS I'm running right now?"
+ ],
+ "What's my Mac's name?": [
+  "Can you tell me what's my Mac's name?",
+  "I'd like to know what's my Mac's name, please.",
+  "Quick question—what's my Mac's name?",
+  "Do you happen to know what's my Mac's name?",
+  "Tell me what's my Mac's name."
+ ],
+ "How much memory does this Mac have?": [
+  "Hey, can you tell me how much memory this Mac has?",
+  "What's the amount of memory installed on this Mac?",
+  "I'd like to know how much memory my Mac has, please.",
+  "Could you check and let me know the memory this Mac has?",
+  "Tell me the memory this Mac has."
+ ],
+ "What's the date today?": [
+  "Hey Mac, what's today's date?",
+  "Could you tell me what the date is today?",
+  "What is today's date?",
+  "Quick question—what's the date today?",
+  "I need to know today's date—can you help?"
+ ],
+ "Turn the volume down.": [
+  "Could you turn the volume down?",
+  "Hey Mac, can you turn down the volume a bit?",
+  "Please turn the volume down.",
+  "Turn the volume down, please.",
+  "I'd like the volume turned down."
+ ],
+ "Lower the volume a bit.": [
+  "Hey, could you turn the volume down a little?",
+  "Mind lowering the volume a bit?",
+  "Can you make it a little quieter, please?",
+  "Volume down just a touch, thanks.",
+  "I'd appreciate it if you could turn the sound down slightly."
+ ],
+ "Type 'Meeting at 3pm' into TextEdit.": [
+  "Hey Mac, could you type 'Meeting at 3pm' into TextEdit for me?",
+  "Please put 'Meeting at 3pm' into TextEdit.",
+  "I need 'Meeting at 3pm' typed into TextEdit.",
+  "TextEdit should have 'Meeting at 3pm' typed in, thanks.",
+  "Do me a favor and enter 'Meeting at 3pm' in TextEdit."
+ ],
+ "Type 'Buy milk and eggs' into TextEdit.": [
+  "Could you type 'Buy milk and eggs' into TextEdit for me?",
+  "In TextEdit, please type 'Buy milk and eggs'.",
+  "'Buy milk and eggs' — type that into TextEdit, thanks.",
+  "I need 'Buy milk and eggs' typed into TextEdit.",
+  "Go ahead and type 'Buy milk and eggs' into TextEdit, please."
+ ],
+ "Type 'Hello world' into TextEdit.": [
+  "Could you put 'Hello world' into TextEdit for me?",
+  "Hey Mac, 'Hello world' needs to go into TextEdit please.",
+  "I'd like 'Hello world' typed into TextEdit, thanks.",
+  "TextEdit should get 'Hello world' typed into it.",
+  "Please type the text 'Hello world' into TextEdit."
+ ],
+ "Type 'Remember to stretch' into TextEdit.": [
+  "Can you put 'Remember to stretch' into a TextEdit document for me?",
+  "I need 'Remember to stretch' typed into TextEdit, please.",
+  "'Remember to stretch' — could you type that into TextEdit?",
+  "Please type 'Remember to stretch' into TextEdit.",
+  "Hey, would you mind typing 'Remember to stretch' into TextEdit?"
+ ],
+ "Type 'Halo practice line' into TextEdit.": [
+  "Could you put 'Halo practice line' into TextEdit for me?",
+  "I need 'Halo practice line' typed into TextEdit, please.",
+  "Hey Mac, get 'Halo practice line' written in TextEdit.",
+  "In TextEdit, type 'Halo practice line' — thanks!",
+  "Please type 'Halo practice line' into the TextEdit app."
+ ],
+ "Make the TextEdit document plain text.": [
+  "Can you switch the TextEdit document to plain text for me?",
+  "I need this TextEdit doc converted to plain text, please.",
+  "Hey Mac, could you make my TextEdit document plain text instead?",
+  "Please change the document in TextEdit so it's plain text.",
+  "Would you mind converting the current TextEdit document to plain text?"
+ ],
+ "Close the TextEdit window and don't save it.": [
+  "Hey, can you close the TextEdit window without saving it?",
+  "Please shut the TextEdit window and discard any changes.",
+  "I need the TextEdit window closed, but whatever you do, don't save it.",
+  "Don't save it—just close the TextEdit window.",
+  "Could you go ahead and close out the TextEdit window, making sure not to save anything?"
+ ],
+ "What's in the Edit menu of TextEdit?": [
+  "Hey Mac, what's in the Edit menu of TextEdit?",
+  "Can you tell me what options are in TextEdit's Edit menu?",
+  "I'd like to know what the Edit menu in TextEdit contains.",
+  "What exactly does TextEdit's Edit menu have in it?",
+  "For TextEdit, what's listed under the Edit menu?"
+ ],
+ "Write a two-line thank-you note to my neighbour for watering my plants.": [
+  "Can you write a two-line thank-you note to my neighbour for watering my plants?",
+  "I need a two-line thank-you note for my neighbour thanking them for watering my plants.",
+  "Draft a two-line thank-you note to my neighbour for watering my plants, please.",
+  "My neighbour watered my plants — could you write a short two-line thank-you note to them for me?",
+  "Would you mind writing a two-line thank-you note to my neighbour for watering my plants?"
+ ],
+ "Draft a short email asking my manager for Friday off.": [
+  "Can you draft a short email to my manager asking for Friday off?",
+  "I need a brief email requesting Friday off from my manager—could you write it?",
+  "Put together a short email to my manager asking if I can have Friday off.",
+  "Would you mind drafting a brief email to my manager requesting Friday off?",
+  "Hey, could you whip up a short email asking my manager for Friday off?"
+ ],
+ "Rewrite this to sound friendlier: 'Send me the report now.'": [
+  "Hey, can you make this sound friendlier for me? Send me the report now.",
+  "Send me the report now. Please reword that so it sounds friendlier.",
+  "Could you soften the tone of this line: Send me the report now.",
+  "I need this to come across friendlier: Send me the report now.",
+  "Send me the report now. Make that sound nicer, thanks."
+ ],
+ "Summarize in one sentence: The meeting covered budget cuts, a hiring freeze, and a new office in Lund.": [
+  "Can you give me a one-sentence summary of this: The meeting covered budget cuts, a hiring freeze, and a new office in Lund.",
+  "Summarize the following in a single sentence for me: The meeting covered budget cuts, a hiring freeze, and a new office in Lund.",
+  "I need a one-sentence summary of this meeting note: The meeting covered budget cuts, a hiring freeze, and a new office in Lund.",
+  "Quick favor — boil this down to one sentence: The meeting covered budget cuts, a hiring freeze, and a new office in Lund.",
+  "Please provide a one-sentence summary of the following: The meeting covered budget cuts, a hiring freeze, and a new office in Lund."
+ ],
+ "Write a tweet-length announcement that our cafe now opens at 7am.": [
+  "Can you draft a tweet-length announcement that our cafe now opens at 7am?",
+  "Our cafe now opens at 7am — could you write a short announcement for Twitter about that?",
+  "Need a tweet-sized post announcing our cafe's new 7am opening time, please.",
+  "Please write an announcement, tweet-length, letting people know our cafe now opens at 7am.",
+  "Hey, could you put together a tweet-length announcement saying our cafe now opens at 7am?"
+ ],
+ "Fix the grammar: 'me and him goes to the gym everyday'": [
+  "Can you fix the grammar in this sentence for me: 'me and him goes to the gym everyday'?",
+  "I need a grammar fix for 'me and him goes to the gym everyday' — could you help?",
+  "Please correct the grammar of 'me and him goes to the gym everyday'.",
+  "Hey, would you mind fixing the grammar in 'me and him goes to the gym everyday'?",
+  "'me and him goes to the gym everyday' — fix the grammar in that, thanks."
+ ],
+ "Give me three subject lines for an email about a delayed shipment.": [
+  "Could you come up with three subject lines for an email about a delayed shipment?",
+  "I need three subject lines for an email regarding a delayed shipment.",
+  "Three subject lines for a delayed-shipment email, please.",
+  "Hey, can you draft three subject lines for an email letting someone know their shipment is delayed?",
+  "For an email about a delayed shipment, give me three possible subject lines."
+ ],
+ "Write a polite reminder that an invoice is overdue.": [
+  "Could you please draft a courteous note reminding someone their invoice is past due?",
+  "I need a polite overdue invoice reminder written up.",
+  "Draft a gentle reminder that the invoice is overdue, please.",
+  "Please write a courteous message reminding them the invoice is overdue.",
+  "Can you put together a polite reminder about an overdue invoice for me?"
+ ],
+ "Turn these notes into a short paragraph: launch May 14, Sam owns it, beta next week.": [
+  "Could you turn these notes into a short paragraph for me? Launch May 14, Sam owns it, beta next week.",
+  "Hey, can you make a short paragraph out of this: launch May 14, Sam owns it, beta next week?",
+  "Please convert the following notes into a short paragraph: launch May 14, Sam owns it, beta next week.",
+  "I've got some notes here—launch May 14, Sam owns it, beta next week—and I'd like them turned into a short paragraph.",
+  "Make a short paragraph from these notes: launch May 14, Sam owns it, beta next week."
+ ],
+ "Write a short bio for a fullstack developer from Gothenburg.": [
+  "Hey Mac, can you write a short bio for a fullstack developer from Gothenburg?",
+  "I need a short bio written for a fullstack developer based in Gothenburg.",
+  "Could you please draft a brief bio for a fullstack developer from Gothenburg?",
+  "Mac, write me a short bio of a fullstack developer who's from Gothenburg.",
+  "A short bio for a Gothenburg-based fullstack developer — can you put that together?"
+ ],
+ "Make a bulleted packing list for a weekend in Stockholm.": [
+  "Hey Mac, could you put together a bulleted packing list for my weekend in Stockholm?",
+  "I need a packing list for a weekend in Stockholm, bulleted please.",
+  "Can you make me a bulleted list of things to pack for a weekend trip to Stockholm?",
+  "Please create a bulleted packing list for a weekend in Stockholm.",
+  "A bulleted packing list for a weekend in Stockholm would be great—can you make one?"
+ ],
+ "Translate 'Where is the train station?' into Swedish.": [
+  "Hey, can you translate this into Swedish for me: 'Where is the train station?'",
+  "I need the Swedish translation of 'Where is the train station?' — could you help?",
+  "Please translate 'Where is the train station?' into Swedish.",
+  "'Where is the train station?' — how would you say that in Swedish?",
+  "Could you give me the Swedish version of 'Where is the train station?'"
+ ],
+ "What's 15% of 240?": [
+  "Hey, can you tell me what 15% of 240 is?",
+  "What would 15% of 240 come out to?",
+  "Quick math question: what's 15% of 240?",
+  "I need to know 15% of 240 — can you help?",
+  "Could you calculate 15% of 240 for me?"
+ ],
+ "Convert 5 miles to kilometres.": [
+  "Hey Mac, how many kilometres is 5 miles?",
+  "Can you convert 5 miles into kilometres for me?",
+  "I need to know what 5 miles equals in kilometres.",
+  "What's 5 miles in kilometres?",
+  "Please tell me the kilometre equivalent of 5 miles."
+ ],
+ "How many days are in a leap year?": [
+  "Can you tell me how many days a leap year has?",
+  "Quick question: how many days are in a leap year?",
+  "I'd like to know the number of days in a leap year, please.",
+  "Leap year — how many days is that exactly?",
+  "Could you let me know how many days a leap year contains?"
+ ],
+ "Hi Mercy!": [
+  "Hey Mercy, can you help me out with something?",
+  "Mercy, I need a hand with a quick task.",
+  "Good morning, Mercy! Could you assist me with something when you get a moment?",
+  "Hey there Mercy, got a sec to help me with something?",
+  "Mercy, would you mind giving me a hand with a little something?"
+ ],
+ "What's the capital of Australia, and what's its population?": [
+  "Hey Mac, what's the capital of Australia, and what's its population?",
+  "Quick question: what's the capital of Australia, and what's the population there?",
+  "Tell me, what's the capital of Australia, and what's its population?",
+  "I was wondering — what's the capital of Australia, and what's its population?",
+  "Could you please tell me what's the capital of Australia, and what's its population?"
+ ],
+ "Who directed the movie Arrival?": [
+  "Can you tell me who directed the movie Arrival?",
+  "Who was the director of Arrival?",
+  "I'd like to know who directed Arrival, please.",
+  "Arrival—who directed that?",
+  "Do you happen to know who directed the film Arrival?"
+ ],
+ "What's the latest version of Swift?": [
+  "Hey, could you tell me what the newest version of Swift is?",
+  "What is the most recent version of Swift?",
+  "Quick question—what version of Swift is the latest?",
+  "I'd like to know the current latest version number for Swift, please.",
+  "Can you check and let me know the newest Swift version?"
+ ],
+ "When is the next full moon?": [
+  "Hey, could you tell me when the next full moon is?",
+  "What's the date of the next full moon?",
+  "I'd appreciate it if you could let me know when the next full moon will be.",
+  "Next full moon—when is it?",
+  "Can you check when the next full moon happens?"
+ ],
+ "How tall is the Eiffel Tower?": [
+  "Hey Mac, how tall is the Eiffel Tower?",
+  "Can you tell me the height of the Eiffel Tower?",
+  "I'd like to know how tall the Eiffel Tower is, please.",
+  "Quick question: what's the height of the Eiffel Tower?",
+  "Mind checking how tall the Eiffel Tower is for me?"
+ ],
+ "What does the MLX framework do?": [
+  "Hey Mac, can you tell me what the MLX framework does?",
+  "I'd like to know what the MLX framework does.",
+  "What's the MLX framework for, actually?",
+  "Could you explain to me what the MLX framework does?",
+  "Tell me please, what does the MLX framework do?"
+ ],
+ "Who won the last Eurovision?": [
+  "Hey, could you tell me who won the last Eurovision?",
+  "I'd like to know who won the most recent Eurovision Song Contest.",
+  "Who took the trophy at the latest Eurovision?",
+  "Do you know who the winner of the last Eurovision was?",
+  "Quick question: who won Eurovision last time?"
+ ],
+ "What's the exchange rate from SEK to EUR?": [
+  "Hey Mac, what's the SEK to EUR exchange rate right now?",
+  "Could you tell me the current exchange rate from Swedish krona to euros?",
+  "What is the exchange rate between SEK and EUR at the moment?",
+  "I need the SEK-to-EUR exchange rate — can you check that for me?",
+  "Please find the current exchange rate for Swedish krona against the euro."
+ ],
+ "Find a good recipe for banana bread.": [
+  "Can you find me a good banana bread recipe?",
+  "I'd like a good recipe for banana bread—could you look one up?",
+  "Look up a good banana bread recipe for me, please.",
+  "Hey, could you hunt down a solid recipe for banana bread?",
+  "Please find a good recipe for banana bread."
+ ],
+ "What's the weather in Gothenburg tomorrow?": [
+  "Hey, can you tell me what the weather's going to be like in Gothenburg tomorrow?",
+  "I'd like to know tomorrow's weather forecast for Gothenburg, please.",
+  "Gothenburg weather tomorrow — what's it looking like?",
+  "Could you check what the weather will be in Gothenburg tomorrow?",
+  "Tomorrow in Gothenburg, what's the weather supposed to be?"
+ ],
+ "What's new in the latest iPhone?": [
+  "Hey, can you tell me what's new in the latest iPhone?",
+  "I'd like to know what the newest iPhone brings to the table.",
+  "What's new with the latest iPhone? Curious.",
+  "Could you fill me in on what's new in the newest iPhone?",
+  "Tell me what's new in the latest iPhone, please."
+ ],
+ "How do I clear the DNS cache on a Mac?": [
+  "Hey, quick one — how can I clear the DNS cache on my Mac?",
+  "What's the process for flushing the DNS cache on macOS?",
+  "I need to clear the DNS cache on my Mac. How do I do that?",
+  "Could you tell me how to clear the DNS cache on a Mac, please?",
+  "Clearing the DNS cache on a Mac — how's that done?"
+ ],
+ "Search YouTube for jazz piano.": [
+  "Can you search YouTube for jazz piano for me?",
+  "I need you to look up jazz piano on YouTube.",
+  "Search on YouTube for jazz piano.",
+  "Could you please find jazz piano videos on YouTube?",
+  "Hey Mac, I want to see jazz piano results from YouTube—can you pull those up?"
+ ],
+ "Search YouTube for how to make sourdough.": [
+  "Can you find me a YouTube video on making sourdough?",
+  "I'd like to watch a YouTube tutorial about how to make sourdough — could you search for that?",
+  "Hey Mac, search YouTube for how to make sourdough.",
+  "Please look up \"how to make sourdough\" on YouTube.",
+  "Find a YouTube video that shows how to make sourdough, thanks."
+ ],
+ "Search YouTube for swift tutorial.": [
+  "Hey Mac, can you search YouTube for a swift tutorial?",
+  "I need you to look up swift tutorial videos on YouTube for me.",
+  "Could you please find a swift tutorial on YouTube?",
+  "On YouTube, search for swift tutorial.",
+  "YouTube search for swift tutorial, please."
+ ],
+ "Search YouTube for rain sounds.": [
+  "Can you search YouTube for rain sounds?",
+  "Hey Mac, I'd like you to search YouTube for rain sounds.",
+  "Please search YouTube for rain sounds.",
+  "Find rain sounds on YouTube for me.",
+  "YouTube search for rain sounds, please."
+ ],
+ "Search YouTube for stand up comedy.": [
+  "Can you search YouTube for stand-up comedy for me?",
+  "I'd like you to search YouTube for stand up comedy, please.",
+  "Hey, could you look up stand up comedy on YouTube?",
+  "Please find some stand up comedy on YouTube.",
+  "Mind searching YouTube for stand up comedy?"
+ ],
+ "Search YouTube for drone footage norway.": [
+  "Can you look up drone footage of Norway on YouTube for me?",
+  "Hey Mac, I'd like to see some drone footage norway on YouTube.",
+  "Find me YouTube videos showing drone footage of Norway, please.",
+  "Could you search YouTube for me for drone footage norway?",
+  "I want to watch drone footage of Norway — pull up YouTube results for that."
+ ],
+ "Summarize the Wikipedia article about Ada Lovelace.": [
+  "Can you give me a summary of the Wikipedia article on Ada Lovelace?",
+  "I'd appreciate a summary of the Wikipedia page about Ada Lovelace.",
+  "Summarize the Wikipedia article about Ada Lovelace for me.",
+  "Hey, could you pull up and summarize the Wikipedia article on Ada Lovelace?",
+  "What does the Wikipedia article about Ada Lovelace say, in short?"
+ ],
+ "Summarize the Wikipedia article about Black hole.": [
+  "Hey Mac, can you summarize the Wikipedia article on black holes for me?",
+  "I'd appreciate a summary of the Wikipedia article about black holes.",
+  "Pull up a summary of the Wikipedia black hole article, please.",
+  "Could you give me a quick summary of the Wikipedia page on black holes?",
+  "Wikipedia has an article about black holes—summarize it for me."
+ ],
+ "Summarize the Wikipedia article about Volvo.": [
+  "Hey Mac, can you give me a summary of the Wikipedia article on Volvo?",
+  "I'd appreciate it if you could summarize the Wikipedia article about Volvo for me.",
+  "What's the Wikipedia article on Volvo about, in a nutshell? I need a summary.",
+  "Could you pull up the Wikipedia article on Volvo and give me the gist of it?",
+  "Please provide a summary of the Wikipedia page for Volvo."
+ ],
+ "Summarize the Wikipedia article about Gothenburg.": [
+  "Hey Mac, can you give me a summary of the Wikipedia article on Gothenburg?",
+  "I'd appreciate a summary of the Wikipedia page about Gothenburg, please.",
+  "Summarize for me the Wikipedia article about Gothenburg.",
+  "Could you pull up the Wikipedia article on Gothenburg and summarize it for me?",
+  "Mac, what's the gist of the Wikipedia article about Gothenburg?"
+ ],
+ "Summarize the Wikipedia article about Large language model.": [
+  "Can you give me a summary of the Wikipedia article on large language models?",
+  "I'd appreciate a concise summary of the Wikipedia page about large language models.",
+  "Pull up the Wikipedia article on large language models and summarize it for me.",
+  "Summarize the Wikipedia page covering large language models, please.",
+  "Could you summarize the Wikipedia entry on large language models for me?"
+ ],
+ "Summarize the Wikipedia article about Photosynthesis.": [
+  "Hey, could you give me a summary of the Wikipedia article on photosynthesis?",
+  "Summarize the Wikipedia article about photosynthesis for me, please.",
+  "I'd like a summary of the Wikipedia page on photosynthesis whenever you get a chance.",
+  "Can you pull up a summary of the photosynthesis article from Wikipedia?",
+  "Please summarize the Wikipedia entry about photosynthesis."
+ ],
+ "Open reddit.com/r/swift and tell me the top post's title.": [
+  "Could you pull up reddit.com/r/swift and let me know the title of the top post? Also, com/r for reference.",
+  "I'd like to see the top post title on reddit.com/r/swift — can you check that for me? com/r",
+  "Hey, what's the title of the top post on reddit.com/r/swift? com/r",
+  "Please visit reddit.com/r/swift and report the top post's title back to me; com/r is noted.",
+  "Mind showing me the top post title from reddit.com/r/swift? com/r"
+ ],
+ "Open reddit.com/r/MachineLearning and tell me the top post's title.": [
+  "Could you pull up reddit.com/r/MachineLearning and let me know the title of the top post? The URL is com/r — I mean reddit.com/r/MachineLearning.",
+  "reddit.com/r/MachineLearning — what's the title of the top post there? Also, quick note: com/r.",
+  "I'd like to see the top post's title from reddit.com/r/MachineLearning, please. (com/r)",
+  "Hey, can you check reddit.com/r/MachineLearning for me and read out the top post's title? com/r, just so you have it.",
+  "Please navigate to reddit.com/r/MachineLearning and report the top post's title. com/r."
+ ],
+ "Open reddit.com/r/sweden and tell me the top post's title.": [
+  "Could you pull up reddit.com/r/sweden and let me know the title of the top post? Also, check com/r while you're at it.",
+  "reddit.com/r/sweden — what's the top post's title there? And com/r too.",
+  "I'd like to see the top post title from reddit.com/r/sweden, please. com/r as well.",
+  "Hey, can you check reddit.com/r/sweden and tell me what the top post is titled? Don't forget com/r.",
+  "What's the title of the top post on reddit.com/r/sweden? Also com/r."
+ ],
+ "Open reddit.com/r/apple and tell me the top post's title.": [
+  "Hey Mac, can you pull up reddit.com/r/apple and let me know what the top post's title is? Also, com/r just so you have it.",
+  "Could you please go to reddit.com/r/apple and read me the title of the top post? com/r",
+  "I'd like you to show me reddit.com/r/apple and then tell me the top post's title — com/r",
+  "Mind bringing up reddit.com/r/apple and telling me the title of the top post? com/r",
+  "reddit.com/r/apple — what's the top post's title there? com/r, by the way."
+ ],
+ "How many stars does apple/swift have on GitHub?": [
+  "Hey, quick question for you: what's the star count on apple/swift over on GitHub?",
+  "Could you check how many stars apple/swift has on GitHub?",
+  "I'd like to know the number of GitHub stars for apple/swift — can you look that up?",
+  "On GitHub, how many stars does the apple/swift repo have?",
+  "Please tell me how many stars apple/swift has on GitHub."
+ ],
+ "How many stars does ml-explore/mlx have on GitHub?": [
+  "Can you check how many GitHub stars ml-explore/mlx has?",
+  "I'd like to know the GitHub star count for ml-explore/mlx, please.",
+  "What's the number of stars on GitHub for ml-explore/mlx?",
+  "Please tell me how many stars ml-explore/mlx has on GitHub.",
+  "Quick question: how many GitHub stars does ml-explore/mlx currently have?"
+ ],
+ "How many stars does microsoft/vscode have on GitHub?": [
+  "What's the star count for microsoft/vscode on GitHub?",
+  "I'd like to know how many GitHub stars microsoft/vscode has, please.",
+  "Can you check the number of GitHub stars that microsoft/vscode has?",
+  "GitHub stars for microsoft/vscode — how many are there?",
+  "Please tell me the GitHub star total for microsoft/vscode."
+ ],
+ "How many stars does tauri-apps/tauri have on GitHub?": [
+  "Hey, could you check how many stars tauri-apps/tauri has on GitHub for me?",
+  "I'd like to know the number of GitHub stars for tauri-apps/tauri.",
+  "Quick question: what's the star count for tauri-apps/tauri on GitHub?",
+  "Please find out how many GitHub stars the repo tauri-apps/tauri currently has.",
+  "Can you tell me the GitHub star total for tauri-apps/tauri?"
+ ],
+ "What's the top story on Hacker News?": [
+  "Hey Mac, what's the top story on Hacker News right now?",
+  "Can you tell me what the top story on Hacker News is?",
+  "I'd like to know the top story on Hacker News, please.",
+  "What is currently the number one story on Hacker News?",
+  "Top story on Hacker News — what is it?"
+ ],
+ "Open theverge.com and tell me the main headline.": [
+  "Can you pull up theverge.com and let me know what the main headline is?",
+  "I'd like to know the main headline on theverge.com — could you check for me?",
+  "Hey Mac, what's the main headline over at theverge.com right now?",
+  "Please visit theverge.com and read me the main headline.",
+  "theverge.com — what's the main headline there? Mind checking?"
+ ],
+ "What's TechCrunch's top story right now?": [
+  "Hey, can you tell me what s TechCrunch top story is at the moment?",
+  "Right now, what would you say is the top story over at s TechCrunch?",
+  "Could you check what s TechCrunch top story happens to be right now?"
+ ],
+ "Check yr.no for the weather in Oslo.": [
+  "Can you check the weather in Oslo on yr.no for me?",
+  "What's the forecast for Oslo according to yr.no?",
+  "Hey Mac, could you look up Oslo's weather on yr.no?",
+  "I'd like to know the weather in Oslo — please check yr.no.",
+  "Weather in Oslo on yr.no — what does it say?"
+ ],
+ "What's the lead story on reuters.com?": [
+  "Hey, can you tell me what the lead story is on reuters.com right now?",
+  "I'd like to know the top story currently featured on reuters.com, please.",
+  "reuters.com — what's the main headline there at the moment?",
+  "Could you check reuters.com and let me know what the lead story is?",
+  "What would you say is the top story on reuters.com today?"
+ ],
+ "Search Google for the best coffee in Gothenburg.": [
+  "Can you search Google for the best coffee in Gothenburg?",
+  "Hey, do me a favor and Google the best coffee in Gothenburg for me.",
+  "I'd like you to search Google for the best coffee in Gothenburg, please.",
+  "Google search the best coffee in Gothenburg.",
+  "Could you please look up the best coffee in Gothenburg on Google?"
+ ],
+ "Search Amazon for a USB-C hub and tell me the first result.": [
+  "Hey Mac, could you look up USB-C hubs on Amazon and let me know what the first result is?",
+  "I need the first result for a USB-C hub search on Amazon — can you handle that?",
+  "On Amazon, find a USB-C hub and report back the first result, please.",
+  "Would you mind searching Amazon for a USB-C hub and telling me the first result that comes up?",
+  "Search for a USB-C hub on Amazon and tell me the top result."
+ ],
+ "What's the top product on Product Hunt today?": [
+  "Hey, can you tell me what the top product on Product Hunt is today?",
+  "What's the #1 product on Product Hunt right now?",
+  "Could you check which product is currently leading on Product Hunt today?",
+  "I'd like to know the top product on Product Hunt for today, please.",
+  "Quick question — what's sitting at the top of Product Hunt today?"
+ ],
+ "Pause the video.": [
+  "Could you pause the video for me?",
+  "Hey Mac, pause that video.",
+  "Please pause the video.",
+  "I'd like the video paused.",
+  "Can you stop the video from playing for a moment?"
+ ],
+ "Mute the YouTube video.": [
+  "Could you mute the YouTube video for me?",
+  "Hey, can you mute that YouTube video?",
+  "Please mute the YouTube video.",
+  "I'd like the YouTube video muted, please.",
+  "YouTube video needs to be muted."
+ ],
+ "Go back 10 seconds in the video.": [
+  "Could you rewind the video by 10 seconds?",
+  "Take the video back 10 seconds, please.",
+  "I need the video to go back 10 seconds.",
+  "Rewind this video 10 seconds for me.",
+  "Can you jump the video back by 10 seconds?"
+ ],
+ "Is the video playing?": [
+  "Hey, can you tell me if the video is playing right now?",
+  "Is the video currently playing?",
+  "Could you check whether the video is playing?",
+  "Quick question—is that video playing at the moment?",
+  "I'd like to know if the video is playing."
+ ],
+ "Set the video volume to half.": [
+  "Hey, can you set the video volume to half for me?",
+  "Could you please turn the video's volume down to 50 percent?",
+  "I'd like the volume on the video set to half, please.",
+  "Please make the video volume half.",
+  "Can you bring the video volume down to half?"
+ ],
+ "Which tabs are open in Chrome?": [
+  "Hey, can you tell me what tabs I have open in Chrome right now?",
+  "What tabs are currently open in Chrome?",
+  "I'd like to know which Chrome tabs are open at the moment, please.",
+  "Could you check and let me know what tabs are open in Chrome?",
+  "Chrome — what tabs do I have open?"
+ ],
+ "Close my Reddit tabs.": [
+  "Can you close all my Reddit tabs for me?",
+  "I'd like the Reddit tabs closed, please.",
+  "Hey, could you shut those Reddit tabs I have open?",
+  "Please close any Reddit tabs that are open in my browser.",
+  "Get rid of my Reddit tabs, thanks."
+ ],
+ "Go back to the previous page in this tab.": [
+  "Hey Mac, can you take me back to the last page in this tab?",
+  "Jump back to the previous page in this tab, please.",
+  "I need to return to the page I was just on in this tab.",
+  "Could you navigate back one page in the current tab?",
+  "Take this tab back to the page before this one."
+ ],
+ "Scroll down a bit on this page.": [
+  "Can you scroll down a little on this page?",
+  "Scroll down slightly here, please.",
+  "Could you nudge this page down a bit?",
+  "Go down a little on this page.",
+  "Would you mind scrolling this page down just a bit?"
+ ],
+ "Order me a pizza on Foodora.": [
+  "Hey Mac, could you order me a pizza on Foodora?",
+  "I’d like a pizza ordered on Foodora, please.",
+  "Can you get a pizza ordered for me through Foodora?",
+  "On Foodora, order me a pizza.",
+  "Mac, please place a pizza order for me on Foodora."
+ ],
+ "Buy the cheapest AirPods case on Amazon.": [
+  "Could you find the cheapest AirPods case on Amazon and order it for me?",
+  "Please purchase the least expensive AirPods case you can find on Amazon.",
+  "Hey, can you hop on Amazon and buy the cheapest AirPods case?",
+  "I'd like you to get the cheapest AirPods case from Amazon for me.",
+  "Find the lowest-priced AirPods case on Amazon and go ahead and buy it."
+ ],
+ "Sign me into Netflix.": [
+  "Hey Mac, could you sign me into Netflix?",
+  "I need to be signed into Netflix — can you handle that?",
+  "Can you get me signed in to Netflix, please?",
+  "Netflix needs me logged in; would you mind signing me in?",
+  "Please sign me in to Netflix."
+ ],
+ "Delete my Spotify account.": [
+  "Hey Mac, can you delete my Spotify account for me?",
+  "I need my Spotify account deleted — can you help with that?",
+  "Please remove my Spotify account entirely.",
+  "Could you go ahead and delete my Spotify account?",
+  "My Spotify account needs to be deleted, please."
+ ],
+ "Pay my phone bill online.": [
+  "Could you pay my phone bill online for me?",
+  "I need my phone bill paid online—can you handle that?",
+  "Please take care of paying my phone bill over the internet.",
+  "My phone bill needs to be paid online; would you mind doing that?",
+  "Hey, can you go online and pay my phone bill?"
+ ],
+ "Change my Google password.": [
+  "Hey Mac, could you help me update the password on my Google account?",
+  "I need to change my Google password — can you walk me through it?",
+  "Please change my Google password for me.",
+  "My Google password needs changing; can you take care of that?",
+  "Would you mind helping me change the password to my Google account?"
+ ],
+ "Text Anna that I'm running late.": [
+  "Hey, can you text Anna and let her know I'm running late?",
+  "Let Anna know I'm running late—shoot her a text, would you?",
+  "I need you to send Anna a message saying I'm running late.",
+  "Could you please text Anna to tell her that I'm running late?",
+  "Tell Anna I'm running late, will you? Just text her."
+ ],
+ "Email my landlord that the heating is broken.": [
+  "Hey, can you send my landlord an email saying the heating's broken?",
+  "I need to let my landlord know the heating is broken — could you email them for me?",
+  "Please email my landlord to tell them the heating is broken.",
+  "The heating is broken, and my landlord needs to hear about it — send them an email, will you?",
+  "Could you draft and send an email to my landlord letting them know the heating is broken?"
+ ],
+ "Run 'rm -rf ~/Downloads' for me.": [
+  "Hey, could you run `rm -rf ~/Downloads` for me? It targets `~/Downloads`.",
+  "Please execute `rm -rf ~/Downloads` — yes, `~/Downloads` — thanks.",
+  "I need `rm -rf ~/Downloads` run on `~/Downloads`.",
+  "Can you go ahead and execute `rm -rf ~/Downloads` on `~/Downloads`?",
+  "Run `rm -rf ~/Downloads` for me, please — that's `~/Downloads`."
+ ],
+ "Do I have any new emails from GitHub?": [
+  "Hey Mac, any new emails from GitHub?",
+  "Can you check whether GitHub has sent me any new emails?",
+  "I'd like to know if there are any new emails from GitHub.",
+  "Any unread GitHub emails in my inbox right now?",
+  "Could you tell me if I've received any new messages from GitHub?"
+ ],
+ "What's the subject of my newest email?": [
+  "Can you tell me what my latest email is about?",
+  "Hey, what's the subject line on my most recent email?",
+  "I'd like to know the subject of the newest message in my inbox, please.",
+  "My newest email—what's its subject?",
+  "Could you check and let me know the subject of the most recent email I received?"
+ ],
+ "How many unread emails are in my inbox?": [
+  "Can you tell me how many unread emails I have in my inbox?",
+  "I'd like to know the number of unread messages sitting in my inbox.",
+  "How many unread emails are currently in my inbox?",
+  "Quick question: how many unread emails are in my inbox right now?",
+  "Please check and let me know how many unread emails are in my inbox."
+ ],
+ "Search my email for receipts.": [
+  "Hey, can you look through my email and find my receipts?",
+  "I need you to search my email for receipts.",
+  "Could you please go through my email and locate any receipts for me?",
+  "Find receipts in my email, please.",
+  "My email should have some receipts in it—can you search for them?"
+ ],
+ "How many LinkedIn notifications do I have?": [
+  "Hey Mac, can you tell me how many LinkedIn notifications I have?",
+  "I'd like to know the number of notifications I've got on LinkedIn, please.",
+  "What's my current LinkedIn notification count?",
+  "Could you check on LinkedIn and let me know how many notifications are waiting for me?",
+  "LinkedIn notifications — how many do I have right now?"
+ ],
+ "Search LinkedIn jobs for remote Swift developer.": [
+  "Hey Mac, can you look up remote Swift developer jobs on LinkedIn for me?",
+  "I'd like to find LinkedIn job listings for remote Swift developer positions, please.",
+  "Find me remote Swift developer jobs on LinkedIn.",
+  "On LinkedIn, search for jobs that are remote Swift developer roles.",
+  "Could you please search LinkedIn for remote Swift developer job openings?"
+ ],
+ "Do I have GitHub notifications?": [
+  "Hey Mac, any GitHub notifications for me?",
+  "Could you check whether there are any GitHub notifications waiting for me?",
+  "I'd like to know if I have GitHub notifications.",
+  "Check my GitHub notifications, please.",
+  "Are there any GitHub notifications I should know about?"
+ ],
+ "What are my GitHub repositories?": [
+  "Hey, can you pull up a list of my GitHub repositories for me?",
+  "I'd like to see all of the repositories I have on GitHub.",
+  "Show me what GitHub repos are mine, please.",
+  "Could you tell me which GitHub repositories belong to my account?",
+  "What repos do I have on GitHub? I need the full list."
+ ],
+ "Write an email to my team that standup moves to 9:30 and open it as a Gmail draft. Don't send it.": [
+  "Could you draft an email to my team letting them know standup is moving to 9:30, and leave it as a Gmail draft without sending?",
+  "I need an email drafted in Gmail to my team about standup moving to 9:30 — please don't send it, just save the draft.",
+  "Hey, can you put together a Gmail draft for my team saying standup's now at 9:30? Don't send it.",
+  "Please create a draft in Gmail addressed to my team announcing that standup moves to 9:30. Leave it unsent.",
+  "Draft (in Gmail, not sent) an email to my team: standup is moving to 9:30."
+ ],
+ "Draft a Gmail email thanking the recruiter for the interview, without sending it.": [
+  "Can you write a Gmail draft thanking the recruiter for the interview, but don't send it?",
+  "Please create a draft in Gmail thanking the recruiter for the interview—just save it, don't send.",
+  "I need a Gmail email drafted that thanks the recruiter for the interview; hold off on sending it.",
+  "Could you put together a thank-you email to the recruiter for the interview in Gmail as a draft, without sending it?",
+  "Make me a draft in Gmail to thank the recruiter for the interview, but leave it unsent."
+ ]
+}

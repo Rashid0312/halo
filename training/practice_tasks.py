@@ -23,6 +23,7 @@ import random
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+VARIANTS = os.path.join(HERE, "practice_variants.json")
 PRACTICE = "~/HaloPractice"
 HELD_OUT_APPS = ["Notes", "Pages", "Numbers"]
 FILES = {
@@ -51,7 +52,8 @@ NONEMPTY = {"check": "answer_nonempty", "min": 15}
 DECLINES = {"check": "answer_declines"}
 
 
-def generate():
+def generate(variants=True):
+    """Practice tasks, plus their cached rewordings (paraphrase.py) when variants is true."""
     tasks = []
     add = tasks.append
 
@@ -210,6 +212,10 @@ def generate():
 
     for index, item in enumerate(tasks):
         item["id"] = f"p-{item['category']}-{index:03d}"
+    if variants and os.path.exists(VARIANTS):
+        cache = json.load(open(VARIANTS))
+        tasks += [dict(item, id=f"{item['id']}-v{n}", prompt=text)
+                  for item in list(tasks) for n, text in enumerate(cache.get(item["prompt"], []), 1)]
     check_rules(tasks)
     return tasks
 
