@@ -16,8 +16,14 @@ public final class TraceRecorder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var enabled = false
-    public let directory: URL
-    public init(directory: URL = TraceRecorder.defaultDirectory) { self.directory = directory }
+    private var folder: URL
+    public init(directory: URL = TraceRecorder.defaultDirectory) { folder = directory }
+
+    /// Where traces are written; tests point it at a separate folder.
+    public var directory: URL {
+        get { lock.withLock { folder } }
+        set { lock.withLock { folder = newValue } }
+    }
 
     public var isEnabled: Bool {
         get { lock.withLock { enabled } }
@@ -62,7 +68,7 @@ public final class TraceRecorder: @unchecked Sendable {
         let day = String(ISO8601DateFormatter().string(from: trace.date).prefix(10))
         let url = directory.appendingPathComponent("\(day).jsonl")
         lock.withLock {
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let handle = try? FileHandle(forWritingTo: url) {
                 defer { try? handle.close() }
                 _ = try? handle.seekToEnd()

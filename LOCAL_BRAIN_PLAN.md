@@ -19,13 +19,33 @@ teacher while building; the shipped product runs fully local.
 | Thinking | Off | Voice needs fast replies |
 | Shipping | Download on first launch (Hugging Face) | Keeps the app small and updates fast |
 
+## Design review against Incredible (2026-10-21)
+
+Reverse-engineering evidence about Incredible (Tauri/Rust/Swift, cloud LLMs) was reviewed. Its smooth behaviour comes from its tools and native checks, running on large cloud models, so it shows what good tools make possible, not what a 4B model can do. Copy its tools and safety checks, not its expectations.
+
+Adopted:
+
+- **Outcome scoring** — every test task checks the real end state with native probes (file contents, app/window state, tab address, media state, draft open and not sent), not only which tool was called. Claiming success when the probe says failure is the worst result.
+- **Fault injection** in test mode (stale IDs, timeouts, permission errors, unexpected dialogs) to produce recovery examples in bulk; natural failures are too rare.
+- **Compact observations** — one line per element, snapshot-prefixed IDs (`s7:e12`), size budget, and a diff after each action instead of a full re-read.
+- **Context gathered up front** — focused app, window, selection, Finder folder and selection, open documents (Incredible's `screen-context` / `open-folders` modules suggest the same).
+- **Held-out apps** as well as sites; element IDs shuffled at export; at most ~3% of examples per app or site.
+
+Rejected or deferred:
+
+- **Coordinate clicking** — rejected. Phase 3 removed coordinate fallbacks on purpose; unresolved targets fail closed.
+- **Merging tools into fewer, larger ones** — deferred until the ChatGPT baseline shows which tools are confused.
+- **Curriculum percentages** — a starting guess, not evidence.
+
+Deterministic native code (never learned): action execution, permissions, approvals and blocked categories, input validation, element ID issuance and stale-state checks, observation budgets and diffs, scrubbing, site policy, step limits, cancellation, and the scoring probes.
+
 ## Phase status
 
 | Phase | Status | Exit condition |
 | --- | --- | --- |
 | L0. Groundwork in Halo | Complete (2026-10-21) | One shared agent loop, tool-call validator, short scoped tool list; cloud brains still pass in the real app |
 | L1. Recorder | Complete (2026-10-21) — switch it on in Settings → Privacy → Training data | Opt-in, scrubbed traces export to training JSONL |
-| L2. Task list and test set | Not started | Written "normal work" list, held-out websites, scoring script, ChatGPT baseline |
+| L2. Task list and test set | In progress — 87-task draft in `training/eval_tasks.json`; test hooks done; outcome checks next | Written "normal work" list, held-out websites, scoring script, ChatGPT baseline |
 | L3. Data collection | Not started | 1,000–3,000 clean examples across many websites |
 | L4. Training rounds | Not started | Pass mark met on the test set |
 | L5. Local brain in Halo | Not started | "Local" brain works in the real app on the M1 at acceptable speed and memory |

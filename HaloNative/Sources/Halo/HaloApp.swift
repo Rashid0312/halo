@@ -413,6 +413,17 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         // path as typing in the panel. Off unless launched with this flag.
         if CommandLine.arguments.contains("--accept-test-prompts") {
             TimingLog.shared.startMainThreadMonitor()
+            // Test-only: how to answer approvals ("approve", "deny", or "ask" for the normal prompt).
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name("app.halo.native.dev.testApproval"),
+                                                                object: nil, queue: .main) { [weak self] note in
+                let answer = note.object as? String
+                MainActor.assumeIsolated { self?.macTools.testApprovalAnswer = answer == "approve" ? true : answer == "deny" ? false : nil }
+            }
+            // Test-only: start a fresh conversation.
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name("app.halo.native.dev.testReset"),
+                                                                object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.conversation.stop(); self?.conversation.clear() }
+            }
             DistributedNotificationCenter.default().addObserver(forName: Notification.Name("app.halo.native.dev.testPrompt"),
                                                                 object: nil, queue: .main) { [weak self] note in
                 guard let prompt = note.object as? String, !prompt.isEmpty else { return }
@@ -476,6 +487,12 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         wake.onWake = { [weak self] in self?.showPanel(focusComposer: false) }
         setHandsFree(UserDefaults.standard.object(forKey: "wakeEnabled") as? Bool ?? true)
         TraceRecorder.shared.isEnabled = UserDefaults.standard.bool(forKey: "recordTraces")
+        // Test-only: record into a separate folder so test runs never mix with training data.
+        if CommandLine.arguments.contains("--accept-test-prompts"),
+           let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--trace-dir=") }) {
+            TraceRecorder.shared.directory = URL(fileURLWithPath: String(arg.dropFirst("--trace-dir=".count)))
+            TraceRecorder.shared.isEnabled = true
+        }
         installAudioRecovery()
         if CommandLine.arguments.contains("--request-mac-controls") { macTools.ui.requestAccess() }
     }

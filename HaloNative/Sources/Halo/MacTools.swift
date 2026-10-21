@@ -482,6 +482,9 @@ final class MacTools: MacToolExecutor {
         didSet { if !Self.runningChecks { UserDefaults.standard.set(autoApproveMacUI, forKey: "autoApproveMacUI") } }
     }
 
+    /// Set only by the test harness under --accept-test-prompts.
+    var testApprovalAnswer: Bool?
+
     func requestApproval(_ category: ApprovalCategory = .alwaysAsk, title: String, path: String, content: String,
                                  imageData: Data? = nil) async throws -> Bool {
         // The user asked for this; their settings say not to ask again. The
@@ -491,6 +494,12 @@ final class MacTools: MacToolExecutor {
             activity = "\(step) — approved automatically"
             onActivity?(activity)
             return true
+        }
+        // Test-only (--accept-test-prompts): the test harness's answer.
+        if let testApprovalAnswer {
+            activity = "\(title) — \(testApprovalAnswer ? "approved" : "declined") by the test harness"
+            onActivity?(activity)
+            return testApprovalAnswer
         }
         let id = UUID()
         return try await withTaskCancellationHandler {
