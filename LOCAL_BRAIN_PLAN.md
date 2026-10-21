@@ -24,7 +24,7 @@ teacher while building; the shipped product runs fully local.
 | Phase | Status | Exit condition |
 | --- | --- | --- |
 | L0. Groundwork in Halo | Complete (2026-10-21) | One shared agent loop, tool-call validator, short scoped tool list; cloud brains still pass in the real app |
-| L1. Recorder | Not started | Opt-in, scrubbed traces export to training JSONL |
+| L1. Recorder | Complete (2026-10-21) — switch it on in Settings → Privacy → Training data | Opt-in, scrubbed traces export to training JSONL |
 | L2. Task list and test set | Not started | Written "normal work" list, held-out websites, scoring script, ChatGPT baseline |
 | L3. Data collection | Not started | 1,000–3,000 clean examples across many websites |
 | L4. Training rounds | Not started | Pass mark met on the test set |
@@ -42,11 +42,11 @@ teacher while building; the shipped product runs fully local.
 
 ## L1 — Recorder
 
-- [ ] Record each turn as a trace: user text, tools offered, every tool call and result, final answer, and outcome (tool errors, user correction, approval denied).
-- [ ] Trim tool results exactly as inference will.
-- [ ] Scrub private data (emails, file contents, page text with personal details) before writing to disk.
-- [ ] Opt-in setting, off by default; local folder only.
-- [ ] Export command: traces → `train.jsonl` / `valid.jsonl` / `test.jsonl` in mlx-lm `{"tools", "messages"}` format.
+- [x] Record each turn as a trace: user text, tools offered, every tool call and result, final answer, and outcome (tool errors, rejected calls, approval denied; user corrections are detected at export).
+- [x] Tool results are saved as the model saw them (capped at 16,000 characters); screenshots are never saved.
+- [x] Scrub emails, phone and card numbers, keys, and the user name before writing; JSON values only, so IDs and structure survive. Names and free-form personal text are not caught — traces stay local.
+- [x] Opt-in setting, off by default; `~/Library/Application Support/Halo/Traces`.
+- [x] `training/export_traces.py`: traces → `train.jsonl` / `valid.jsonl` / `test.jsonl` in mlx-lm `{"messages", "tools"}` format, one example per assistant step (mlx-lm `--mask-prompt` trains only the last message); rejected or failed calls stay as context, never as targets; `--test-domains` holds sites out for testing.
 
 ## L2 — Task list and test set
 

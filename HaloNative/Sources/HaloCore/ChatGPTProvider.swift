@@ -54,6 +54,7 @@ struct ChatGPTBackend: ModelBackend {
     typealias Failure = ChatGPTProvider.Failure
     let token: String
     let model: String
+    var name: String { "chatgpt/\(model)" }
     var actionLimitError: any Error { Failure("ChatGPT reached the action limit. Ask for the next step.") }
     var unavailableToolError: any Error { Failure("ChatGPT requested an unavailable tool.") }
 

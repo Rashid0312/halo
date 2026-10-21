@@ -91,6 +91,7 @@ public struct DeepSeekProvider: ReplyProvider {
 /// DeepSeek's chat-completions wire format, one round at a time.
 struct DeepSeekBackend: ModelBackend {
     let key: String
+    var name: String { "deepseek/deepseek-flash" }
     var actionLimitError: any Error { ProviderError.toolLimit }
     var unavailableToolError: any Error { ProviderError.invalidStream }
 

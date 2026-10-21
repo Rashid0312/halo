@@ -475,6 +475,7 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         installPanelBehavior()
         wake.onWake = { [weak self] in self?.showPanel(focusComposer: false) }
         setHandsFree(UserDefaults.standard.object(forKey: "wakeEnabled") as? Bool ?? true)
+        TraceRecorder.shared.isEnabled = UserDefaults.standard.bool(forKey: "recordTraces")
         installAudioRecovery()
         if CommandLine.arguments.contains("--request-mac-controls") { macTools.ui.requestAccess() }
     }
@@ -692,6 +693,8 @@ struct HaloSettings: View {
     @Bindable var presentation: PanelPresentation
     @Bindable var auth: ChatGPTAuth
     @Bindable var browserBridge: BrowserBridgeController
+    @AppStorage("recordTraces") private var recordTraces = false
+    @State private var traceCount = 0
 
     private enum Page: String, CaseIterable, Identifiable {
         case general = "General"
@@ -795,6 +798,17 @@ struct HaloSettings: View {
                 Text(browserBridge.status.summary).settingsNote()
                 Text("Lets Halo read and act in Chrome tabs you authorize: click, type, choose options, scroll, open addresses, submit ordinary forms, and follow links. Every action shows exactly what it will do and waits for your approval; sign-in, payments, account changes, messages, uploads, and downloads stay blocked. Halo registers its native host only while this is on and accepts only its pinned extension.")
                     .settingsNote()
+            }
+            settingsCard("Training data", icon: "tray.and.arrow.down") {
+                Toggle("Save conversations to train Halo's own model", isOn: $recordTraces)
+                    .onChange(of: recordTraces) { _, on in TraceRecorder.shared.isEnabled = on; traceCount = TraceRecorder.shared.count() }
+                Text("Off by default. When on, each request is saved on this Mac only: what you asked, the tools Mercy used and their results, and the answer. Emails, phone and card numbers, keys, and your user name are replaced before saving; names and other personal text in pages or files are not. Screenshots are never saved. Nothing is uploaded. \(traceCount) saved so far.")
+                    .settingsNote()
+                    .onAppear { traceCount = TraceRecorder.shared.count() }
+                Button("Show in Finder") {
+                    try? FileManager.default.createDirectory(at: TraceRecorder.shared.directory, withIntermediateDirectories: true)
+                    NSWorkspace.shared.activateFileViewerSelecting([TraceRecorder.shared.directory])
+                }
             }
             settingsCard("Permissions", icon: "lock.shield") {
                 permissionRow("Mac interface controls", enabled: macTools.ui.trusted)

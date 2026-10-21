@@ -27,11 +27,17 @@ public enum RoundOutcome: Sendable {
 /// One brain's wire format. A backend starts a turn per request and keeps
 /// that request's history in its own shape (e.g. ChatGPT's reasoning items).
 public protocol ModelBackend: Sendable {
+    /// Which brain and model answered, for recorded traces.
+    var name: String { get }
     func startTurn(messages: [Message], tools: Data?) throws -> any ModelTurn
     /// Thrown when the request uses up its rounds.
     var actionLimitError: any Error { get }
     /// Thrown when the model calls a tool while none are available.
     var unavailableToolError: any Error { get }
+}
+
+public extension ModelBackend {
+    var name: String { "unknown" }
 }
 
 public protocol ModelTurn: AnyObject {
@@ -48,34 +54,41 @@ public struct AgentLoop: ReplyProvider {
     static let maxInvalidRounds = 3
     let backend: any ModelBackend
     let tools: (any MacToolExecutor)?
-    public init(backend: any ModelBackend, tools: (any MacToolExecutor)?) { self.backend = backend; self.tools = tools }
+    let recorder: TraceRecorder
+    public init(backend: any ModelBackend, tools: (any MacToolExecutor)?, recorder: TraceRecorder = .shared) {
+        self.backend = backend; self.tools = tools; self.recorder = recorder
+    }
 
     public func reply(to messages: [Message]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                var draft: TraceDraft?
                 do {
                     let definitions = try await tools?.definitions(for: messages.last(where: \.isUser)?.text ?? "")
                     let validator = definitions.flatMap(ToolValidator.init(definitions:))
+                    draft = recorder.begin(brain: backend.name, instructions: DeepSeekProvider.assistantInstructions,
+                                                       messages: messages, tools: definitions)
                     let turn = try backend.startTurn(messages: messages, tools: definitions)
-                    let emit: @Sendable (String) -> Void = { continuation.yield($0) }
+                    let emit: @Sendable (String) -> Void = { [draft] in draft?.appendText($0); continuation.yield($0) }
                     let status: @Sendable (String) async -> Void = { [tools] in await tools?.reportStatus($0) }
                     var invalidRounds = 0
                     for _ in 0..<Self.maxRounds {
                         try Task.checkCancellation()
                         guard case .toolCalls(let text, let calls) = try await turn.round(emit: emit, status: status) else {
+                            draft?.finish()
                             continuation.finish(); return
                         }
                         guard let tools else { throw backend.unavailableToolError }
                         if !text.isEmpty { continuation.yield("\n\n") }
                         var outputs: [ToolOutput] = []
-                        var rejected = 0
+                        var rejected: Set<String> = []
                         for var call in calls {
                             try Task.checkCancellation()
                             if let validator {
                                 switch validator.check(name: call.name, arguments: call.arguments) {
                                 case .success(let normalized): call.arguments = normalized
                                 case .failure(let problem):
-                                    rejected += 1
+                                    rejected.insert(call.id)
                                     TimingLog.shared.mark("tool call rejected: \(call.name): \(problem.message)")
                                     outputs.append(ToolOutput(call: call, text: problem.toolResult))
                                     continue
@@ -89,12 +102,16 @@ public struct AgentLoop: ReplyProvider {
                                 outputs.append(ToolOutput(call: call, text: result))
                             }
                         }
-                        invalidRounds = rejected == calls.count ? invalidRounds + 1 : 0
+                        draft?.addStep(text: text, outputs: outputs, rejected: rejected)
+                        invalidRounds = rejected.count == calls.count ? invalidRounds + 1 : 0
                         if invalidRounds >= Self.maxInvalidRounds { throw ToolValidator.RepeatedInvalidCalls() }
                         turn.append(outputs)
                     }
                     throw backend.actionLimitError
-                } catch { continuation.finish(throwing: error) }
+                } catch {
+                    draft?.finish(error: Task.isCancelled ? CancellationError() : error)
+                    continuation.finish(throwing: error)
+                }
             }
             continuation.onTermination = { _ in task.cancel() }
         }

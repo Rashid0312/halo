@@ -201,6 +201,43 @@ func agentLoopValidatesAndRunsTools() async throws {
     precondition(limited && endless.outputs.count == AgentLoop.maxRounds)
 }
 
+func traceRecorderSavesScrubbedTurns() async throws {
+    precondition(Scrubber.scrub("mail jane.doe@example.com now") == "mail <email> now")
+    precondition(Scrubber.scrub("key sk-proj-abcdefghijklmnop1234") == "key <secret>")
+    precondition(Scrubber.scrub("card 4111 1111 1111 1111.") == "card <number>.")
+    precondition(Scrubber.scrub("call +1 415 555 0134") == "call <phone>")
+    precondition(Scrubber.scrub("/Users/abdi/Documents/a.txt") == "/Users/user/Documents/a.txt")
+    precondition(Scrubber.scrub("tab 42 of 3, 2026-10-21 12:08") == "tab 42 of 3, 2026-10-21 12:08")
+    precondition(Scrubber.scrub("call (415) 555-0134 or tab 1234567890") == "call <phone> or tab 1234567890")
+    precondition(Scrubber.scrub("order 4111111111111112 card 4111111111111111") == "order 4111111111111112 card <number>")
+    precondition(Scrubber.scrub(#"{"tab_id":1234567890,"note":"mail a@b.co","n":4111111111111111}"#) == #"{"n":4111111111111111,"note":"mail <email>","tab_id":1234567890}"#)
+
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("halo-traces-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let recorder = TraceRecorder(directory: folder)
+    let tools = RecordingTools()
+    let script = [calls([("open_app", "{}")]), calls([("open_app", #"{"name":"Notes"}"#), ("inspect_screen", "")])]
+    for try await _ in AgentLoop(backend: ScriptedBackend(script), tools: tools, recorder: recorder).reply(to: [Message(isUser: true, text: "x")]) {}
+    precondition(!FileManager.default.fileExists(atPath: folder.path), "recording while off")
+
+    recorder.isEnabled = true
+    let history = [Message(isUser: true, text: "hi"), Message(isUser: false, text: "Hello!"), Message(isUser: true, text: "open notes, then email me at jane@example.com")]
+    for try await _ in AgentLoop(backend: ScriptedBackend(script), tools: tools, recorder: recorder).reply(to: history) {}
+    precondition(recorder.count() == 1)
+    let file = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).first { $0.pathExtension == "jsonl" }!
+    let line = try String(contentsOf: file, encoding: .utf8)
+    precondition(!line.contains("aW1hZ2U=") && !line.contains("jane@example.com") && line.contains("<email>"))
+    let trace = try JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
+    let steps = trace["steps"] as! [[String: Any]]
+    let first = (steps[0]["calls"] as! [[String: Any]])[0]
+    let outcome = trace["outcome"] as! [String: Any]
+    precondition(steps.count == 2 && first["rejected"] as? Bool == true && (first["output"] as? String)?.contains("missing required name") == true)
+    precondition(outcome["end"] as? String == "answered" && outcome["rejectedCalls"] as? Int == 1 && outcome["toolErrors"] as? Int == 0)
+    precondition((trace["history"] as! [[String: Any]]).count == 2 && trace["prompt"] as? String == "open notes, then email me at <email>")
+    let blobs = try FileManager.default.contentsOfDirectory(atPath: folder.appendingPathComponent("blobs").path)
+    precondition(blobs.contains("\(trace["tools"] as! String).json") && blobs.contains("\(trace["instructions"] as! String).txt"))
+}
+
 @main
 struct CoreChecks {
     @MainActor static func main() async throws {
@@ -286,6 +323,8 @@ struct CoreChecks {
         print("PASS: browser-only requests drop Mac app-discovery and UI-control tools; Mac and mixed requests keep every tool")
         try await agentLoopValidatesAndRunsTools()
         print("PASS: tool calls are validated before running; rejected calls return the problem to the model; invalid streaks and the round limit stop the loop")
+        try await traceRecorderSavesScrubbedTurns()
+        print("PASS: the trace recorder saves nothing while off; when on it writes scrubbed turns with steps, outcomes, and deduplicated tools, without screenshots")
         blankInputDoesNotStartTurn()
         print("PASS: blank input is ignored")
         try await streamedOutputIsBatchedAndBounded()
