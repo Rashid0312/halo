@@ -41,3 +41,6 @@ HaloNative/models/
 
 # Downloaded test browsers
 .local-tools/
+
+# Python bytecode
+__pycache__/
