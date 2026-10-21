@@ -1,7 +1,0 @@
-// Usage: app-quit.jxa <app name>
-function run(argv) {
-  const app = Application(argv[0]);
-  if (!app.running()) return JSON.stringify({ ok: true, wasRunning: false });
-  app.quit();
-  return JSON.stringify({ ok: true, wasRunning: true });
-}

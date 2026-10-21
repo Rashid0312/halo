@@ -33,20 +33,11 @@ Thumbs.db
 .code-review-graph/
 .claude/
 
-# Voice sampler output
-voice-samples/
-
-# On-device models (npm run models)
-models/
-
-# Built native helpers (npm run native, or automatic on launch)
-native/touchbar/mercy-touchbar
-native/speech/mercy-speech
-
 # Native Halo build output
 HaloNative/.build/
 HaloNative/build/
 HaloNative/.native/
+HaloNative/models/
 
 # Downloaded test browsers
 .local-tools/

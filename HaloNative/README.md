@@ -2,7 +2,7 @@
 
 Native SwiftUI/AppKit shell for macOS 26+ on Apple Silicon. Includes live DeepSeek conversation, tap-to-talk on-device Apple speech recognition, system-voice replies, and cancellation. Hands-free activation supports “Mercy” and “Hey Mercy”. Native app and file actions are available. Native Accessibility-based UI and window controls are available. ChatGPT sign-in, screenshot understanding, and Calendar/Reminders-specific integrations are not connected yet.
 
-Build with the installed Command Line Tools (full Xcode is not required). The build currently reuses the pinned sherpa-onnx 1.13.8 native libraries under the legacy `node_modules` and the existing `models` directory. It copies them into the app bundle; no Node/Electron runtime is used:
+Build with the installed Command Line Tools (full Xcode is not required). The build downloads the pinned sherpa-onnx 1.13.8 native libraries into `.native` and the wake and voice-activity models into `models` (both gitignored, checksum-verified, fetched once by `scripts/fetch-deps.sh`), then copies them into the app bundle:
 
 ```sh
 cd HaloNative

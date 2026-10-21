@@ -1,9 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-# Reuse the pinned native binaries already installed for the legacy app.
-# They are bundled into Halo; neither Node nor its addon runs in the native app.
-mkdir -p .native
+# Pinned sherpa-onnx libraries and wake/VAD models, downloaded and verified once.
+bash scripts/fetch-deps.sh
 SIGN_IDENTITY="${HALO_SIGN_IDENTITY:-}"
 if [ -z "$SIGN_IDENTITY" ] && [ -f .native/signing-identity.txt ]; then
     SIGN_IDENTITY="$(cat .native/signing-identity.txt)"
@@ -17,8 +16,6 @@ if [ -z "$SIGN_IDENTITY" ]; then
     SIGN_IDENTITY="-"
     printf 'Ad-hoc development signing: privacy grants can expire after code changes. Configure a stable signing identity for daily use.\n' >&2
 fi
-cp ../node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib .native/
-cp ../node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib .native/
 swift build -c release
 # Sign outside the Desktop file-provider directory: Finder metadata can be
 # reattached there between xattr cleanup and codesign.
@@ -27,8 +24,8 @@ APP="$STAGING/Halo.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources/models"
 cp .native/*.dylib "$APP/Contents/Frameworks/"
 cp Resources/* "$APP/Contents/Resources/"
-cp -R ../models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 "$APP/Contents/Resources/models/"
-cp ../models/silero_vad.onnx "$APP/Contents/Resources/models/"
+cp -R models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 "$APP/Contents/Resources/models/"
+cp models/silero_vad.onnx "$APP/Contents/Resources/models/"
 cp .build/release/Halo "$APP/Contents/MacOS/Halo"
 if [ -f .build/release/HaloNativeHost ]; then
     cp .build/release/HaloNativeHost "$APP/Contents/MacOS/HaloNativeHost"
