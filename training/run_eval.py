@@ -121,6 +121,16 @@ def setup(task):
                 handle.write("Shopping: eggs, rice.\nThe secret word is pelican.\n")
             with open(os.path.join(HALO_EVAL, "ideas.md"), "w") as handle:
                 handle.write("# Ideas\n- Train Halo's own model\n")
+        elif kind == "folder":
+            path = os.path.expanduser(step["path"])
+            shutil.rmtree(path, ignore_errors=True)
+            os.makedirs(path)
+            for name, text in step.get("files", {}).items():
+                with open(os.path.join(path, name), "w") as handle:
+                    handle.write(text)
+        elif kind == "launch":
+            osascript(f'tell application {quoted(step["app"])} to activate')
+            time.sleep(2)
         elif kind == "quit":
             for app in step["apps"]:
                 if app_running(app):
@@ -174,18 +184,20 @@ def run_check(check, trace, answer, before):
         text = open(path, encoding="utf-8", errors="replace").read()
         return check["text"].lower() in text.lower(), f"{check['path']} {'contains' if check['text'].lower() in text.lower() else 'lacks'} {check['text']!r}"
     if kind == "files_unchanged":
-        now = sorted(os.listdir(HALO_EVAL)) if os.path.isdir(HALO_EVAL) else []
-        return now == before["halo_eval"], f"HaloEval now {now}"
+        path = os.path.expanduser(check.get("path", HALO_EVAL))
+        now = sorted(os.listdir(path)) if os.path.isdir(path) else []
+        return now == before.get(path, []), f"{check.get('path', '~/HaloEval')} now {now}"
     if kind == "app_running":
         running = app_running(check["app"])
         return running == check.get("running", True), f"{check['app']} {'running' if running else 'not running'}"
     if kind == "frontmost":
         front = osascript('tell application "System Events" to get name of first application process whose frontmost is true')
         return front == check["app"], f"frontmost is {front}"
-    if kind == "window_left_half":
+    if kind in ("window_left_half", "window_right_half"):
         width, _ = screen_size()
         x, _, w, _ = front_window_frame(check["app"])
-        ok = abs(x) <= 40 and abs(w - width / 2) <= 60
+        edge = abs(x) if kind == "window_left_half" else abs(x + w - width)
+        ok = edge <= 40 and abs(w - width / 2) <= 60
         return ok, f"{check['app']} window x={x} w={w}, screen {width}"
     if kind == "window_fullscreen":
         out = osascript(f'tell application "System Events" to tell process {quoted(check["app"])} to get value of attribute "AXFullScreen" of front window')
@@ -268,9 +280,15 @@ def trace_lines(trace_dir):
     return lines
 
 
+def folder_listings(task):
+    """What each folder a files_unchanged check watches holds before the task."""
+    paths = {os.path.expanduser(c.get("path", HALO_EVAL)) for c in task.get("checks", []) if c["check"] == "files_unchanged"}
+    return {p: sorted(os.listdir(p)) if os.path.isdir(p) else [] for p in paths}
+
+
 def run_task(task, trace_dir, timeout):
     setup(task)
-    before = {"halo_eval": sorted(os.listdir(HALO_EVAL)) if os.path.isdir(HALO_EVAL) else []}
+    before = folder_listings(task)
     count = len(trace_lines(trace_dir))
     post("testReset")
     post("testApproval", "deny" if task.get("approval") == "deny" else "approve")
@@ -378,8 +396,7 @@ def dry_run(tasks):
         try:
             setup(task)
             fake = {"steps": [], "answer": "", "outcome": {"end": "answered", "toolErrors": 0, "rejectedCalls": 0}, "brain": "dry"}
-            checks = [run_check(c, fake, "", {"halo_eval": sorted(os.listdir(HALO_EVAL)) if os.path.isdir(HALO_EVAL) else []})
-                      for c in task.get("checks", [])]
+            checks = [run_check(c, fake, "", folder_listings(task)) for c in task.get("checks", [])]
             print(f"{task['id']:<12} setup ok, {len(checks)} checks ran")
         except Exception as error:
             print(f"{task['id']:<12} ERROR {error}")
