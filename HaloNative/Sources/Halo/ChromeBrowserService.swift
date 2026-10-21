@@ -692,7 +692,7 @@ public actor ChromeBrowserService {
         switch BridgeBlockedReason(rawValue: reason) {
         case .login?: "it signs in, signs up, or handles a password or one-time code"
         case .payment?: "it may buy, pay, subscribe, or handle payment details"
-        case .account?: "it may delete, deactivate, sign out of, or change an account"
+        case .account?: "it may change your account: delete, sign out, star, follow, like, connect, or apply"
         case .message?: "it may send or publish content"
         case .upload?: "the form uploads files"
         case .download?: "it downloads a file"

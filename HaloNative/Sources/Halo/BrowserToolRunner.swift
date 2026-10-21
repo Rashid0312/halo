@@ -16,6 +16,7 @@ final class BrowserToolRunner: Sendable {
         "select_browser_option": "Preparing dropdown choice…", "scroll_browser_tab": "Preparing browser scroll…",
         "navigate_browser_tab": "Preparing navigation…", "revoke_browser_tab": "Revoking tab access…",
         "pause_browser_tabs": "Updating browser access…", "browser_media": "Controlling video or audio…",
+        "open_draft": "Opening a draft…",
     ]
 
     private let browserService: ChromeBrowserService
@@ -36,6 +37,27 @@ final class BrowserToolRunner: Sendable {
     private var autoApproveBrowser: Bool { autoApprove.value }
     func setAutoApprove(_ value: Bool) { autoApprove.set(value) }
 
+    /// The compose address that opens a pre-filled, unsent draft.
+    static func draftURL(service: String, to: String?, subject: String?, body: String) -> URL? {
+        var parts: URLComponents
+        switch service.lowercased() {
+        case "gmail":
+            parts = URLComponents(string: "https://mail.google.com/mail/")!
+            parts.queryItems = [URLQueryItem(name: "view", value: "cm"), URLQueryItem(name: "fs", value: "1")]
+                + [to.map { URLQueryItem(name: "to", value: $0) }, subject.map { URLQueryItem(name: "su", value: $0) }].compactMap { $0 }
+                + [URLQueryItem(name: "body", value: body)]
+        case "outlook":
+            parts = URLComponents(string: "https://outlook.office.com/mail/deeplink/compose")!
+            parts.queryItems = [to.map { URLQueryItem(name: "to", value: $0) }, subject.map { URLQueryItem(name: "subject", value: $0) }].compactMap { $0 }
+                + [URLQueryItem(name: "body", value: body)]
+        case "linkedin":
+            parts = URLComponents(string: "https://www.linkedin.com/feed/")!
+            parts.queryItems = [URLQueryItem(name: "shareActive", value: "true"), URLQueryItem(name: "text", value: body)]
+        default: return nil
+        }
+        return parts.url
+    }
+
     /// Whether two hosts are the same site: equal once "www." or "m." is
     /// dropped, or one a subdomain of the other (wikipedia.org,
     /// www.wikipedia.org, en.wikipedia.org).
@@ -52,11 +74,9 @@ final class BrowserToolRunner: Sendable {
     func execute(name: String, arguments: String) async throws -> String {
         notify(.executed(name))
         guard let data = arguments.data(using: .utf8),
-              var args = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let args = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return Self.json(["ok": false, "error": "Invalid tool arguments"])
         }
-        // Models fill an optional browser with "" instead of leaving it out.
-        if (args["browser_app_id"] as? String)?.trimmingCharacters(in: .whitespaces).isEmpty == true { args["browser_app_id"] = nil }
         notify(.activity(Self.activities[name] ?? ""))
         defer { notify(.activity("Reviewing the result…")) }
         do {
@@ -147,7 +167,10 @@ final class BrowserToolRunner: Sendable {
                     let remaining = try await browserService.listTabs(browserAppID: browserAppID)
                     return Self.json(["ok": true, "closed": closed.count, "remaining_tabs": remaining.map { ["id": $0.id, "title": $0.title, "domain": $0.domain] }])
                 case "switch_to", "reload", "back", "forward":
-                    guard let id = ids.first, let tab = tabs.first(where: { $0.id == id }) else {
+                    // Without a tab_id, reload/back/forward act on the active tab.
+                    var activeID: Int?
+                    if ids.isEmpty, action != "switch_to" { activeID = try await browserService.activeTab(browserAppID: browserAppID)?.id }
+                    guard let id = ids.first ?? activeID, let tab = tabs.first(where: { $0.id == id }) else {
                         return Self.json(["ok": false, "error": "Need the tab_id of an open tab."])
                     }
                     let command: ChromeBrowserService.TabCommand = action == "switch_to" ? .switchTo : action == "reload" ? .reload : action == "back" ? .back : .forward
@@ -172,6 +195,20 @@ final class BrowserToolRunner: Sendable {
                 default:
                     return Self.json(["ok": false, "error": "Unknown action \(action)."])
                 }
+            case "open_draft":
+                guard let service = args["service"] as? String, let body = args["body"] as? String,
+                      let url = Self.draftURL(service: service, to: args["to"] as? String, subject: args["subject"] as? String, body: body) else {
+                    return Self.json(["ok": false, "error": "Need service (gmail, outlook, or linkedin) and body."])
+                }
+                let browserAppID = args["browser_app_id"] as? String
+                let host = url.host ?? service
+                let approved = try await requestApproval(.browser, title: "Open a \(service) draft?", path: host,
+                                                         content: "Opens a draft with this text. Nothing is sent; you review it and send it yourself.\n\n\(body)")
+                try Task.checkCancellation()
+                guard approved else { return Self.json(["ok": false, "denied": true, "error": "The user declined opening the draft."]) }
+                let tabID = try await browserService.openTab(url: url.absoluteString, browserAppID: browserAppID)
+                return Self.json(["ok": true, "tab_id": tabID, "service": service, "sent": false,
+                                  "summary": "Opened a \(service) draft in a new tab. Nothing was sent; the user reviews and sends it."])
             case "open_in_browser":
                 guard let url = args["url"] as? String else { return Self.json(["ok": false, "error": "Need an http(s) url."]) }
                 if let refusal = ChromeBrowserService.navigationRefusal(url) { return Self.json(["ok": false, "error": refusal]) }
@@ -183,7 +220,11 @@ final class BrowserToolRunner: Sendable {
                 try Task.checkCancellation()
                 guard approved else { return Self.json(["ok": false, "denied": true, "error": "The user declined opening this website."]) }
                 let tabID: Int
-                if let existing { tabID = existing.id } else { tabID = try await browserService.openTab(url: url, browserAppID: browserAppID) }
+                if let existing {
+                    // Reusing a tab must still show it, as opening a new one would.
+                    tabID = existing.id
+                    try? await browserService.tabCommand(.switchTo, id: tabID, browserAppID: browserAppID)
+                } else { tabID = try await browserService.openTab(url: url, browserAppID: browserAppID) }
                 // Wait (bounded) for the tab to load before reading it. Sites often
                 // redirect within themselves (wikipedia.org → www.wikipedia.org);
                 // a redirect to another site stops here rather than being read.

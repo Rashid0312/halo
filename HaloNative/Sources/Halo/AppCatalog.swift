@@ -37,7 +37,8 @@ final class AppCatalog {
         var found: [String: InstalledApp] = [:]
         func add(_ url: URL) {
             guard let bundle = Bundle(url: url), let id = bundle.bundleIdentifier,
-                  bundle.object(forInfoDictionaryKey: "CFBundlePackageType") as? String == "APPL" else { return }
+                  // Finder's package type is FNDR, not APPL.
+                  ["APPL", "FNDR"].contains(bundle.object(forInfoDictionaryKey: "CFBundlePackageType") as? String ?? "") else { return }
             let filename = url.deletingPathExtension().lastPathComponent
             let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
                 ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? filename

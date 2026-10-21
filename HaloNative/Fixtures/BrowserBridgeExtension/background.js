@@ -333,11 +333,11 @@ async function handleClick(msg, requestID, sessionNonce) {
       sendError(requestID, sessionNonce, "elementChanged", "The click did not land on the approved element and was blocked");
       return;
     }
-    // Links and submissions navigate. Wait (bounded) for the new document so
-    // Halo receives the navigation event before this result.
+    // Links and submissions navigate. Wait (bounded, up to 5 s for a slow
+    // page) for the new document so Halo receives the navigation event before this result.
     let navigated = false;
     if (kind === "link" || kind === "submit") {
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 100; i++) {
         if (tabGenerations.get(tabID) !== target.documentGenerationID) { navigated = true; break; }
         await new Promise((resolve) => setTimeout(resolve, 50));
       }

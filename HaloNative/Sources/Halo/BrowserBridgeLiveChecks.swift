@@ -906,11 +906,14 @@ extension NativeChecks {
         _ = try await readUntil("forms fixture read", id: tabC) { $0.title == "Halo Forms Fixture" }
 
         map = try await elements()
-        let expectedKinds = ["Search": "submit", "Page B": "link", "Other site": "link"]
+        let expectedKinds = ["Search": "submit", "Page B": "link", "Other site": "link", "Videos you might like": "link"]
         let expectedBlocked = ["Continue": "password", "Continue to review": "payment", "Send": "send or publish",
                                "Upload": "uploads", "Next step": "different website", "Delete account": "account",
                                "Buy now": "payment", "Open in new tab": "new tab", "Download report": "downloads",
-                               "Email us": "not a web link", "Sign out": "account"]
+                               "Email us": "not a web link", "Sign out": "account",
+                               // One-click account changes: a labelled star form, an unlabelled POST
+                               // form with no visible fields, and social buttons.
+                               "Star this repository": "account", "Toggle": "account", "Follow": "account", "Connect": "account"]
         for (label, kind) in expectedKinds where !(map[label]?["clickable"] as? Bool == true && map[label]?["click_kind"] as? String == kind) {
             throw Failure("'\(label)' should be a clickable \(kind); got \(String(describing: map[label])).")
         }

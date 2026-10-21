@@ -767,6 +767,10 @@ enum NativeChecks {
                 <form><input type="file" aria-label="Attachment"><button type="submit">Upload</button></form>
                 <form action="https://example.com/collect"><label for="nm">Name</label><input id="nm"><button type="submit">Next step</button></form>
                 <button type="button">Delete account</button><button type="button">Buy now</button>
+                <form action="/forms/star" method="post"><input type="hidden" name="token" value="t"><button type="submit">Star this repository</button></form>
+                <form action="/forms/toggle" method="post"><input type="hidden" name="token" value="t"><button type="submit">Toggle</button></form>
+                <button type="button">Follow</button> <button type="button">Connect</button>
+                <a href="/page-b">Videos you might like</a>
                 <a href="/page-b">Page B</a> <a href="/page-b" target="_blank">Open in new tab</a>
                 <a href="/report.zip">Download report</a> <a href="mailto:team@example.com">Email us</a>
                 <a href="/logout">Sign out</a> <a id="ext" href="/">Other site</a>

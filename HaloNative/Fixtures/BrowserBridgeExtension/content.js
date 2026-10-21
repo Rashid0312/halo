@@ -77,6 +77,10 @@
   const ACCOUNT_WORDS = /\b(delete|deactivate|close (my |your )?account|remove (my |your )?account|unsubscribe|cancel (my |your )?(subscription|membership)|change (email|password)|reset password|log ?out|sign ?out)\b/i;
   const LOGIN_WORDS = /\b(log ?in|sign ?in|sign ?up|register|create account|verify)\b/i;
   const MESSAGE_WORDS = /\b(send|post|reply|comment|publish|share|tweet|message)\b/i;
+  // One-click account changes on buttons and forms (GitHub Star, LinkedIn
+  // Connect, YouTube Like). Anchored to the start of the label so ordinary
+  // links such as "Videos you might like" stay clickable.
+  const SOCIAL_WORDS = /^\s*(un)?(star|follow|like|dislike|upvote|downvote|vote|fork|watch|connect|join|repost|retweet|bookmark|favou?rite|save|pin|endorse|apply|easy apply|accept|invite|block|report|mute)\b/i;
   const FILE_EXTENSION = /\.(zip|dmg|pkg|exe|msi|iso|tar|gz|tgz|7z|rar|apk|deb|rpm|csv|xlsx?|docx?|pptx?|pdf)$/i;
 
   function sensitiveWords(label) {
@@ -121,6 +125,7 @@
           SENSITIVE_HINT.test([f.getAttribute("name"), f.id, f.getAttribute("aria-label")].join(" ")))) return { reason: "payment" };
       const words = sensitiveWords(info.label);
       if (words) return { reason: words };
+      if (SOCIAL_WORDS.test(info.label)) return { reason: "account" };
       if (fields.some((f) => (f.tagName || "").toLowerCase() === "textarea")) return { reason: "message" };
       let action = null;
       // A submitter's formAction/formMethod properties return the document URL
@@ -131,6 +136,10 @@
       if (!action || action.origin !== location.origin) return { reason: "crossSiteForm" };
       const method = (el.hasAttribute("formmethod") ? el.getAttribute("formmethod") : form.getAttribute("method")) || "get";
       if (method.toLowerCase() === "dialog") return { reason: "other" };
+      // A POST form with nothing visible to fill in only changes state on the
+      // account (star, follow, like, delete); searches and filters use GET.
+      const visibleFields = fields.filter((f) => !["hidden", "submit", "button", "image", "reset"].includes((f.type || "").toLowerCase()));
+      if (method.toLowerCase() === "post" && visibleFields.length === 0) return { reason: "account" };
       const formFields = fields.filter((f) => {
         const t = (f.type || "").toLowerCase();
         return ["input", "select", "textarea"].includes((f.tagName || "").toLowerCase()) &&
@@ -153,6 +162,7 @@
     if (!isPlainButton && !isRoleButton) return {};
     const words = sensitiveWords(info.label);
     if (words) return { reason: words };
+    if (SOCIAL_WORDS.test(info.label)) return { reason: "account" };
     return { kind: "button" };
   }
 
@@ -394,7 +404,8 @@
     const pending = pendingScroll;
     pendingScroll = null;
     if (!pending) return { moved: false };
-    for (let i = 0; i < 30; i++) {
+    // Up to 2 s: smooth scrolling on a busy Mac can start late. Returns as soon as it moves.
+    for (let i = 0; i < 100; i++) {
       const now = scrollPosition(pending.el);
       if (now[0] !== pending.before[0] || now[1] !== pending.before[1]) return { moved: true };
       await new Promise((resolve) => setTimeout(resolve, 20));

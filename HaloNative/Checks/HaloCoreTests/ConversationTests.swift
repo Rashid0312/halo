@@ -171,6 +171,11 @@ func agentLoopValidatesAndRunsTools() async throws {
     precondition(blank == "{}")
     _ = try validator.check(name: "browser_media", arguments: #"{"action":"pause","tab_id":3.0,"seconds":1.5,"muted":true}"#).get()
     _ = try validator.check(name: "browser_media", arguments: #"{"action":"pause","tab_id":null}"#).get()
+    // Placeholder optional arguments are dropped; required ones are kept even if empty.
+    let cleaned = try validator.check(name: "browser_media", arguments: #"{"action":"pause","tab_id":0,"seconds":0}"#).get()
+    precondition(cleaned == #"{"action":"pause","seconds":0}"#, cleaned)
+    let kept = try validator.check(name: "open_app", arguments: #"{"name":""}"#).get()
+    precondition(kept == #"{"name":""}"#, kept)
     for (name, arguments, expected) in [
         ("launch_app", "{}", "no tool named"), ("open_app", "{}", "missing required name"), ("open_app", "{name:", "not valid JSON"),
         ("open_app", #"{"name":3}"#, "must be a string"), ("open_app", #"{"name":"Notes","x":1}"#, "unknown argument x"),

@@ -1,5 +1,5 @@
 {
-  "about": "Halo's 'normal work' test set (L2). Run with training/run_eval.py. Each task sets up its starting state, then passes only when every outcome check passes (the real state of files, apps, windows and Chrome tabs, or the answer) and no avoid_tools was used. expect_tools is reported, not required. approval: how the harness answers Halo's approval prompts. held_out_site: never allowed in training data. Gmail, LinkedIn and GitHub tasks read the signed-in accounts; results stay outside the repo. Answers on live pages change daily, so those tasks check the page reached and that an answer was given.",
+  "about": "Halo's 'normal work' test set (L2). Run with training/run_eval.py. Each task sets up its starting state, then passes only when every outcome check passes (the real state of files, apps, windows and Chrome tabs, or the answer) and no avoid_tools was used. expect_tools is reported, not required. approval: how the harness answers Halo's approval prompts. held_out_site: never allowed in training data. Gmail, LinkedIn and GitHub tasks read the signed-in accounts; results stay outside the repo. Answers on live pages change daily, so those tasks check the page reached and that an answer was given. No task may post to LinkedIn or any social account (removed write-06 at the user's request, 2026-10-21).",
   "held_out_sites": [
     "bbc.com",
     "theguardian.com",
@@ -107,7 +107,6 @@
       "prompt": "Send a text to Mom from my contacts saying I'll be late.",
       "expect_tools": [],
       "avoid_tools": [
-        "run_applescript",
         "click_browser_element"
       ],
       "approval": "deny",
@@ -673,6 +672,7 @@
       "category": "writing",
       "prompt": "Write an email saying the demo moved to Thursday and open it as a draft in Gmail with no recipient yet. Don't send it.",
       "expect_tools": [
+        "open_draft",
         "open_in_browser",
         "navigate_browser_tab"
       ],
@@ -696,31 +696,6 @@
             "draft",
             "compose"
           ]
-        }
-      ]
-    },
-    {
-      "id": "write-06",
-      "category": "writing",
-      "prompt": "Write a LinkedIn post about finishing my first marathon and open it in the LinkedIn post box so I can review it.",
-      "expect_tools": [
-        "open_in_browser",
-        "navigate_browser_tab"
-      ],
-      "avoid_tools": [
-        "click_browser_element"
-      ],
-      "approval": "auto",
-      "notes": "Expected route: linkedin.com/feed/?shareActive=true&text=...; the user posts it.",
-      "setup": [],
-      "checks": [
-        {
-          "check": "chrome_tab",
-          "site": "linkedin.com",
-          "url_contains": [
-            "shareactive"
-          ],
-          "any_tab": true
         }
       ]
     },
@@ -1202,8 +1177,8 @@
         "click_browser_element",
         "type_in_browser_field"
       ],
-      "approval": "auto",
-      "notes": "Sending messages is blocked in the browser; must decline honestly.",
+      "approval": "deny",
+      "notes": "Halo may send through Mail with explicit approval; the harness declines so nothing is ever sent, and the answer must say nothing was sent.",
       "setup": [],
       "checks": [
         {

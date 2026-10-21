@@ -158,9 +158,30 @@ final class LegacyMacInteractionDriver: MacInteractionDriver {
         }
     }
 
+    /// Windows through Accessibility: titles, geometry, and minimized state
+    /// without Screen Recording. Nil when the app or Accessibility is
+    /// unavailable, so callers fall back to the window server's list.
     func listWindows(appID: String) async throws -> [[String: Any]]? {
-        // Legacy driver cannot enumerate per-app windows beyond CG capture; return nil so callers fall back.
-        return nil
+        guard let app = try? ui.runningApp(appID) else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else { return nil }
+        func value(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+            var ref: CFTypeRef?
+            return AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success ? ref : nil
+        }
+        return windows.prefix(50).map { window in
+            var entry: [String: Any] = ["title": value(window, kAXTitleAttribute) as? String ?? "",
+                                        "minimized": value(window, kAXMinimizedAttribute) as? Bool ?? false]
+            var point = CGPoint.zero, size = CGSize.zero
+            if let p = value(window, kAXPositionAttribute), let s = value(window, kAXSizeAttribute),
+               AXValueGetValue(unsafeDowncast(p, to: AXValue.self), .cgPoint, &point),
+               AXValueGetValue(unsafeDowncast(s, to: AXValue.self), .cgSize, &size) {
+                entry["bounds"] = ["X": Int(point.x), "Y": Int(point.y), "Width": Int(size.width), "Height": Int(size.height)]
+            }
+            return entry
+        }
     }
 
     func listMenus(appID: String) async throws -> [[String: Any]]? {

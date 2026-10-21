@@ -168,7 +168,25 @@ public struct ToolValidator {
             return .failure(Problem(message: "arguments for \(name) are not valid JSON"))
         }
         if let problem = Self.problem(value, schema: schema, path: name) { return .failure(Problem(message: problem)) }
-        return .success(text)
+        return .success(Self.withoutPlaceholders(value, schema: schema) ?? text)
+    }
+
+    /// Models fill optional arguments with placeholders ("", [], tab_id 0)
+    /// that tools would take as real values. Optional arguments that are
+    /// empty, or ID numbers that are 0, are dropped. Nil when nothing changed.
+    static func withoutPlaceholders(_ value: Any, schema: [String: Any]) -> String? {
+        guard var object = value as? [String: Any] else { return nil }
+        let required = Set(schema["required"] as? [String] ?? [])
+        let dropped = object.keys.filter { key in
+            guard !required.contains(key), let item = object[key] else { return false }
+            if let text = item as? String { return text.trimmingCharacters(in: .whitespaces).isEmpty }
+            if let array = item as? [Any] { return array.isEmpty }
+            if let number = item as? NSNumber, !isBool(number), key.hasSuffix("_id") { return number.intValue == 0 }
+            return false
+        }
+        guard !dropped.isEmpty else { return nil }
+        for key in dropped { object[key] = nil }
+        return (try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)).map { String(decoding: $0, as: UTF8.self) }
     }
 
     private static func problem(_ value: Any, schema: [String: Any], path: String) -> String? {
