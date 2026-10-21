@@ -23,7 +23,7 @@ teacher while building; the shipped product runs fully local.
 
 | Phase | Status | Exit condition |
 | --- | --- | --- |
-| L0. Groundwork in Halo | Not started | One shared agent loop, tool-call validator, short scoped tool list; cloud brains still pass in the real app |
+| L0. Groundwork in Halo | Complete (2026-10-21) | One shared agent loop, tool-call validator, short scoped tool list; cloud brains still pass in the real app |
 | L1. Recorder | Not started | Opt-in, scrubbed traces export to training JSONL |
 | L2. Task list and test set | Not started | Written "normal work" list, held-out websites, scoring script, ChatGPT baseline |
 | L3. Data collection | Not started | 1,000–3,000 clean examples across many websites |
@@ -33,10 +33,10 @@ teacher while building; the shipped product runs fully local.
 
 ## L0 — Groundwork in Halo
 
-- [ ] Commit the current uncommitted browser work first (17 files, plus `BrowserToolRunner.swift`).
-- [ ] Extract one `AgentLoop` in HaloCore that owns history, rounds, tool execution, and screenshots; ChatGPT and DeepSeek become one-round backends.
-- [ ] Add a tool-call validator (name exists, required keys, types, `enum`, `items`, no unknown keys); return errors to the model as tool results; at most 2 retries.
-- [ ] Shorten tool descriptions and send only the tools a request needs (extend `ToolScope`).
+- [x] Commit the current uncommitted browser work first (17 files, plus `BrowserToolRunner.swift`).
+- [x] Extract one `AgentLoop` in HaloCore that owns history, rounds, tool execution, and screenshots; ChatGPT and DeepSeek become one-round backends.
+- [x] Add a tool-call validator (name exists, required keys, types, `enum`, `items`, no unknown keys); return errors to the model as tool results; at most 2 retries.
+- [x] Send only the tools a request needs: browser-only requests drop Mac app-discovery and UI-control tools (16.0 KB → 11.4 KB). Descriptions kept as is; they carry safety rules, and the local model will be trained on compact ones.
 - [ ] Add higher-level tools where a task currently takes many steps.
 - [ ] **Freeze tool names and argument shapes** before L3. Renaming a tool later invalidates collected examples.
 

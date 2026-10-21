@@ -126,6 +126,81 @@ func activityTimelineTracksProgress() async throws {
     precondition(conversation.lastPrompt == "research this")
 }
 
+private actor RecordingTools: MacToolExecutor {
+    var executed: [String] = []
+    nonisolated func definitions() async throws -> Data {
+        Data(#"[{"type":"function","function":{"name":"open_app","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},{"type":"function","function":{"name":"list_apps","parameters":{"type":"object","properties":{}}}},{"type":"function","function":{"name":"inspect_screen","parameters":{"type":"object","properties":{}}}},{"type":"function","function":{"name":"browser_media","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["play","pause"]},"tab_id":{"type":"integer"},"seconds":{"type":"number"},"muted":{"type":"boolean"}},"required":["action"]}}}]"#.utf8)
+    }
+    func execute(name: String, arguments: String) async throws -> String {
+        executed.append("\(name) \(arguments)")
+        return name == "inspect_screen" ? #"{"ok":true,"mime_type":"image/jpeg","image_base64":"aW1hZ2U="}"# : #"{"ok":true}"#
+    }
+}
+
+/// Plays back scripted rounds and records what the loop sends back.
+private final class ScriptedBackend: ModelBackend, @unchecked Sendable {
+    struct Limit: Error {}
+    let rounds: [RoundOutcome]
+    var outputs: [[ToolOutput]] = []
+    init(_ rounds: [RoundOutcome]) { self.rounds = rounds }
+    var actionLimitError: any Error { Limit() }
+    var unavailableToolError: any Error { Limit() }
+    func startTurn(messages: [Message], tools: Data?) throws -> any ModelTurn { Turn(backend: self) }
+    final class Turn: ModelTurn {
+        let backend: ScriptedBackend
+        var index = 0
+        init(backend: ScriptedBackend) { self.backend = backend }
+        func round(emit: @escaping @Sendable (String) -> Void, status: @escaping @Sendable (String) async -> Void) async throws -> RoundOutcome {
+            defer { index += 1 }
+            return index < backend.rounds.count ? backend.rounds[index] : .answered
+        }
+        func append(_ outputs: [ToolOutput]) { backend.outputs.append(outputs) }
+    }
+}
+
+private func calls(_ list: [(String, String)]) -> RoundOutcome {
+    .toolCalls(text: "", calls: list.enumerated().map { ToolRequest(id: "c\($0.offset)", name: $0.element.0, arguments: $0.element.1) })
+}
+
+func agentLoopValidatesAndRunsTools() async throws {
+    let tools = RecordingTools()
+    let validator = ToolValidator(definitions: try await tools.definitions())!
+    let valid = try validator.check(name: "open_app", arguments: #"{"name":"Notes"}"#).get()
+    precondition(valid == #"{"name":"Notes"}"#)
+    let blank = try validator.check(name: "list_apps", arguments: "  ").get()
+    precondition(blank == "{}")
+    _ = try validator.check(name: "browser_media", arguments: #"{"action":"pause","tab_id":3.0,"seconds":1.5,"muted":true}"#).get()
+    _ = try validator.check(name: "browser_media", arguments: #"{"action":"pause","tab_id":null}"#).get()
+    for (name, arguments, expected) in [
+        ("launch_app", "{}", "no tool named"), ("open_app", "{}", "missing required name"), ("open_app", "{name:", "not valid JSON"),
+        ("open_app", #"{"name":3}"#, "must be a string"), ("open_app", #"{"name":"Notes","x":1}"#, "unknown argument x"),
+        ("browser_media", #"{"action":"stop"}"#, "must be one of play, pause"), ("browser_media", #"{"action":"play","tab_id":2.5}"#, "whole number"),
+        ("browser_media", #"{"action":"play","tab_id":true}"#, "whole number"), ("browser_media", #"{"action":"play","muted":1}"#, "true or false"),
+    ] {
+        guard case .failure(let problem) = validator.check(name: name, arguments: arguments) else { preconditionFailure("\(name) \(arguments) passed") }
+        precondition(problem.message.contains(expected), problem.message)
+    }
+
+    // A rejected call is not executed; the model gets the problem back and its corrected call runs.
+    let backend = ScriptedBackend([calls([("open_app", "{}")]), calls([("open_app", #"{"name":"Notes"}"#), ("inspect_screen", "")])])
+    var reply = ""
+    for try await delta in AgentLoop(backend: backend, tools: tools).reply(to: [Message(isUser: true, text: "open notes")]) { reply += delta }
+    let executed = await tools.executed
+    precondition(executed == [#"open_app {"name":"Notes"}"#, "inspect_screen {}"], "\(executed)")
+    precondition(backend.outputs.count == 2 && backend.outputs[0][0].text.contains("missing required name") && backend.outputs[0][0].text.contains(#""ok":false"#))
+    precondition(backend.outputs[1][1].imageURLs == ["data:image/jpeg;base64,aW1hZ2U="] && !backend.outputs[1][1].text.contains("image_base64"))
+
+    // Repeated all-invalid rounds stop the request; the round limit still applies.
+    let stuck = ScriptedBackend(Array(repeating: calls([("launch_app", "{}")]), count: 5))
+    var stopped = false
+    do { for try await _ in AgentLoop(backend: stuck, tools: tools).reply(to: [Message(isUser: true, text: "x")]) {} } catch is ToolValidator.RepeatedInvalidCalls { stopped = true }
+    precondition(stopped && stuck.outputs.count == 2)
+    let endless = ScriptedBackend(Array(repeating: calls([("list_apps", "{}")]), count: AgentLoop.maxRounds + 1))
+    var limited = false
+    do { for try await _ in AgentLoop(backend: endless, tools: tools).reply(to: [Message(isUser: true, text: "x")]) {} } catch is ScriptedBackend.Limit { limited = true }
+    precondition(limited && endless.outputs.count == AgentLoop.maxRounds)
+}
+
 @main
 struct CoreChecks {
     @MainActor static func main() async throws {
@@ -145,12 +220,11 @@ struct CoreChecks {
         precondition(rejectedMalformed)
         print("PASS: streaming parser handles text, Unicode, keepalive, completion, and malformed data")
         let imageResult = #"{"ok":true,"mime_type":"image/jpeg","image_base64":"aW1hZ2U=","scope":"test"}"#
-        let imageParts = DeepSeekProvider.screenAttachment(result: imageResult)
+        let imageParts = AgentLoop.screenAttachment(result: imageResult)
         precondition(imageParts != nil && !imageParts!.toolText.contains("image_base64"))
-        let imageURL = (imageParts!.imageContent.first?["image_url"] as? [String: String])?["url"]
-        precondition(imageURL == "data:image/jpeg;base64,aW1hZ2U=")
-        precondition(DeepSeekProvider.screenAttachment(result: #"{"ok":false,"denied":true}"#) == nil)
-        precondition(DeepSeekProvider.screenAttachment(result: #"{"ok":true,"mime_type":"text/plain","image_base64":"aW1hZ2U="}"#) == nil)
+        precondition(imageParts!.imageURL == "data:image/jpeg;base64,aW1hZ2U=")
+        precondition(AgentLoop.screenAttachment(result: #"{"ok":false,"denied":true}"#) == nil)
+        precondition(AgentLoop.screenAttachment(result: #"{"ok":true,"mime_type":"text/plain","image_base64":"aW1hZ2U="}"#) == nil)
         print("PASS: screenshots become image content, base64 is removed from tool text, and declined/unsupported images are rejected")
         let responseDelta = try ChatGPTProvider.event(#"data: {"type":"response.output_text.delta","delta":"Hello 👋"}"#)
         precondition(responseDelta?["delta"] as? String == "Hello 👋")
@@ -204,11 +278,14 @@ struct CoreChecks {
         for prompt in ["open Stremio", "arrange my windows side by side", "make a table in Numbers", "what time is it?"] {
             precondition(!ToolScope.isBrowserRequest(prompt), prompt)
         }
-        let allTools = Data(#"[{"type":"function","function":{"name":"list_apps"}},{"type":"function","function":{"name":"open_app"}},{"type":"function","function":{"name":"read_browser_tab"}}]"#.utf8)
+        let allTools = Data(#"[{"type":"function","function":{"name":"list_apps"}},{"type":"function","function":{"name":"open_app"}},{"type":"function","function":{"name":"keypress"}},{"type":"function","function":{"name":"window_layout"}},{"type":"function","function":{"name":"read_browser_tab"}}]"#.utf8)
         let browserTools = try JSONSerialization.jsonObject(with: ToolScope.definitions(allTools, for: "open youtube.com")) as? [[String: Any]] ?? []
         precondition(browserTools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String } == ["read_browser_tab"])
         precondition(ToolScope.definitions(allTools, for: "open Stremio") == allTools)
-        print("PASS: browser requests drop Mac app-discovery tools; other requests keep every tool")
+        precondition(ToolScope.definitions(allTools, for: "open youtube and put the window on the left half") == allTools)
+        print("PASS: browser-only requests drop Mac app-discovery and UI-control tools; Mac and mixed requests keep every tool")
+        try await agentLoopValidatesAndRunsTools()
+        print("PASS: tool calls are validated before running; rejected calls return the problem to the model; invalid streaks and the round limit stop the loop")
         blankInputDoesNotStartTurn()
         print("PASS: blank input is ignored")
         try await streamedOutputIsBatchedAndBounded()

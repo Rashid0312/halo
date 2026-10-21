@@ -16,7 +16,7 @@ Detailed plans:
 | OpenClaw 5. Browser actions | In progress — click, type, select, scroll, navigate work on real sites; sensitive families, iframes, hostile-page tests remain |
 | OpenClaw 6. Legacy automation retirement | Not started |
 | OpenClaw 7. Release hardening | Not started |
-| Local brain L0–L6 | Not started |
+| Local brain L0–L6 | L0 complete; L1 next |
 | Electron app removal | Complete — moved to `../mercy-electron`; Swift build fetches its own dependencies |
 
 ## Order
@@ -25,7 +25,7 @@ Detailed plans:
 | --- | --- | --- | --- |
 | 1 | Commit pending browser and brain work | — | Done (`72c27c6`) |
 | 2 | Move the Electron app out of this repo; Swift build fetches its own speech libraries and models | — | Done |
-| 3 | Shared agent loop, tool-call validator, short scoped tool list | L0 | Recorder |
+| 3 | Shared agent loop, tool-call validator, short scoped tool list | L0 | Done |
 | 4 | Recorder, opt-in and scrubbed; start recording | L1 | Data collection |
 | 5 | Finish browser actions while examples accumulate | OpenClaw 5 | Tool freeze |
 | 6 | Hostile-page (prompt-injection) tests | OpenClaw 5 | Local brain going live (L5) |

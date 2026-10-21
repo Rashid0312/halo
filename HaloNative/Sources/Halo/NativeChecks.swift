@@ -167,8 +167,8 @@ enum NativeChecks {
         let capture = try await ScreenService().captureTestWindow(pid: host.processIdentifier)
         let data = try JSONSerialization.data(withJSONObject: ["ok": true, "mime_type": "image/jpeg", "image_base64": capture.data.base64EncodedString(), "scope": capture.scope])
         let result = String(decoding: data, as: UTF8.self)
-        guard let parts = DeepSeekProvider.screenAttachment(result: result), !parts.toolText.contains("image_base64"),
-              parts.imageContent.count == 1 else { throw Failure("Screenshot was not converted into an image attachment") }
+        guard let parts = AgentLoop.screenAttachment(result: result), !parts.toolText.contains("image_base64"),
+              parts.imageURL.hasPrefix("data:image/jpeg;base64,") else { throw Failure("Screenshot was not converted into an image attachment") }
         let fixture = ScreenFixture(result: result)
         var reply = ""
         for try await delta in DeepSeekProvider(key: key, tools: fixture).reply(to: [Message(isUser: true, text: "Use inspect_screen to get the test image. Read the large HALO VISION line and reply with only its five-digit code. Do not guess it without inspecting the image.")]) { reply += delta }
