@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Test-only switches for diagnosing panel rendering stalls:
-/// launch with `--panel-off=symbol,spinner,material,shadow,gradient,resize`.
+/// launch with `--panel-off=spinner,material,shadow,gradient,resize`.
 enum PanelExperiment {
     static let off: Set<String> = {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--panel-off=") }) else { return [] }
@@ -91,10 +91,12 @@ struct ConversationView: View {
     }
 
     private var mark: some View {
+        // Still, not pulsing: a repeating symbol effect redraws every frame, and
+        // each frame waited on the window server, freezing Halo for up to 57 s
+        // while it answered on a Mac short on memory (2026-10-21).
         Image(systemName: busy ? "waveform" : "circle.hexagongrid.fill")
             .font(.system(size: 16, weight: .medium))
             .foregroundStyle(ice)
-            .symbolEffect(.variableColor, options: .repeating, isActive: busy && PanelExperiment.on("symbol"))
             .frame(width: 22, height: 22)
     }
 
@@ -146,7 +148,8 @@ struct ConversationView: View {
     }
 
     private var activityCard: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        // Ticks only while a reply runs: each tick redraws the panel.
+        TimelineView(.periodic(from: .now, by: conversation.isResponding ? 1 : 3600)) { context in
             VStack(alignment: .leading, spacing: 7) {
                 Button { withAnimation(.easeInOut(duration: 0.18)) { showActivity.toggle() } } label: {
                     HStack(spacing: 7) {
