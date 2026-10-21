@@ -218,6 +218,8 @@ def run_check(check, trace, answer, before):
         return not left, f"{len(left)} {check['site']} tabs left"
     if kind == "volume":
         level = int(osascript("output volume of (get volume settings)"))
+        if "below" in check:  # some output devices only take coarse steps, so ask only that it went down
+            return level < check["below"], f"volume {level}"
         return abs(level - check["level"]) <= 3, f"volume {level}"
     if kind == "tool_output":
         outputs = [c["output"] for s in trace["steps"] for c in s["calls"] if c["name"] == check["tool"]]

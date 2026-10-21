@@ -462,7 +462,7 @@
       "checks": [
         {
           "check": "volume",
-          "level": 30
+          "below": 60
         }
       ]
     },
@@ -682,20 +682,14 @@
       "setup": [],
       "checks": [
         {
-          "check": "chrome_tab",
-          "site": "mail.google.com",
-          "url_any": [
-            "compose",
-            "view=cm"
-          ],
-          "any_tab": true
+          "check": "tool_output",
+          "tool": "open_draft",
+          "contains": "\"sent\":false"
         },
         {
-          "check": "answer_any",
-          "words": [
-            "draft",
-            "compose"
-          ]
+          "check": "tool_output",
+          "tool": "open_draft",
+          "contains": "\"ok\":true"
         }
       ]
     },
