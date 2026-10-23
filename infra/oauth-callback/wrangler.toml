@@ -1,0 +1,10 @@
+name = "halo-oauth-callback"
+main = "worker.mjs"
+compatibility_date = "2026-10-01"
+
+# Never record request URLs: they carry the one-time authorization code.
+[observability]
+enabled = false
+
+# Uncomment once auth.<your domain> is on Cloudflare DNS (see README.md).
+# routes = [{ pattern = "auth.example.com", custom_domain = true }]

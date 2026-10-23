@@ -175,7 +175,7 @@ public final class TraceDraft: @unchecked Sendable {
 /// it cannot recognise names or free-form personal text, which is why traces
 /// stay local and a shared model must be trained on reviewed data only.
 public enum Scrubber {
-    private static let rules: [(NSRegularExpression, String)] = [
+    static let rules: [(NSRegularExpression, String)] = [
         (#"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#, "<email>"),
         (#"(?i)\b(sk|pk|rk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{16,}"#, "<secret>"),
         (#"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}"#, "Bearer <secret>"),
@@ -186,7 +186,7 @@ public enum Scrubber {
         (#"\(?\b\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b"#, "<phone>"),
         (#"/Users/[^/\s"']+"#, "/Users/user"),
     ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
-    private static let digitRun = try! NSRegularExpression(pattern: #"\b\d(?:[ -]?\d){12,18}\b"#)
+    static let digitRun = try! NSRegularExpression(pattern: #"\b\d(?:[ -]?\d){12,18}\b"#)
 
     /// Scrubs plain text, or only the string values when `text` is JSON, so
     /// numbers such as tab IDs and the JSON structure itself stay intact.
@@ -220,7 +220,7 @@ public enum Scrubber {
         return text
     }
 
-    private static func luhn(_ digits: String) -> Bool {
+    static func luhn(_ digits: String) -> Bool {
         var sum = 0
         for (index, character) in digits.reversed().enumerated() {
             var digit = character.wholeNumberValue ?? 0

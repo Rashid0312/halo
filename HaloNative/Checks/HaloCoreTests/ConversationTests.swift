@@ -246,6 +246,8 @@ func traceRecorderSavesScrubbedTurns() async throws {
 @main
 struct CoreChecks {
     @MainActor static func main() async throws {
+        // Keep check failures out of the user's real failure log.
+        setenv("HALO_FAILURE_LOG", NSTemporaryDirectory() + "halo-check-failures-\(getpid()).jsonl", 1)
         try await stoppedTurnCannotAppendLateOutput()
         print("PASS: stopped turn rejects late output")
         try await clearCancelsPendingReply()
@@ -338,5 +340,19 @@ struct CoreChecks {
         print("PASS: rendered conversation rows and total retained text are bounded")
         try await activityTimelineTracksProgress()
         print("PASS: response activity stages are timed, retained, and completed")
+        sseEventsAreJoined()
+        print("PASS: SSE events are joined across data lines; comments and blank lines are skipped")
+        validatorAcceptsOpenMaps()
+        print("PASS: argument checks accept open maps and anyOf; connector arguments are left to the service; Halo's own tools stay strict")
+        try await failuresAreToldAndLogged()
+        print("PASS: failed turns are said in the chat and spoken with the tool and reason, and logged to the failure log")
+        connectorNamesAndKinds()
+        print("PASS: connector tools are namespaced app__tool and writes are classified conservatively")
+        try vaultLabelsAndRestores()
+        print("PASS: privacy labels are stable, JSON-aware, restorable, and unknown labels are refused")
+        try await stdioServerListsAndCalls()
+        print("PASS: stdio MCP client initializes, pages tools/list, calls tools, and fails cleanly after close")
+        try await httpConnectorRefreshesAndReconnects()
+        print("PASS: HTTP MCP connector refreshes on 401, parses SSE, reconnects an expired session, filters by request, and refuses LinkedIn")
     }
 }

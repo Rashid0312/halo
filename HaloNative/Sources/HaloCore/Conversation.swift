@@ -241,9 +241,24 @@ public final class Conversation {
                 }
             } catch {
                 guard let self, self.turnID == id else { return }
-                self.finish(status: error is CancellationError ? "Stopped" : "Reply failed: \(error.localizedDescription)")
+                if error is CancellationError { self.finish(status: "Stopped"); return }
+                // Mercy says what went wrong in the chat (and aloud), not only in the status line.
+                FailureLog.shared.record(.turnFailed, detail: error.localizedDescription)
+                let partial = self.messages[replyIndex].text
+                let note = (partial.isEmpty ? "" : "\n\n") + Self.failureMessage(error)
+                self.messages[replyIndex].text += note
+                self.onReplyDelta?(note)
+                self.finish(status: "Reply failed: \(error.localizedDescription)")
+                self.onReply?(self.messages[replyIndex].text)
             }
         }
+    }
+
+    /// What Mercy says when a turn fails. Errors that already speak to the
+    /// user (as Mercy) are used as they are; others get a plain lead-in.
+    public static func failureMessage(_ error: Error) -> String {
+        let reason = error.localizedDescription
+        return reason.hasPrefix("I ") ? reason : "Sorry, I couldn't finish that. \(reason)"
     }
 
     public func stop() {

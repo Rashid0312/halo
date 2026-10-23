@@ -4,6 +4,10 @@ public protocol MacToolExecutor: Sendable {
     func definitions() async throws -> Data
     /// The tool list for one request; may leave out tools that don't fit it.
     func definitions(for prompt: String) async throws -> Data
+    /// The same, with the conversation's recent messages (oldest first), for
+    /// tools that should follow context: a service named earlier stays
+    /// available when a follow-up says "write it in there".
+    func definitions(for prompt: String, context: [String]) async throws -> Data
     func execute(name: String, arguments: String) async throws -> String
     /// Shows a provider status line (e.g. a retry) in the activity list.
     func reportStatus(_ text: String) async
@@ -12,6 +16,7 @@ public protocol MacToolExecutor: Sendable {
 public extension MacToolExecutor {
     func reportStatus(_ text: String) async {}
     func definitions(for prompt: String) async throws -> Data { try await definitions() }
+    func definitions(for prompt: String, context: [String]) async throws -> Data { try await definitions(for: prompt) }
 }
 
 /// Which tools a request needs. Browser requests get no Mac app-discovery or

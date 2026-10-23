@@ -50,6 +50,9 @@ public protocol ModelTurn: AnyObject {
 /// validation, and screenshot attachment. Backends only speak their wire format.
 public struct AgentLoop: ReplyProvider {
     public static let maxRounds = 12
+    /// Earlier messages (both sides) that decide which connected services stay
+    /// available to a follow-up: three exchanges back.
+    public static let contextMessages = 6
     /// Rounds in a row whose calls were all rejected before the request stops.
     static let maxInvalidRounds = 3
     let backend: any ModelBackend
@@ -64,7 +67,9 @@ public struct AgentLoop: ReplyProvider {
             let task = Task {
                 var draft: TraceDraft?
                 do {
-                    let definitions = try await tools?.definitions(for: messages.last(where: \.isUser)?.text ?? "")
+                    let prompt = messages.last(where: \.isUser)?.text ?? ""
+                    let context = messages.dropLast().suffix(Self.contextMessages).map(\.text)
+                    let definitions = try await tools?.definitions(for: prompt, context: Array(context))
                     let validator = definitions.flatMap(ToolValidator.init(definitions:))
                     draft = recorder.begin(brain: backend.name, instructions: DeepSeekProvider.assistantInstructions,
                                                        messages: messages, tools: definitions)
@@ -72,6 +77,7 @@ public struct AgentLoop: ReplyProvider {
                     let emit: @Sendable (String) -> Void = { [draft] in draft?.appendText($0); continuation.yield($0) }
                     let status: @Sendable (String) async -> Void = { [tools] in await tools?.reportStatus($0) }
                     var invalidRounds = 0
+                    var lastRejection: (tool: String, problem: String)?
                     for _ in 0..<Self.maxRounds {
                         try Task.checkCancellation()
                         guard case .toolCalls(let text, let calls) = try await turn.round(emit: emit, status: status) else {
@@ -89,13 +95,16 @@ public struct AgentLoop: ReplyProvider {
                                 case .success(let normalized): call.arguments = normalized
                                 case .failure(let problem):
                                     rejected.insert(call.id)
+                                    lastRejection = (call.name, problem.message)
                                     TimingLog.shared.mark("tool call rejected: \(call.name): \(problem.message)")
+                                    FailureLog.shared.record(.callRejected, tool: call.name, detail: problem.message)
                                     outputs.append(ToolOutput(call: call, text: problem.toolResult))
                                     continue
                                 }
                             }
                             let result = try await tools.execute(name: call.name, arguments: call.arguments)
                             try Task.checkCancellation()
+                            if let failure = Self.toolFailure(result) { FailureLog.shared.record(.toolError, tool: call.name, detail: failure) }
                             if call.name == "inspect_screen", let attachment = Self.screenAttachment(result: result) {
                                 outputs.append(ToolOutput(call: call, text: attachment.toolText, imageURLs: [attachment.imageURL]))
                             } else {
@@ -104,7 +113,9 @@ public struct AgentLoop: ReplyProvider {
                         }
                         draft?.addStep(text: text, outputs: outputs, rejected: rejected)
                         invalidRounds = rejected.count == calls.count ? invalidRounds + 1 : 0
-                        if invalidRounds >= Self.maxInvalidRounds { throw ToolValidator.RepeatedInvalidCalls() }
+                        if invalidRounds >= Self.maxInvalidRounds {
+                            throw ToolValidator.RepeatedInvalidCalls(tool: lastRejection?.tool ?? "", problem: lastRejection?.problem ?? "")
+                        }
                         turn.append(outputs)
                     }
                     throw backend.actionLimitError
@@ -115,6 +126,14 @@ public struct AgentLoop: ReplyProvider {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// The error a tool reported (`"ok": false`), unless the user declined it.
+    public static func toolFailure(_ result: String) -> String? {
+        guard result.contains("\"ok\":false") || result.contains("\"ok\": false"),
+              let object = try? JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any],
+              object["ok"] as? Bool == false, object["denied"] as? Bool != true else { return nil }
+        return object["error"] as? String ?? "failed without a reason"
     }
 
     /// Splits an approved inspect_screen result into tool text and a JPEG data URL.
@@ -131,7 +150,9 @@ public struct AgentLoop: ReplyProvider {
 
 /// Checks a tool call against its definition before it runs: the tool exists,
 /// required arguments are present, types and enums match, and no unknown
-/// arguments are passed. Covers the JSON Schema subset Halo's tools use.
+/// arguments are passed. Covers the JSON Schema subset Halo's tools use, plus
+/// additionalProperties and anyOf/oneOf, which connector servers (Notion) use
+/// for free-form maps and alternatives; unknown keywords are not checked.
 /// Not a security boundary; approvals and the tools' own checks still apply.
 public struct ToolValidator {
     public struct Problem: Error, Equatable {
@@ -142,8 +163,24 @@ public struct ToolValidator {
             return String(decoding: (try? JSONSerialization.data(withJSONObject: object)) ?? Data(), as: UTF8.self)
         }
     }
+    /// Said to the user when every call in several rounds was refused: which
+    /// tool and why, and that it never ran.
     public struct RepeatedInvalidCalls: LocalizedError {
-        public var errorDescription: String? { "The assistant kept making invalid tool calls. Try rephrasing the request." }
+        public var tool = ""
+        public var problem = ""
+        public init(tool: String = "", problem: String = "") { self.tool = tool; self.problem = problem }
+        public var errorDescription: String? {
+            guard !tool.isEmpty else { return "I kept building requests Halo couldn't run, so I stopped. Nothing was sent. Try rephrasing." }
+            return "I couldn't run \(ToolValidator.displayName(tool)): Halo refused the request I built (\(problem)), so it was never sent. Try rephrasing, or tell me to try a different way."
+        }
+    }
+
+    /// "Notion's notion-create-pages" for connector tools; Halo's own tools as named.
+    public static func displayName(_ tool: String) -> String {
+        guard let range = tool.range(of: ConnectorManager.separator) else { return tool }
+        let app = String(tool[..<range.lowerBound])
+        let name = ConnectorSpec.catalog.first { $0.apps.contains(app) }.map { $0.apps.count == 1 ? $0.name : app.capitalized } ?? app
+        return "\(name)'s \(tool[range.upperBound...])"
     }
 
     private let schemas: [String: [String: Any]]
@@ -158,6 +195,9 @@ public struct ToolValidator {
     }
 
     /// The normalized argument JSON (`{}` for blank arguments) or the problem.
+    /// Connector tools only need a JSON object here: the service checks its
+    /// own schema and returns a precise error, so Halo never refuses a call
+    /// its partial JSON Schema support misreads.
     public func check(name: String, arguments: String) -> Result<String, Problem> {
         guard let schema = schemas[name] else {
             return .failure(Problem(message: "there is no tool named \"\(name)\""))
@@ -166,6 +206,9 @@ public struct ToolValidator {
         let text = trimmed.isEmpty ? "{}" : trimmed
         guard let value = try? JSONSerialization.jsonObject(with: Data(text.utf8)) else {
             return .failure(Problem(message: "arguments for \(name) are not valid JSON"))
+        }
+        if ConnectorManager.isConnectorTool(name) {
+            return value is [String: Any] ? .success(text) : .failure(Problem(message: "arguments for \(name) must be a JSON object"))
         }
         if let problem = Self.problem(value, schema: schema, path: name) { return .failure(Problem(message: problem)) }
         return .success(Self.withoutPlaceholders(value, schema: schema) ?? text)
@@ -190,6 +233,10 @@ public struct ToolValidator {
     }
 
     private static func problem(_ value: Any, schema: [String: Any], path: String) -> String? {
+        if schema["type"] == nil, let options = (schema["anyOf"] ?? schema["oneOf"]) as? [[String: Any]], !options.isEmpty {
+            let problems = options.map { problem(value, schema: $0, path: path) }
+            return problems.contains { $0 == nil } ? nil : problems.compactMap { $0 }.first
+        }
         if let allowed = schema["enum"] as? [Any], !allowed.contains(where: { equal($0, value) }) {
             return "\(path) must be one of \(allowed.map { "\($0)" }.joined(separator: ", "))"
         }
@@ -201,7 +248,12 @@ public struct ToolValidator {
                 return "\(path) is missing required \(key)"
             }
             for (key, item) in object.sorted(by: { $0.key < $1.key }) {
-                guard let property = properties[key] else { return "\(path) has unknown argument \(key)" }
+                // A map with open keys (additionalProperties true or a schema)
+                // accepts names it does not list; without it, unlisted names are errors.
+                guard let property = properties[key] ?? schema["additionalProperties"] as? [String: Any]
+                        ?? ((schema["additionalProperties"] as? Bool) == true ? [:] : nil) else {
+                    return "\(path) has unknown argument \(key)"
+                }
                 if item is NSNull { continue }
                 if let problem = problem(item, schema: property, path: "\(path).\(key)") { return problem }
             }
@@ -219,6 +271,7 @@ public struct ToolValidator {
                 return "\(path) must be a whole number"
             }
         case "number": if !(value is NSNumber) || isBool(value) { return "\(path) must be a number" }
+        case "null": if !(value is NSNull) { return "\(path) must be null" }
         default: break
         }
         return nil

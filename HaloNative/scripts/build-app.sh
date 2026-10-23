@@ -45,6 +45,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSMicrophoneUsageDescription</key><string>Halo listens locally for Mercy or Hey Mercy when hands-free is enabled, and when you tap the microphone.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>Halo transcribes what you say on this Mac.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
+<key>CFBundleURLTypes</key><array><dict>
+<key>CFBundleURLName</key><string>app.halo.native.oauth</string>
+<key>CFBundleURLSchemes</key><array><string>halo</string></array>
+</dict></array>
 </dict></plist>
 PLIST
 /usr/libexec/PlistBuddy -c "Add :HaloDevelopmentEnvFile string $PWD/../.env" "$APP/Contents/Info.plist"
@@ -59,4 +63,7 @@ codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$APP"
 codesign --verify --deep --strict "$APP"
 mkdir -p "$PWD/build"
 ditto --norsrc --noextattr "$APP" "$PWD/build/Halo.app"
+# Register halo:// (OAuth callbacks) with this copy, not the temporary one.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$PWD/build/Halo.app"
 printf 'Built %s\n' "$PWD/build/Halo.app"

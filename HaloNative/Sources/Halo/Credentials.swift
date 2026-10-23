@@ -116,7 +116,7 @@ enum Credentials {
         return key
     }
 
-    private static func developmentEnvironmentValue(_ environmentName: String) -> String {
+    static func developmentEnvironmentValue(_ environmentName: String) -> String {
         if let value = ProcessInfo.processInfo.environment[environmentName], !value.isEmpty { return value }
         guard let file = Bundle.main.object(forInfoDictionaryKey: "HaloDevelopmentEnvFile") as? String,
               let contents = try? String(contentsOfFile: file, encoding: .utf8) else { return "" }
