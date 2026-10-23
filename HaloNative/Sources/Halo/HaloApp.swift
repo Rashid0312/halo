@@ -7,8 +7,9 @@ import HaloCore
 struct HaloApp: App {
     @NSApplicationDelegateAdaptor(HaloDelegate.self) private var delegate
     var body: some Scene {
-        Settings { HaloSettings(voice: delegate.voice, wake: delegate.wake, setHandsFree: delegate.setHandsFree, catalog: delegate.catalog, macTools: delegate.macTools, presentation: delegate.presentation, auth: delegate.auth, browserBridge: delegate.browserBridge) }
-            .defaultSize(width: 820, height: 620)
+        Settings { MercySettings(voice: delegate.voice, wake: delegate.wake, setHandsFree: delegate.setHandsFree, catalog: delegate.catalog, macTools: delegate.macTools, presentation: delegate.presentation, auth: delegate.auth, browserBridge: delegate.browserBridge, connectorAccounts: delegate.connectorAccounts, deepSeekKey: delegate.deepSeekKey, runSetup: delegate.showFirstRun) }
+            .defaultSize(width: 960, height: 680)
+            .windowResizability(.contentMinSize)
     }
 }
 
@@ -33,8 +34,11 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
     let wake = WakeController()
     let catalog = AppCatalog()
     let auth = ChatGPTAuth()
+    let deepSeekKey = DeepSeekKey()
     lazy var macTools = MacTools(catalog: catalog)
+    lazy var connectorAccounts = ConnectorAccounts(manager: macTools.connectors)
     let browserBridge = BrowserBridgeController()
+    private let firstRun = FirstRunWindow()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--ui-test-host") {
@@ -89,6 +93,17 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--check-real-chrome") {
             Task {
                 do { try await NativeChecks.realChromeCheck(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--render-mercy-screens"), index + 1 < CommandLine.arguments.count {
+            do { try NativeChecks.renderMercyScreens(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]), delegate: self); exit(0) }
+            catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+        }
+        if CommandLine.arguments.contains("--check-browser-settle") {
+            Task {
+                do { try await NativeChecks.browserSettleCheck(helperBinaryURL: NativeChecks.locateHelperBinary()); exit(0) }
                 catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
             }
             return
@@ -152,6 +167,49 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
                     print("PASS: \(driver) Accessibility inspection returned \(count) observed controls; UI contents not printed")
                     exit(0)
                 } catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--check-connect-card"), index + 1 < CommandLine.arguments.count {
+            do { try ConnectorChecks.renderCards(to: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+        }
+        if CommandLine.arguments.contains("--check-oauth-callback") {
+            Task {
+                do { try await ConnectorChecks.callback(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--check-connectors-offline") {
+            Task {
+                do { try await ConnectorChecks.offline(); ConnectorProcesses.terminateAll(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); ConnectorProcesses.terminateAll(); exit(1) }
+            }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--connect-connector"), index + 1 < CommandLine.arguments.count {
+            // The same sign-in as Settings → Connect, for checks; then a read-only call.
+            let id = CommandLine.arguments[index + 1], arguments = CommandLine.arguments
+            func value(_ flag: String) -> String? { arguments.firstIndex(of: flag).flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil } }
+            Task {
+                do {
+                    guard let spec = ConnectorSpec.spec(id) else { throw NativeChecks.Failure("Unknown connector \(id)") }
+                    print("Opening \(spec.name) sign-in in your browser…")
+                    try ConnectorTokenStore.save(id, try await ConnectorOAuth.signIn(spec))
+                    print("PASS: \(spec.name) OAuth sign-in completed and saved to Credentials")
+                    try await ConnectorChecks.live(id, tool: value("--tool"), arguments: value("--arguments") ?? "{}")
+                    ConnectorProcesses.terminateAll(); exit(0)
+                } catch { print("FAIL: \(error.localizedDescription)"); ConnectorProcesses.terminateAll(); exit(1) }
+            }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--check-connector"), index + 1 < CommandLine.arguments.count {
+            let arguments = CommandLine.arguments
+            func value(_ flag: String) -> String? { arguments.firstIndex(of: flag).flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil } }
+            Task {
+                do { try await ConnectorChecks.live(arguments[index + 1], tool: value("--tool"), arguments: value("--arguments") ?? "{}"); ConnectorProcesses.terminateAll(); exit(0) }
+                catch { print("FAIL: \(error.localizedDescription)"); ConnectorProcesses.terminateAll(); exit(1) }
             }
             return
         }
@@ -292,11 +350,11 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        let key = Credentials.existingDeepSeekKey()
+        let key = deepSeekKey.value
         voice.configureDeepgram(key: Credentials.existingDeepgramKey())
         conversation = Conversation(provider: MacReplyProvider(
-            fallback: BrainRouter(auth: auth, tools: macTools, deepSeekKey: key),
-            researchFallback: BrainRouter(auth: auth, tools: nil, deepSeekKey: key),
+            fallback: BrainRouter(auth: auth, tools: macTools, deepSeekKey: deepSeekKey),
+            researchFallback: BrainRouter(auth: auth, tools: nil, deepSeekKey: deepSeekKey),
             catalog: catalog
         ), providerName: auth.provider == "chatgpt" ? "ChatGPT" : "DeepSeek")
         auth.onProviderChange = { [weak self] in
@@ -495,6 +553,13 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         }
         installAudioRecovery()
         if CommandLine.arguments.contains("--request-mac-controls") { macTools.ui.requestAccess() }
+        // Test runs drive Halo by itself; setup would sit in their way.
+        if !FirstRunWindow.isComplete, !CommandLine.arguments.contains("--accept-test-prompts") { showFirstRun() }
+    }
+
+    func showFirstRun() {
+        firstRun.show(auth: auth, deepSeekKey: deepSeekKey, macTools: macTools, wake: wake, voice: voice,
+                      setHandsFree: setHandsFree) { [weak self] in self?.showPanel() }
     }
 
     func setHandsFree(_ enabled: Bool) {
@@ -684,6 +749,11 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// halo://oauth/callback from the browser after a connector sign-in.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { OAuthCallbackRouter.shared.handle(url) }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showPanel()
         return false
@@ -698,181 +768,6 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         wake.stop(); voice.cancel(); conversation.stop()
         browserBridge.shutdownForTermination()
+        ConnectorProcesses.terminateAll()
     }
-}
-
-struct HaloSettings: View {
-    @Bindable var voice: VoiceController
-    @Bindable var wake: WakeController
-    let setHandsFree: (Bool) -> Void
-    @Bindable var catalog: AppCatalog
-    @Bindable var macTools: MacTools
-    @Bindable var presentation: PanelPresentation
-    @Bindable var auth: ChatGPTAuth
-    @Bindable var browserBridge: BrowserBridgeController
-    @AppStorage("recordTraces") private var recordTraces = false
-    @State private var traceCount = 0
-
-    private enum Page: String, CaseIterable, Identifiable {
-        case general = "General"
-        case voice = "Voice"
-        case brain = "Brain"
-        case apps = "Apps"
-        case privacy = "Mac Access"
-
-        var id: Self { self }
-        var icon: String {
-            switch self {
-            case .general: "slider.horizontal.3"
-            case .voice: "waveform"
-            case .brain: "sparkles"
-            case .apps: "square.grid.2x2"
-            case .privacy: "hand.raised"
-            }
-        }
-    }
-
-    @State private var page: Page = .general
-
-    var body: some View {
-        ZStack {
-            FluidGradient(configuration: .init(
-                colors: FluidGradientConfiguration.halo.colors,
-                speed: 0.07,
-                intensity: 0.55,
-                opacity: 0.25
-            ))
-            Rectangle().fill(.regularMaterial.opacity(0.88))
-            NavigationSplitView {
-                List(Page.allCases, selection: $page) { item in
-                    Label(item.rawValue, systemImage: item.icon).tag(item)
-                }
-                .navigationSplitViewColumnWidth(min: 170, ideal: 185)
-                .safeAreaInset(edge: .bottom) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("HALO").font(.caption.weight(.semibold)).tracking(1.8)
-                        Text("Private by design").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                }
-            } detail: {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text(page.rawValue).font(.system(size: 28, weight: .semibold, design: .rounded))
-                        pageContent
-                    }
-                    .frame(maxWidth: 580, alignment: .leading)
-                    .padding(30)
-                }
-            }
-            .navigationSplitViewStyle(.balanced)
-        }
-        .frame(minWidth: 720, idealWidth: 820, minHeight: 520, idealHeight: 620)
-    }
-
-    @ViewBuilder private var pageContent: some View {
-        switch page {
-        case .general:
-            settingsCard("Halo bar", icon: "macwindow") {
-                Toggle("Keep Halo in the corner", isOn: $presentation.keepInCorner)
-                Text("When disabled, Halo lives in the menu bar and retracts to the side. When enabled, it remains as a compact capsule.")
-                    .settingsNote()
-            }
-            settingsCard("Visuals", icon: "paintpalette") {
-                LabeledContent("Fluid gradient", value: "Still")
-                Text("The background is a still gradient. Animating it blocked Halo while it worked, so Mercy keeps it still.")
-                    .settingsNote()
-            }
-        case .voice:
-            settingsCard("Listening", icon: "mic") {
-                Toggle("Listen for Mercy or Hey Mercy", isOn: Binding(get: { wake.enabled }, set: { setHandsFree($0) }))
-                LabeledContent("Recognition", value: "Apple · On this Mac")
-                Text(wake.status).settingsNote()
-            }
-            settingsCard("Spoken replies", icon: "speaker.wave.2") {
-                Toggle("Speak replies", isOn: $voice.speakReplies)
-                LabeledContent("Voice", value: "Deepgram Aura 2")
-                Text("Microphone audio stays with Apple speech recognition. Only Halo's generated reply text is sent to Deepgram for speech.")
-                    .settingsNote()
-            }
-        case .brain:
-            settingsCard("Response provider", icon: "sparkles") {
-                Form { ChatGPTSettings(auth: auth) }.formStyle(.grouped).scrollDisabled(true)
-            }
-        case .apps:
-            settingsCard("Apps on this Mac", icon: "square.grid.2x2") {
-                Form { AppCatalogSettings(catalog: catalog) }.formStyle(.grouped).scrollDisabled(true)
-            }
-        case .privacy:
-            settingsCard("Action authorization", icon: "bolt.shield") {
-                Toggle("Don't ask before browser actions", isOn: $macTools.autoApproveBrowser)
-                Toggle("Don't ask before controlling Mac apps", isOn: $macTools.autoApproveMacUI)
-                Text("When on, what you ask Mercy to do in Chrome or in Mac apps happens without a confirmation; each step still appears in the activity list, and Stop ends it. Shell commands, AppleScript, file changes, and screenshots always ask. Sign-in, payments, account changes, sending messages, uploads, and downloads are never done in the browser.")
-                    .settingsNote()
-            }
-            settingsCard("Browser bridge", icon: "globe") {
-                Toggle("Connect to the Halo browser extension (experimental)", isOn: $browserBridge.enabled)
-                Text(browserBridge.status.summary).settingsNote()
-                Text("Lets Halo read and act in Chrome tabs you authorize: click, type, choose options, scroll, open addresses, submit ordinary forms, and follow links. Every action shows exactly what it will do and waits for your approval; sign-in, payments, account changes, messages, uploads, and downloads stay blocked. Halo registers its native host only while this is on and accepts only its pinned extension.")
-                    .settingsNote()
-            }
-            settingsCard("Training data", icon: "tray.and.arrow.down") {
-                Toggle("Save conversations to train Halo's own model", isOn: $recordTraces)
-                    .onChange(of: recordTraces) { _, on in TraceRecorder.shared.isEnabled = on; traceCount = TraceRecorder.shared.count() }
-                Text("Off by default. When on, each request is saved on this Mac only: what you asked, the tools Mercy used and their results, and the answer. Emails, phone and card numbers, keys, and your user name are replaced before saving; names and other personal text in pages or files are not. Screenshots are never saved. Nothing is uploaded. \(traceCount) saved so far.")
-                    .settingsNote()
-                    .onAppear { traceCount = TraceRecorder.shared.count() }
-                Button("Show in Finder") {
-                    try? FileManager.default.createDirectory(at: TraceRecorder.shared.directory, withIntermediateDirectories: true)
-                    NSWorkspace.shared.activateFileViewerSelecting([TraceRecorder.shared.directory])
-                }
-            }
-            settingsCard("Permissions", icon: "lock.shield") {
-                permissionRow("Mac interface controls", enabled: macTools.ui.trusted)
-                permissionRow("Screen capture", enabled: macTools.screen.allowed)
-                HStack {
-                    Button("Enable Mac controls…") { macTools.ui.requestAccess() }
-                    Button("Check access") { macTools.ui.refreshAccess(); macTools.screen.refreshAccess() }
-                }
-                HStack {
-                    Button("Screen Recording…") { openPrivacy("Privacy_ScreenCapture") }
-                    Button("Full Disk Access…") { openPrivacy("Privacy_AllFiles") }
-                }
-                if !macTools.lastFailure.isEmpty { Text(macTools.lastFailure).settingsNote().textSelection(.enabled) }
-            }
-            settingsCard("Halo application", icon: "app.badge") {
-                Button("Show Halo in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
-                Text(Bundle.main.bundleURL.path).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-        }
-    }
-
-    private func settingsCard<Content: View>(_ title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label(title, systemImage: icon).font(.headline)
-            Divider().opacity(0.45)
-            content()
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-    }
-
-    private func permissionRow(_ title: String, enabled: Bool) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Label(enabled ? "Enabled" : "Permission needed", systemImage: enabled ? "checkmark.circle.fill" : "exclamationmark.circle")
-                .font(.caption).foregroundStyle(enabled ? .green : .secondary)
-        }
-    }
-
-    private func openPrivacy(_ pane: String) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
-    }
-}
-
-private extension View {
-    func settingsNote() -> some View { font(.caption).foregroundStyle(.secondary) }
 }

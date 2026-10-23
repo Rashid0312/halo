@@ -1,6 +1,27 @@
 import Foundation
 import Security
 
+/// The DeepSeek key in use, read on every request so a key entered in setup
+/// or Settings takes effect without restarting Halo.
+final class DeepSeekKey: @unchecked Sendable {
+    private let lock = NSLock()
+    private var key: String
+
+    init() {
+        let saved = Credentials.savedDeepSeekKey()
+        key = saved.isEmpty ? Credentials.existingDeepSeekKey() : saved
+    }
+
+    var value: String { lock.withLock { key } }
+    var isSet: Bool { !value.isEmpty }
+
+    func save(_ newKey: String) throws {
+        let trimmed = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        try Credentials.saveDeepSeekKey(trimmed)
+        lock.withLock { key = trimmed.isEmpty ? Credentials.existingDeepSeekKey() : trimmed }
+    }
+}
+
 enum Credentials {
     private static let service = "app.halo.native.dev.providers"
 
@@ -136,6 +157,15 @@ enum Credentials {
 
     static func existingDeepSeekKey() -> String {
         existingProviderKey(account: "deepseek", environmentName: "DEEPSEEK_API_KEY")
+    }
+
+    /// A DeepSeek key the user entered in setup or Settings, if any.
+    static func savedDeepSeekKey() -> String {
+        (try? read(account: "deepseek-user")).flatMap { $0.flatMap { String(data: $0, encoding: .utf8) } } ?? ""
+    }
+
+    static func saveDeepSeekKey(_ key: String) throws {
+        try write(account: "deepseek-user", data: key.isEmpty ? nil : Data(key.utf8))
     }
 
     static func existingDeepgramKey() -> String {

@@ -23,8 +23,8 @@ final class BrainSnapshot: @unchecked Sendable {
 final class BrainRouter: ReplyProvider, Sendable {
     let auth: ChatGPTAuth
     let tools: MacTools?
-    let deepSeekKey: String
-    init(auth: ChatGPTAuth, tools: MacTools?, deepSeekKey: String) { self.auth = auth; self.tools = tools; self.deepSeekKey = deepSeekKey }
+    let deepSeekKey: DeepSeekKey
+    init(auth: ChatGPTAuth, tools: MacTools?, deepSeekKey: DeepSeekKey) { self.auth = auth; self.tools = tools; self.deepSeekKey = deepSeekKey }
     func reply(to messages: [Message]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task.detached(priority: .userInitiated) { [auth, tools, deepSeekKey] in
@@ -41,7 +41,7 @@ final class BrainRouter: ReplyProvider, Sendable {
                         }
                         TimingLog.shared.mark("brain: ChatGPT token ready")
                         provider = ChatGPTProvider(token: token, model: model, tools: tools)
-                    } else { provider = DeepSeekProvider(key: deepSeekKey, tools: tools) }
+                    } else { provider = DeepSeekProvider(key: deepSeekKey.value, tools: tools) }
                     try Task.checkCancellation()
                     for try await delta in provider.reply(to: messages) { try Task.checkCancellation(); continuation.yield(delta) }
                     continuation.finish()
