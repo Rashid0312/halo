@@ -91,11 +91,12 @@ def main():
             if good:
                 keep(trace_dir, lines[before], result)
                 kept += 1
-            entry = counts.setdefault(task["prompt"], {"runs": 0, "kept": 0})
-            entry["runs"] += 1
-            entry["kept"] += int(good)
-            with open(counts_path, "w") as handle:
-                json.dump(counts, handle, indent=1, ensure_ascii=False)
+            if result["result"] != "setup_error":  # Halo never ran; leave it first in line for next time
+                entry = counts.setdefault(task["prompt"], {"runs": 0, "kept": 0})
+                entry["runs"] += 1
+                entry["kept"] += int(good)
+                with open(counts_path, "w") as handle:
+                    json.dump(counts, handle, indent=1, ensure_ascii=False)
             print(f"{task['id']:<20} {'kept' if good else result['result']:<12} {result['seconds']:>6} s", flush=True)
     finally:
         run_eval.osascript(f"set volume output volume {volume}")

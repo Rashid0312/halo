@@ -7,6 +7,8 @@ let activeSessionNonce = "";
 // Per-tab document generations (tabId -> documentGenerationID)
 const tabGenerations = new Map();
 const tabContexts = new Map();
+// When each tab last started loading a document (Date.now()).
+const loadingSince = new Map();
 
 function getTabGeneration(tabId) {
   if (!tabGenerations.has(tabId)) {
@@ -147,9 +149,13 @@ async function handleHostMessage(msg) {
   const requestID = msg.requestID || "unknown";
   const sessionNonce = msg.sessionNonce || activeSessionNonce;
 
-  if (msg.type === "observeTab") {
+  if (msg.type === "observeTab" || msg.type === "findElements") {
     if (!msg.targetTab || !msg.targetTab.tabID) {
-      sendError(requestID, sessionNonce, "payloadMalformed", "observeTab missing targetTab");
+      sendError(requestID, sessionNonce, "payloadMalformed", msg.type + " missing targetTab");
+      return;
+    }
+    if (msg.type === "findElements" && (!msg.query || typeof msg.query.text !== "string")) {
+      sendError(requestID, sessionNonce, "payloadMalformed", "findElements missing query");
       return;
     }
     const tabID = msg.targetTab.tabID;
@@ -189,7 +195,13 @@ async function handleHostMessage(msg) {
         return;
       }
       tabContexts.set(tabID, { browser: msg.targetTab.browser, domain: currentDomain });
-      const domResponse = await observeDocument(tabID, genID);
+      // A document that just started loading is read once its scripts have
+      // stopped building it (bounded), not half-built. Injection already waits
+      // for the document to be parsed; images need not finish.
+      const settle = msg.type === "observeTab" && (tab.status === "loading" || Date.now() - (loadingSince.get(tabID) || 0) < 5000);
+      const domResponse = msg.type === "findElements"
+        ? await queryDocument(tabID, genID, { action: "find", generationID: genID, query: msg.query })
+        : await queryDocument(tabID, genID, { action: "observe", generationID: genID, settle: settle });
 
       // The document must still be the one that was checked before observing.
       const after = await chrome.tabs.get(tabID);
@@ -212,8 +224,8 @@ async function handleHostMessage(msg) {
           domain: currentDomain,
           isIncognito: false
         },
-        title: (tab.title || "").substring(0, 32768),
-        elements: domResponse.elements.slice(0, 200),
+        title: (after.title || tab.title || "").substring(0, 32768),
+        elements: domResponse.elements.slice(0, msg.type === "findElements" ? 20 : 200),
         text: typeof domResponse.text === "string" ? domResponse.text.substring(0, 8000) : undefined
       };
 
@@ -248,10 +260,10 @@ async function handleHostMessage(msg) {
 // A document may have no content script yet: it runs at document_idle, and
 // pages loaded before the extension started never receive one. Inject it on
 // demand (host permissions still limit this to loopback), then retry briefly.
-async function observeDocument(tabID, genID) {
+async function queryDocument(tabID, genID, message) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await chrome.tabs.sendMessage(tabID, { action: "observe", generationID: genID });
+      return await chrome.tabs.sendMessage(tabID, message);
     } catch (err) {
       const missing = String(err && err.message).includes("Receiving end does not exist");
       if (!missing || attempt >= 20) throw err;
@@ -317,6 +329,7 @@ async function handleClick(msg, requestID, sessionNonce) {
     const point = { x: prep.x, y: prep.y };
     const kind = (msg.expectedElement && msg.expectedElement.kind) || "button";
     submittedTabs.delete(tabID);
+    if (kind === "button") await watchRequests(debuggee);
     await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
     await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
     await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
@@ -347,16 +360,19 @@ async function handleClick(msg, requestID, sessionNonce) {
     else if (kind === "link") performed = navigated || Boolean(outcome && outcome.landed);
     else performed = Boolean(outcome && outcome.landed);
     submittedTabs.delete(tabID);
+    // A plain button changes its own document; links and submissions replace it.
+    const changes = kind === "button" && !navigated ? await settledChanges(tabID, target.documentGenerationID) : undefined;
     nativePort.postMessage({
       requestID: requestID,
       protocolVersion: 1,
       sessionNonce: sessionNonce,
       success: true,
-      actionResult: { tab: target, elementID: msg.elementID, performed: performed }
+      actionResult: { tab: target, elementID: msg.elementID, performed: performed, changes: changes }
     });
   } catch (err) {
     sendError(requestID, sessionNonce, "internalError", "Click failed: " + String(err && err.message));
   } finally {
+    actionRequests.delete(tabID);
     if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
   }
 }
@@ -410,18 +426,21 @@ async function handleType(msg, requestID, sessionNonce) {
       sendError(requestID, sessionNonce, "elementChanged", "The page or field focus changed before typing");
       return;
     }
+    await watchRequests(debuggee);
     await chrome.debugger.sendCommand(debuggee, "Input.insertText", { text: text });
     const outcome = await pageMessage(tabID, { action: "typeOutcome", text: text }).catch(() => null);
+    const changes = await settledChanges(tabID, target.documentGenerationID);
     nativePort.postMessage({
       requestID: requestID,
       protocolVersion: 1,
       sessionNonce: sessionNonce,
       success: true,
-      actionResult: { tab: target, elementID: msg.elementID, performed: Boolean(outcome && outcome.matched) }
+      actionResult: { tab: target, elementID: msg.elementID, performed: Boolean(outcome && outcome.matched), changes: changes }
     });
   } catch (err) {
     sendError(requestID, sessionNonce, "internalError", "Typing failed: " + String(err && err.message));
   } finally {
+    actionRequests.delete(tabID);
     if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
   }
 }
@@ -441,9 +460,9 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
     return !tab.incognito && (tab.url || "") === target.url &&
       tabGenerations.get(tabID) === target.documentGenerationID;
   };
-  const respond = (performed) => nativePort.postMessage({
+  const respond = (performed, changes) => nativePort.postMessage({
     requestID: requestID, protocolVersion: 1, sessionNonce: sessionNonce, success: true,
-    actionResult: { tab: target, elementID: msg.elementID || "el_page", performed: performed }
+    actionResult: { tab: target, elementID: msg.elementID || "el_page", performed: performed, changes: changes }
   });
   try {
     if (!tabContexts.has(tabID) || !(await unchanged())) {
@@ -499,7 +518,7 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
         sendError(requestID, sessionNonce, (result && result.error) || "elementChanged", (result && result.message) || "The dropdown could not be changed");
         return;
       }
-      respond(Boolean(result.matched));
+      respond(Boolean(result.matched), await settledChanges(tabID, target.documentGenerationID));
     } catch (err) {
       sendError(requestID, sessionNonce, "internalError", "Selection failed: " + String(err && err.message));
     }
@@ -530,6 +549,7 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
       sendError(requestID, sessionNonce, "staleDocumentGeneration", "The page changed before scrolling");
       return;
     }
+    await watchRequests(debuggee);
     const delta = 120 * steps;
     const deltaX = scroll.direction === "left" ? -delta : scroll.direction === "right" ? delta : 0;
     const deltaY = scroll.direction === "up" ? -delta : scroll.direction === "down" ? delta : 0;
@@ -537,10 +557,11 @@ async function handlePhase5B3(msg, requestID, sessionNonce) {
       type: "mouseWheel", x: prep.x, y: prep.y, deltaX: deltaX, deltaY: deltaY
     });
     const outcome = await pageMessage(tabID, { action: "scrollOutcome" }).catch(() => null);
-    respond(Boolean(outcome && outcome.moved));
+    respond(Boolean(outcome && outcome.moved), await settledChanges(tabID, target.documentGenerationID));
   } catch (err) {
     sendError(requestID, sessionNonce, "internalError", "Scroll failed: " + String(err && err.message));
   } finally {
+    actionRequests.delete(tabID);
     if (attached) await chrome.debugger.detach(debuggee).catch(() => {});
   }
 }
@@ -600,6 +621,47 @@ async function handleMedia(msg, requestID, sessionNonce, unchanged) {
   }
 }
 
+// Fetch and XHR requests a page starts after an approved action, seen through
+// the debugger already attached for that action. A page waiting on its server
+// is not settled even when its DOM is quiet (a spinner, then nothing).
+const actionRequests = new Map(); // tabId -> { open: Set of requestIds, startedAt }
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const watch = actionRequests.get(source.tabId);
+  if (!watch) return;
+  if (method === "Network.requestWillBeSent" && (params.type === "XHR" || params.type === "Fetch")) watch.open.add(params.requestId);
+  else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") watch.open.delete(params.requestId);
+});
+
+async function watchRequests(debuggee) {
+  actionRequests.set(debuggee.tabId, { open: new Set(), startedAt: Date.now() });
+  await chrome.debugger.sendCommand(debuggee, "Network.enable").catch(() => {});
+}
+
+// Waits (bounded, 2.5 s from the action) for the action's requests to finish.
+// Returns whether any were in flight.
+async function requestsDone(tabID) {
+  const watch = actionRequests.get(tabID);
+  if (!watch) return false;
+  const busy = watch.open.size > 0;
+  while (watch.open.size > 0 && Date.now() - watch.startedAt < 2500) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  actionRequests.delete(tabID);
+  return busy;
+}
+
+// What an approved action changed in the same document once it settled, or
+// undefined when the document was replaced or the page could not report. The
+// content script caps its wait below this deadline.
+async function settledChanges(tabID, generation) {
+  if (tabGenerations.get(tabID) !== generation) return undefined;
+  const waitedOnRequests = await requestsDone(tabID);
+  const changes = await pageMessage(tabID, { action: "settleChanges", afterRequests: waitedOnRequests }, 4500).catch(() => null);
+  if (!changes || changes.error || tabGenerations.get(tabID) !== generation) return undefined;
+  return changes;
+}
+
 // A page that stops answering must never leave an action hanging: every
 // message to the page has a deadline, below Halo's own 10 s limit.
 function pageMessage(tabID, message, ms = 5000) {
@@ -640,6 +702,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const context = tabContexts.get(tabId);
   if (!context) return;
   if (changeInfo.status === "loading") {
+    loadingSince.set(tabId, Date.now());
     const { previous, next } = advanceTabGeneration(tabId);
     let domain = "";
     const targetURL = changeInfo.url || tab.url || "";
@@ -676,6 +739,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   const currentGen = getTabGeneration(tabId);
   tabGenerations.delete(tabId);
   tabContexts.delete(tabId);
+  loadingSince.delete(tabId);
 
   nativePort.postMessage({
     requestID: "evt_close_" + tabId + "_" + Date.now(),

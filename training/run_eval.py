@@ -71,6 +71,15 @@ def app_running(name):
     return osascript(f'application {quoted(name)} is running') == "true"
 
 
+def quit_app(name, wait=10):
+    """Quit and wait until the process is gone; `quit` returns while the app is still
+    closing, and activating it in that window fails with -609 (connection is invalid)."""
+    osascript(f'tell application {quoted(name)} to quit')
+    deadline = time.time() + wait
+    while time.time() < deadline and app_running(name):
+        time.sleep(0.5)
+
+
 def chrome_urls():
     if not app_running("Google Chrome"):
         return []
@@ -143,7 +152,7 @@ def cleanup(before):
         try:
             if app == "TextEdit":
                 osascript('tell application "TextEdit" to close every document saving no')
-            osascript(f'tell application {quoted(app)} to quit')
+            quit_app(app)
         except Exception:
             pass
     try:
@@ -179,8 +188,7 @@ def setup(task):
                 if app_running(app):
                     if app == "TextEdit":
                         osascript('tell application "TextEdit" to close every document saving no')
-                    osascript(f'tell application {quoted(app)} to quit')
-            time.sleep(1)
+                    quit_app(app)
         elif kind == "textedit":
             osascript('tell application "TextEdit" to activate')
             osascript('tell application "TextEdit" to close every document saving no')
@@ -330,7 +338,11 @@ def folder_listings(task):
 
 
 def run_task(task, trace_dir, timeout):
-    setup(task)
+    try:
+        setup(task)
+    except Exception as error:  # the harness failed, not Halo; skip the task instead of ending the run
+        return {"id": task["id"], "category": task["category"], "passed": False, "result": "setup_error",
+                "seconds": 0, "checks": [{"check": "setup", "passed": False, "detail": str(error)}]}
     before = folder_listings(task)
     count = len(trace_lines(trace_dir))
     post("testReset")

@@ -129,7 +129,7 @@ extension NativeChecks {
         }
     }
 
-    private static func waitUntil(_ what: String, timeout: TimeInterval = 15,
+    static func waitUntil(_ what: String, timeout: TimeInterval = 15,
                                   _ condition: @MainActor () async -> Bool) async throws -> Duration {
         let clock = ContinuousClock()
         let start = clock.now
@@ -176,7 +176,7 @@ extension NativeChecks {
         }
     }
 
-    private static func milliseconds(_ duration: Duration) -> Double {
+    static func milliseconds(_ duration: Duration) -> Double {
         Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
     }
 
@@ -231,7 +231,7 @@ extension NativeChecks {
                 "--user-data-dir=\(profile.path)", "--remote-debugging-port=0",
                 "--no-first-run", "--no-default-browser-check",
                 "--disable-extensions-except=\(extPath)", "--load-extension=\(extPath)"
-            ] + urls
+            ] + (ProcessInfo.processInfo.environment["HALO_LIVE_HEADLESS"] != nil ? ["--headless=new"] : []) + urls
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             try process.run()
@@ -1476,7 +1476,7 @@ extension NativeChecks {
             let action = parts[parts.count - 1]
             var element: [String: Any] = ["id": parts[0], "role": parts[1],
                                           "label": parts[2..<(parts.count - 1)].joined(separator: " · "),
-                                          "clickable": false, "typable": false]
+                                          "clickable": false, "typable": false, "action": action]
             switch action {
             case "click": element["clickable"] = true
             case "submit": element["clickable"] = true; element["click_kind"] = "submit"

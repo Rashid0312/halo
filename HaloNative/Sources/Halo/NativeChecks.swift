@@ -819,6 +819,45 @@ enum NativeChecks {
                 document.getElementById("v").src = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
                 </script></body></html>
                 """#)
+                // Settle and find fixture: a button whose results arrive from a
+                // slow request (with a loading line that comes and goes), one
+                // whose change comes from a timer alone, one that only draws
+                // on a canvas, and controls named by split text, an aria-label,
+                // and an open shadow root.
+                let settlePage = respond(#"""
+                <!DOCTYPE html><html><head><title>Halo Settle Fixture</title></head>
+                <body><h1>Halo Settle Fixture</h1>
+                <button type="button" id="load">Load results</button>
+                <button type="button" id="timer">Reveal later</button><h2 id="revealed">Revealed: no</h2>
+                <button type="button" id="noop">Draw on canvas</button>
+                <canvas id="cv" width="200" height="60"></canvas>
+                <button type="button" id="preview"><span>Preview</span> <span>draft</span></button><h2 id="previewed">Previewed: 0</h2>
+                <a href="/page-b">Read the docs</a>
+                <div role="button" tabindex="0" aria-label="Close dialog" id="closer">×</div><h2 id="closed">Closed: no</h2>
+                <halo-widget></halo-widget>
+                <ul id="results"></ul>
+                <script>
+                let loads = 0, previews = 0;
+                load.onclick = async () => {
+                  const spin = document.createElement("p"); spin.textContent = "Loading…"; document.body.appendChild(spin);
+                  const names = await (await fetch("/slow-results", { cache: "no-store" })).json();
+                  spin.remove(); loads++;
+                  for (const name of names) {
+                    const li = document.createElement("li"), a = document.createElement("a");
+                    a.href = "/page-b"; a.textContent = "Result item " + loads + "." + name; li.appendChild(a); results.appendChild(li);
+                  }
+                  load.textContent = "Loaded " + loads * 5 + " results";
+                };
+                timer.onclick = () => setTimeout(() => { revealed.textContent = "Revealed: yes"; }, 450);
+                noop.onclick = () => cv.getContext("2d").fillRect(Math.random() * 180, 10, 20, 20);
+                preview.onclick = (e) => { if (e.isTrusted) document.getElementById("previewed").textContent = "Previewed: " + (++previews); };
+                closer.onclick = (e) => { if (e.isTrusted) document.getElementById("closed").textContent = "Closed: yes"; };
+                customElements.define("halo-widget", class extends HTMLElement {
+                  connectedCallback() { this.attachShadow({ mode: "open" }).innerHTML = '<button type="button">Shadow action</button>'; }
+                });
+                </script></body></html>
+                """#)
+                let slowResults = [UInt8]("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n[1, 2, 3, 4, 5]".utf8)
                 let large = respond("<!DOCTYPE html><html><head><title>Halo Disposable Browser Fixture</title></head><body><h1>Halo Chrome Integration Test</h1>"
                     + (0..<3000).map { "<button>Fixture control \($0)</button>" }.joined() + "</body></html>")
 
@@ -845,11 +884,13 @@ enum NativeChecks {
                         }
                         guard !requestLine.isEmpty else { Darwin.close(client); return }
                         let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+                        // A slow JSON request, as a site's search or results API would be.
+                        if path.hasPrefix("/slow-results") { usleep(450_000) }
                         let bytes = path.hasPrefix("/page-b") ? pageB : path.hasPrefix("/large") ? large
                             : path.hasPrefix("/click") ? clickPage : path.hasPrefix("/type") ? typePage
                             : path.hasPrefix("/select") ? selectPage : path.hasPrefix("/forms") ? formsPage
                             : path.hasPrefix("/shadow") ? shadowPage : path.hasPrefix("/crowded") ? crowdedPage
-                            : path.hasPrefix("/media") ? mediaPage : responseBytes
+                            : path.hasPrefix("/media") ? mediaPage : path.hasPrefix("/settle") ? settlePage : path.hasPrefix("/slow-results") ? slowResults : responseBytes
                         _ = bytes.withUnsafeBufferPointer { buf -> Int in
                             var written = 0
                             while written < buf.count {

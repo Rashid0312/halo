@@ -97,14 +97,36 @@ public struct BrowserElementTarget: Sendable, Equatable {
     var isPage: Bool { elementID == Self.pageReference }
 }
 
+/// What an action changed in the same document, after it settled. Elements are
+/// already registered, so their ids work in the next action without a read.
+public struct BrowserPageChanges: Sendable {
+    public let title: String
+    public let url: String
+    public let added: [BrowserTabElement]
+    public let modified: [BrowserTabElement]
+    public let removed: Int
+    public let transient: Int
+    public let textAdded: [String]
+    public let textRemoved: Int
+    public let truncated: Bool
+    public let settled: Bool
+    public let settleMs: Int
+    public let domChanged: Bool
+
+    public var isEmpty: Bool { added.isEmpty && modified.isEmpty && removed == 0 && textAdded.isEmpty && textRemoved == 0 }
+}
+
 public struct BrowserClickResult: Sendable {
     /// True when the extension confirmed the action took effect (click landed,
     /// form submitted, link navigated, text or option matched, view scrolled).
     public let verified: Bool
-    /// Fresh observation after the action, when the page is still readable.
+    /// Fresh observation after the action, when the page is still readable and
+    /// no change report was available (a new document, or an older extension).
     public let after: BrowserTabContent?
     /// False when the action left the authorized site and access ended.
     public var stillAuthorized = true
+    /// What changed in the same document once it settled.
+    public var changes: BrowserPageChanges?
 }
 
 public struct AuthorizedTabKey: Sendable, Codable, Hashable {
@@ -980,6 +1002,11 @@ public actor ChromeBrowserService {
                                     label: content.title, key: key, generation: observed.generation)
     }
 
+    /// Deadline for an action the extension also watches settle: its own page
+    /// deadlines (5 s to prepare, 5 s for the outcome) plus the settle wait
+    /// (4.5 s at most).
+    static let settlingActionTimeout: TimeInterval = 15
+
     /// Performs one approved click. The page, element, and its position are
     /// re-verified by the extension; nothing is clicked if any of them changed.
     public func click(_ target: BrowserElementTarget) async throws -> BrowserClickResult {
@@ -1000,7 +1027,7 @@ public actor ChromeBrowserService {
         defer { TimingLog.shared.mark("  click: finished (incl. page read after)") }
         let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
                                                     validator: validator, requiredGeneration: target.generation,
-                                                    timeout: 10, allowsNavigation: true) {
+                                                    timeout: Self.settlingActionTimeout, allowsNavigation: true) {
             BridgeRequest(requestID: $1, sessionNonce: $2, type: .clickElement, targetTab: $0,
                           elementID: target.elementID, expectedElement: fingerprint)
         }
@@ -1010,10 +1037,114 @@ public actor ChromeBrowserService {
         TimingLog.shared.mark("  click: extension answered")
         await applyPendingBridgeMessages()
         let stillAuthorized = authorizedTabs[target.key] != nil
-        let after = stillAuthorized ? try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID) : nil
-        var result = BrowserClickResult(verified: action.performed, after: after)
+        var result = try await afterAction(target, changes: stillAuthorized ? action.changes : nil, verified: action.performed,
+                                           read: stillAuthorized)
         result.stillAuthorized = stillAuthorized
         return result
+    }
+
+    /// The page after an action: the extension's change report when the same
+    /// document is still current, otherwise a fresh read (a new document, or an
+    /// extension that sent no report). `read: false` skips the fallback read.
+    private func afterAction(_ target: BrowserElementTarget, changes: BridgePageChanges?, verified: Bool,
+                             read: Bool = true) async throws -> BrowserClickResult {
+        if let changes, let applied = applyChanges(changes, target: target) {
+            TimingLog.shared.mark("    after action: change report (\(applied.isEmpty ? "no change" : "changed"), waited \(applied.settleMs) ms)")
+            var result = BrowserClickResult(verified: verified, after: nil)
+            result.changes = applied
+            return result
+        }
+        TimingLog.shared.mark(read ? "    after action: no change report, full page read" : "    after action: no change report")
+        let after = read ? try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID) : nil
+        return BrowserClickResult(verified: verified, after: after)
+    }
+
+    /// Registers a change report's elements for the document it came from and
+    /// forgets removed ones. Nil when that document is no longer current.
+    private func applyChanges(_ changes: BridgePageChanges, target: BrowserElementTarget) -> BrowserPageChanges? {
+        guard let record = authorizedTabs[target.key], bridgeGenerations[target.key] ?? 1 == target.generation else { return nil }
+        rememberElements(changes.added + changes.modified, key: target.key, generation: target.generation)
+        if var observed = bridgeElements[target.key], observed.generation == target.generation {
+            changes.removed.forEach { observed.elements.removeValue(forKey: $0) }
+            bridgeElements[target.key] = observed
+        }
+        return BrowserPageChanges(title: String(changes.title.prefix(200)), url: record.url,
+                                  added: changes.added.map { Self.tabElement($0, pageURL: record.url) },
+                                  modified: changes.modified.map { Self.tabElement($0, pageURL: record.url) },
+                                  removed: changes.removed.count, transient: changes.transient,
+                                  textAdded: changes.textAdded, textRemoved: changes.textRemoved,
+                                  truncated: changes.truncated, settled: changes.settled,
+                                  settleMs: changes.settleMs, domChanged: changes.domChanged)
+    }
+
+    /// Keeps elements seen in one document: observations are capped and
+    /// on-screen-first, so an element seen earlier (or found by text) may be
+    /// missing from the latest listing. The extension re-verifies before acting.
+    private func rememberElements(_ elements: [ObservedDOMElement], key: AuthorizedTabKey, generation: UInt64) {
+        let latest = Dictionary(elements.map { ($0.elementID, $0) }, uniquingKeysWith: { first, _ in first })
+        if let previous = bridgeElements[key], previous.generation == generation, previous.elements.count < 2_000 {
+            bridgeElements[key] = (generation, previous.elements.merging(latest) { _, new in new })
+        } else {
+            bridgeElements[key] = (generation, latest)
+        }
+    }
+
+    /// The model-facing form of an observed element, with Halo's own policy.
+    static func tabElement(_ observed: ObservedDOMElement, pageURL: String) -> BrowserTabElement {
+        var element = BrowserTabElement(id: observed.elementID, role: observed.role, tagName: observed.tagName,
+                                        label: observed.isProtected ? "(protected)" : String(observed.label.prefix(200)),
+                                        clickable: isClickable(observed, pageURL: pageURL), typable: isTypable(observed))
+        element.selectable = isSelectable(observed)
+        element.scrollable = isScrollable(observed)
+        element.clickKind = clickKind(observed, pageURL: pageURL)?.rawValue
+        element.blocked = observed.blockedReason.map(blockedReasonText)
+        if element.selectable { element.options = observed.options ?? [] }
+        return element
+    }
+
+    /// Elements whose visible text or accessible name matches `text`, best
+    /// first, registered so their ids work in the next action. Read-only.
+    public func findElements(tabID: Int, text: String, role: BridgeElementRole?, exact: Bool,
+                             browserAppID: String? = nil) async throws -> [BrowserTabElement] {
+        guard !isPaused else { throw InteractionError("Browser tab access is currently paused.") }
+        guard let server = bridgeServer, let validator = bridgeValidator, await server.isConnected else {
+            throw InteractionError("Finding elements requires the Halo browser extension connection (Settings → Mac Access → Browser bridge).")
+        }
+        try requireBridgeCoverage(tabID: tabID, browserAppID: browserAppID)
+        let context = try browserContext(browserAppID)
+        let key = tabKey(tabID, context: context)
+        if let record = authorizedTabs[key] { try requireSiteAccess(record.url) }
+        let query = BridgeElementQuery(text: text, role: role, exact: exact ? true : nil)
+        let (resp, tabIdent, record) = try await bridgeExchange(id: tabID, key: key, context: context, server: server, validator: validator) {
+            BridgeRequest(requestID: $1, sessionNonce: $2, type: .findElements, targetTab: $0, query: query)
+        }
+        guard let found = resp.observation, found.tab == tabIdent else {
+            throw InteractionError(resp.error?.message ?? "The browser bridge returned no matches.")
+        }
+        rememberElements(found.elements, key: key, generation: tabIdent.documentGenerationID)
+        TimingLog.shared.mark("    find: \(found.elements.count) match(es)")
+        return found.elements.prefix(BrowserBridgeLimits.maxFoundElements).map { Self.tabElement($0, pageURL: record.url) }
+    }
+
+    /// The bridge's current document generation for an authorized tab, or nil
+    /// when the bridge is not connected (no navigation events to wait on).
+    public func documentGeneration(tabID: Int, browserAppID: String? = nil) async -> UInt64? {
+        guard let server = bridgeServer, await server.isConnected,
+              let key = try? tabKey(tabID, context: browserContext(browserAppID)), authorizedTabs[key] != nil else { return nil }
+        return bridgeGenerations[key] ?? 1
+    }
+
+    /// Waits (bounded) until the bridge reports a document newer than
+    /// `generation`, e.g. after reload, back, or forward.
+    public func awaitNewDocument(tabID: Int, after generation: UInt64, browserAppID: String? = nil,
+                                 timeout: Duration = .seconds(3)) async {
+        guard let key = try? tabKey(tabID, context: browserContext(browserAppID)) else { return }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline, !Task.isCancelled {
+            await applyPendingBridgeMessages()
+            if (bridgeGenerations[key] ?? 1) != generation || authorizedTabs[key] == nil { return }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
     }
 
     /// Applies lifecycle events that arrived just after an action's result.
@@ -1046,7 +1177,7 @@ public actor ChromeBrowserService {
         }
         let fingerprint = BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
         let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
-                                                    validator: validator, requiredGeneration: target.generation, timeout: 10) {
+                                                    validator: validator, requiredGeneration: target.generation, timeout: Self.settlingActionTimeout) {
             BridgeRequest(requestID: $1, sessionNonce: $2, type: .typeText, targetTab: $0,
                           elementID: target.elementID, expectedElement: fingerprint, text: text)
         }
@@ -1059,8 +1190,7 @@ public actor ChromeBrowserService {
             typed.texts[target.elementID] = text
             typedTexts[target.key] = typed
         }
-        let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
-        return BrowserClickResult(verified: action.performed, after: after)
+        return try await afterAction(target, changes: action.changes, verified: action.performed)
     }
 
     /// Common preconditions for an approved action on `target`.
@@ -1085,15 +1215,14 @@ public actor ChromeBrowserService {
         let (server, validator, context) = try await actionChannel(target, verb: "selected")
         let fingerprint = BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
         let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
-                                                    validator: validator, requiredGeneration: target.generation) {
+                                                    validator: validator, requiredGeneration: target.generation, timeout: Self.settlingActionTimeout) {
             BridgeRequest(requestID: $1, sessionNonce: $2, type: .selectOption, targetTab: $0,
                           elementID: target.elementID, expectedElement: fingerprint, option: option)
         }
         guard let action = resp.actionResult, action.elementID == target.elementID else {
             throw InteractionError("The browser bridge returned no selection result.")
         }
-        let after = try? await readTab(id: target.tabID, browserAppID: target.key.browserBundleID)
-        return BrowserClickResult(verified: action.performed, after: after)
+        return try await afterAction(target, changes: action.changes, verified: action.performed)
     }
 
     /// Scrolls the page or one approved scrollable region with a trusted wheel event.
@@ -1102,7 +1231,7 @@ public actor ChromeBrowserService {
         let (server, validator, context) = try await actionChannel(target, verb: "scrolled")
         let fingerprint = target.isPage ? nil : BridgeElementFingerprint(tagName: target.tagName, role: target.role, label: target.label)
         let (resp, _, _) = try await bridgeExchange(id: target.tabID, key: target.key, context: context, server: server,
-                                                    validator: validator, requiredGeneration: target.generation, timeout: 10) {
+                                                    validator: validator, requiredGeneration: target.generation, timeout: Self.settlingActionTimeout) {
             BridgeRequest(requestID: $1, sessionNonce: $2, type: .scrollTab, targetTab: $0,
                           elementID: target.isPage ? nil : target.elementID, expectedElement: fingerprint,
                           scroll: BridgeScroll(direction: direction, amount: amount))
@@ -1110,7 +1239,8 @@ public actor ChromeBrowserService {
         guard let action = resp.actionResult, action.elementID == target.elementID else {
             throw InteractionError("The browser bridge returned no scroll result.")
         }
-        return BrowserClickResult(verified: action.performed, after: nil)
+        // Scrolling never read the page afterwards; it now reports what came into view.
+        return try await afterAction(target, changes: action.changes, verified: action.performed, read: false)
     }
 
     /// Controls the page's main video or audio. `verified` means the media
@@ -1173,16 +1303,7 @@ public actor ChromeBrowserService {
                 authorizedTabs.removeValue(forKey: key)
                 throw InteractionError("Tab \(id) navigated from '\(record.domain)' to '\(obs.tab.domain)'; authorization was revoked.")
             }
-            // Observations are capped and on-screen-first, so an element seen
-            // earlier in this document may be missing from the latest listing
-            // (e.g. a suggestion dropdown opened). Keep what was seen in the same
-            // document; the extension re-verifies any element before acting.
-            let latest = Dictionary(obs.elements.map { ($0.elementID, $0) }, uniquingKeysWith: { first, _ in first })
-            if let previous = bridgeElements[key], previous.generation == obs.tab.documentGenerationID, previous.elements.count < 2_000 {
-                bridgeElements[key] = (obs.tab.documentGenerationID, previous.elements.merging(latest) { _, new in new })
-            } else {
-                bridgeElements[key] = (obs.tab.documentGenerationID, latest)
-            }
+            rememberElements(obs.elements, key: key, generation: obs.tab.documentGenerationID)
             // Prefer the page's readable text; element lines are the fallback.
             let contentText = obs.text.flatMap { $0.isEmpty ? nil : $0 } ?? obs.elements.map { el in
                 el.isProtected ? "[\(el.role): (protected)]" : "\(el.role): \(el.label)"
@@ -1195,17 +1316,7 @@ public actor ChromeBrowserService {
                 content: contentText,
                 truncated: contentText.utf16.count >= 16000
             )
-            content.elements = obs.elements.map {
-                var element = BrowserTabElement(id: $0.elementID, role: $0.role, tagName: $0.tagName,
-                                                label: $0.isProtected ? "(protected)" : String($0.label.prefix(200)),
-                                                clickable: Self.isClickable($0, pageURL: obs.tab.url), typable: Self.isTypable($0))
-                element.selectable = Self.isSelectable($0)
-                element.scrollable = Self.isScrollable($0)
-                element.clickKind = Self.clickKind($0, pageURL: obs.tab.url)?.rawValue
-                element.blocked = $0.blockedReason.map(Self.blockedReasonText)
-                if element.selectable { element.options = $0.options ?? [] }
-                return element
-            }
+            content.elements = obs.elements.map { Self.tabElement($0, pageURL: obs.tab.url) }
             return content
         }
 

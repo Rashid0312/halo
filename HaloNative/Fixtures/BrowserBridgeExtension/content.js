@@ -166,10 +166,6 @@
     return { kind: "button" };
   }
 
-  function isActionable(el, info) {
-    return classify(el, info).kind === "button";
-  }
-
   // Phase 5B.2 text-entry policy: plain text fields only. Credentials,
   // one-time codes, and payment fields are never typed into.
   const TEXT_INPUT_TYPES = ["", "text", "search", "email", "url", "tel", "number"];
@@ -267,12 +263,12 @@
     return text;
   }
 
-  function observe(generationID) {
-    currentGeneration = generationID;
-    const elements = [];
-    // Large pages have thousands of controls: list only rendered ones, those
-    // on screen first (top to bottom), then the rest by distance from view.
-    const candidates = deepQueryAll("button, input, select, textarea, a[href], h1, h2, h3, [role='button'], [role='textbox']")
+  const OBSERVED = "button, input, select, textarea, a[href], h1, h2, h3, [role='button'], [role='textbox']";
+
+  // Rendered elements matching `selector`, those on screen first (top to
+  // bottom), then the rest by distance from view.
+  function rendered(selector) {
+    return deepQueryAll(selector)
       .map((el) => ({ el, rect: el.getBoundingClientRect() }))
       .filter(({ el, rect }) => isRendered(el, rect))
       .map(({ el, rect }) => {
@@ -282,37 +278,45 @@
       })
       .sort((a, b) => (a.onScreen === b.onScreen ? 0 : a.onScreen ? -1 : 1) ||
         (a.onScreen ? a.rect.top - b.rect.top : a.distance - b.distance));
-    for (const { el, rect } of candidates) {
+  }
+
+  // One element as Halo receives it. Never includes form values.
+  function record(el, rect, generationID) {
+    const info = describe(el);
+    const c = classify(el, info);
+    const selectable = isSelectable(el, info);
+    return {
+      elementID: referenceFor(el, generationID),
+      tagName: info.tagName,
+      role: info.role,
+      label: info.label,
+      isProtected: info.isProtected,
+      isEnabled: !el.disabled,
+      isActionable: c.kind === "button",
+      actionKind: c.kind || undefined,
+      blockedReason: c.reason || undefined,
+      destinationURL: c.destination || undefined,
+      formFields: c.kind === "submit" ? c.formFields : undefined,
+      isEditable: isEditable(el, info),
+      isSelectable: selectable,
+      isScrollable: false,
+      options: info.tagName === "select" && selectable ? optionLabels(el) : undefined,
+      bounds: {
+        x: Math.max(0, rect.x),
+        y: Math.max(0, rect.y),
+        width: Math.max(0, rect.width),
+        height: Math.max(0, rect.height)
+      }
+    };
+  }
+
+  function observe(generationID) {
+    currentGeneration = generationID;
+    const elements = [];
+    // Large pages have thousands of controls: list only rendered ones.
+    for (const { el, rect } of rendered(OBSERVED)) {
       if (elements.length >= 200) break; // Strict upper bound per observation
-      const info = describe(el);
-      elements.push({
-        elementID: referenceFor(el, generationID),
-        tagName: info.tagName,
-        role: info.role,
-        label: info.label,
-        isProtected: info.isProtected,
-        isEnabled: !el.disabled,
-        isActionable: isActionable(el, info),
-        ...(() => {
-          const c = classify(el, info);
-          return {
-            actionKind: c.kind || undefined,
-            blockedReason: c.reason || undefined,
-            destinationURL: c.destination || undefined,
-            formFields: c.kind === "submit" ? c.formFields : undefined
-          };
-        })(),
-        isEditable: isEditable(el, info),
-        isSelectable: isSelectable(el, info),
-        isScrollable: false,
-        options: info.tagName === "select" && isSelectable(el, info) ? optionLabels(el) : undefined,
-        bounds: {
-          x: Math.max(0, rect.x),
-          y: Math.max(0, rect.y),
-          width: Math.max(0, rect.width),
-          height: Math.max(0, rect.height)
-        }
-      });
+      elements.push(record(el, rect, generationID));
     }
     // Scrollable regions (lists, panes) are reported separately, at most 20.
     let regions = 0;
@@ -338,6 +342,184 @@
     return elements;
   }
 
+  // --- Settle and change reports -------------------------------------------
+  // After an approved action the page is watched until it settles: some DOM
+  // change and then QUIET_MS without one, or no change at all within
+  // FIRST_CHANGE_MS (a canvas-only or no-op action), capped at MAX_SETTLE_MS.
+  // Then only what changed is reported. Style-only attribute changes
+  // (animations, hover) do not keep the page "busy". Mutations inside shadow
+  // roots are not observed; the before/after comparison still covers them.
+  const QUIET_MS = 300, FIRST_CHANGE_MS = 1000, MAX_SETTLE_MS = 3000;
+  const CHANGES_BUDGET = 12000, MAX_CHANGED_ELEMENTS = 200, MAX_TEXT_LINES = 60;
+  let mutations = 0, lastMutationAt = performance.now(), addedDuringAction = null;
+  const watcher = new MutationObserver((records) => {
+    let counted = false;
+    for (const r of records) {
+      if (r.type === "attributes" && r.attributeName === "style") continue;
+      counted = true;
+      if (addedDuringAction && r.type === "childList") {
+        for (const node of r.addedNodes) if (node.nodeType === 1 && addedDuringAction.size < 5000) addedDuringAction.add(node);
+      }
+    }
+    if (counted) { mutations++; lastMutationAt = performance.now(); }
+  });
+  watcher.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Waits until the page settles after an action at `since` (performance.now()).
+  // `busyUntil` marks when the action's network requests finished, if any:
+  // their results usually reach the DOM just after, so quiet counts from then.
+  async function settle(since, mutationsBefore, busyUntil = 0) {
+    for (;;) {
+      const now = performance.now();
+      const changed = mutations !== mutationsBefore || busyUntil > 0;
+      if (changed && now - Math.max(lastMutationAt, busyUntil) >= QUIET_MS) return { settled: true, ms: now - since };
+      if (!changed && now - since >= FIRST_CHANGE_MS) return { settled: true, ms: now - since };
+      if (now - since >= MAX_SETTLE_MS) return { settled: false, ms: now - since };
+      await sleep(25);
+    }
+  }
+
+  // Waits (bounded) for QUIET_MS without a mutation. A document that just
+  // loaded may still be building itself; the script counts from its own start.
+  async function quiet(maxMs) {
+    const since = performance.now();
+    while (performance.now() - lastMutationAt < QUIET_MS && performance.now() - since < maxMs) await sleep(25);
+  }
+
+  // What an element looks like to Halo, for comparing before and after.
+  function signature(r) {
+    return [r.tagName, r.role, r.label, r.isEnabled, r.actionKind, r.blockedReason, r.destinationURL,
+      r.isEditable, r.isSelectable, (r.options || []).join("\u0001")].join("\u0002");
+  }
+
+  function snapshot(generationID) {
+    const elements = new Map();
+    for (const { el, rect } of rendered(OBSERVED)) {
+      if (elements.size >= 1000) break;
+      const r = record(el, rect, generationID);
+      elements.set(r.elementID, r);
+    }
+    return { elements, text: visibleText().split("\n").filter(Boolean) };
+  }
+
+  let changeLog = null;
+
+  // Called just before an approved action is performed.
+  function beginChanges() {
+    changeLog = { before: snapshot(currentGeneration), mutations, since: performance.now() };
+    addedDuringAction = new Set();
+  }
+
+  function byteLength(value) { return new TextEncoder().encode(JSON.stringify(value)).length; }
+
+  async function settleChanges(afterRequests) {
+    const log = changeLog;
+    changeLog = null;
+    if (!log) return { error: "internalError", message: "No action is being watched." };
+    const waited = await settle(log.since, log.mutations, afterRequests ? performance.now() : 0);
+    const added = addedDuringAction || new Set();
+    addedDuringAction = null;
+    const after = snapshot(currentGeneration);
+    const report = {
+      title: (document.title || "").substring(0, 32768), added: [], modified: [], removed: [],
+      transient: Array.from(added).filter((node) => !node.isConnected).length,
+      textAdded: [], textRemoved: 0, truncated: false, settled: waited.settled,
+      settleMs: Math.min(10000, Math.round(waited.ms)), domChanged: mutations !== log.mutations
+    };
+    let budget = CHANGES_BUDGET;
+    const take = (list, item) => {
+      const size = byteLength(item);
+      if (report.added.length + report.modified.length >= MAX_CHANGED_ELEMENTS || size > budget) { report.truncated = true; return; }
+      budget -= size;
+      list.push(item);
+    };
+    // Changed elements first (a button's new label), then new ones, in page order.
+    for (const [id, r] of after.elements) {
+      const previous = log.before.elements.get(id);
+      if (previous && signature(previous) !== signature(r)) take(report.modified, r);
+    }
+    for (const [id, r] of after.elements) if (!log.before.elements.has(id)) take(report.added, r);
+    for (const id of log.before.elements.keys()) {
+      if (!after.elements.has(id) && report.removed.length < MAX_CHANGED_ELEMENTS) report.removed.push(id);
+    }
+    // Text lines are compared as multisets so a repeated line counts once per copy.
+    const counts = new Map();
+    for (const line of log.before.text) counts.set(line, (counts.get(line) || 0) + 1);
+    for (const line of after.text) {
+      const left = counts.get(line) || 0;
+      if (left > 0) { counts.set(line, left - 1); continue; }
+      const cut = line.substring(0, 300);
+      if (report.textAdded.length >= MAX_TEXT_LINES || cut.length + 4 > budget) { report.truncated = true; continue; }
+      budget -= cut.length + 4;
+      report.textAdded.push(cut);
+    }
+    for (const left of counts.values()) report.textRemoved += left;
+    return report;
+  }
+
+  // --- Find by text or role ------------------------------------------------
+  const ROLE_SELECTORS = {
+    button: "button, [role='button'], input[type='button'], input[type='submit'], input[type='reset'], summary",
+    link: "a[href], [role='link']",
+    textbox: "input:not([type]), input[type='text'], input[type='search'], input[type='email'], input[type='url'], input[type='tel'], input[type='number'], textarea, [role='textbox'], [role='searchbox']",
+    combobox: "select, [role='combobox'], [role='listbox']",
+    checkbox: "input[type='checkbox'], [role='checkbox'], [role='switch']",
+    radio: "input[type='radio'], [role='radio']",
+    tab: "[role='tab']",
+    menuitem: "[role='menuitem'], [role='option'], [role='menuitemcheckbox'], [role='menuitemradio']",
+    heading: "h1, h2, h3, h4, h5, h6, [role='heading']"
+  };
+  const INTERACTIVE = Object.values(ROLE_SELECTORS).join(", ");
+  // Plain containers that hold text (has-text matching when no role is given).
+  const TEXT_HOLDERS = "li, td, th, label, p, span, div, dt, dd, figcaption, legend, strong, em, b";
+
+  const normalize = (text) => (text || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  // The name a person (or a screen reader) would use for the element. Form
+  // fields are named by their labels, never their values.
+  function accessibleName(el) {
+    const labelledBy = (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean)
+      .map((id) => (el.getRootNode().getElementById ? el.getRootNode().getElementById(id) : document.getElementById(id)))
+      .filter(Boolean).map((node) => node.textContent).join(" ");
+    const tag = (el.tagName || "").toLowerCase();
+    const isField = ["input", "select", "textarea"].includes(tag);
+    const buttonValue = tag === "input" && ["button", "submit", "reset"].includes((el.getAttribute("type") || "").toLowerCase()) ? el.value : "";
+    const own = isField ? "" : el.textContent;
+    return [el.getAttribute("aria-label"), labelledBy, buttonValue, own, el.labels && el.labels[0] && el.labels[0].textContent,
+      el.getAttribute("title"), el.getAttribute("placeholder"), el.getAttribute("alt")]
+      .map(normalize).filter(Boolean);
+  }
+
+  function find(query, generationID) {
+    currentGeneration = generationID;
+    const wanted = normalize(query.text);
+    if (!wanted) return [];
+    const selector = query.role ? ROLE_SELECTORS[query.role] : INTERACTIVE + ", " + TEXT_HOLDERS;
+    if (!selector) return [];
+    const scored = [];
+    for (const el of deepQueryAll(selector)) {
+      let best = 0;
+      for (const name of accessibleName(el)) {
+        const score = name === wanted ? 3 : query.exact ? 0 : name.startsWith(wanted) ? 2 : name.includes(wanted) ? 1 : 0;
+        if (score > best) best = score;
+      }
+      if (!best) continue;
+      const rect = el.getBoundingClientRect();
+      if (!isRendered(el, rect)) continue;
+      scored.push({ el, rect, best, interactive: el.matches(INTERACTIVE) });
+      if (scored.length >= 2000) break;
+    }
+    // :has-text semantics: a container matches only when no element inside it
+    // does, so the most specific element wins (the link, not its list item).
+    const kept = scored.filter((a) => !scored.some((b) => b !== a && a.el.contains(b.el) && b.best >= a.best));
+    const onScreen = (r) => r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+    kept.sort((a, b) => b.best - a.best || Number(b.interactive) - Number(a.interactive) ||
+      Number(onScreen(b.rect)) - Number(onScreen(a.rect)) || a.rect.top - b.rect.top);
+    return kept.slice(0, 20).map(({ el, rect }) => record(el, rect, generationID));
+  }
+
   function fingerprintMatches(el, expected) {
     const info = describe(el);
     const role = isScrollableElement(el) && expected.role === "scrollable region" ? "scrollable region" : info.role;
@@ -357,6 +539,7 @@
     if (!isSelectable(el, info)) return { error: "elementNotActionable", message: "The dropdown is not an enabled single-choice dropdown." };
     const index = Array.from(el.options).findIndex((o) => !o.disabled && (o.label || o.text || "").trim() === request.option);
     if (index < 0) return { error: "elementChanged", message: "The approved option is no longer offered." };
+    beginChanges();
     el.selectedIndex = index;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -396,6 +579,7 @@
       const hit = deepElementFromPoint(x, y);
       if (!hit || !el.contains(hit)) return { error: "elementChanged", message: "Another element covers the scrollable region." };
     }
+    beginChanges();
     pendingScroll = { el, before: scrollPosition(el) };
     return { x, y };
   }
@@ -499,6 +683,7 @@
     if (!hit || !el.contains(hit)) {
       return { error: "elementChanged", message: "Another element covers the approved element at its click point." };
     }
+    beginChanges();
     arm(el);
     return { x, y };
   }
@@ -523,6 +708,7 @@
     await nextFrame();
     if (deepActiveElement() !== el) return { error: "elementChanged", message: "The field could not be focused." };
     el.select();
+    beginChanges();
     pendingType = el;
     return { ready: true };
   }
@@ -689,7 +875,19 @@
       return false;
     }
     if (request.action === "observe") {
-      sendResponse({ elements: observe(request.generationID || 1), text: visibleText() });
+      // A document that just loaded may still be building itself: wait out
+      // activity already under way (bounded) before reading it.
+      const ready = request.settle ? quiet(2000) : Promise.resolve();
+      ready.then(() => sendResponse({ elements: observe(request.generationID || 1), text: visibleText() }),
+        (err) => sendResponse({ error: "internalError", message: String(err && err.message) }));
+      return true;
+    }
+    if (request.action === "settleChanges") {
+      settleChanges(Boolean(request.afterRequests)).then(sendResponse, (err) => sendResponse({ error: "internalError", message: String(err && err.message) }));
+      return true;
+    }
+    if (request.action === "find") {
+      sendResponse({ elements: find(request.query || {}, request.generationID || 1) });
       return false;
     }
     if (request.action === "prepareClick") {

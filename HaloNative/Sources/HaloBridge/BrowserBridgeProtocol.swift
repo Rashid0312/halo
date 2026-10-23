@@ -17,6 +17,20 @@ public enum BrowserBridgeLimits {
     /// Maximum approved text for one Phase 5B.2 text entry (UTF-16 units).
     public static let maxTypedTextLength: Int = 4_000
 
+    /// Budget for one action's change report (UTF-8 bytes of its added and
+    /// changed elements and new text); the extension stops adding and sets
+    /// `truncated` when it would exceed this.
+    public static let maxChangesBytes: Int = 12_000
+
+    /// New text lines in one change report.
+    public static let maxChangedTextLines: Int = 60
+
+    /// Matches returned by one `findElements` request.
+    public static let maxFoundElements: Int = 20
+
+    /// Longest settle wait the extension reports (ms); its own cap is lower.
+    public static let maxSettleMilliseconds: Int = 10_000
+
     /// Required length for cryptographically random session nonces (32 bytes / 64 hex characters).
     public static let nonceLengthHexChars: Int = 64
 
@@ -360,6 +374,67 @@ public enum BridgeRequestType: String, Sendable, Codable, Equatable {
     case navigateTab
     /// Control the page's main video or audio (play, pause, mute, seek, volume, full screen).
     case mediaControl
+    /// Read-only: elements whose visible text or accessible name matches a query.
+    case findElements
+}
+
+/// Roles a `findElements` query may restrict to.
+public enum BridgeElementRole: String, Sendable, Codable, Equatable, CaseIterable {
+    case button, link, textbox, combobox, checkbox, radio, tab, menuitem, heading
+}
+
+/// A `findElements` query: text matched against what a person reads on an
+/// element (its accessible name or visible text), optionally one role.
+public struct BridgeElementQuery: Sendable, Codable, Equatable {
+    public let text: String
+    public let role: BridgeElementRole?
+    /// Whole-name match only; otherwise exact matches rank first, then
+    /// names that start with the text, then names that contain it.
+    public let exact: Bool?
+
+    public init(text: String, role: BridgeElementRole? = nil, exact: Bool? = nil) {
+        self.text = text
+        self.role = role
+        self.exact = exact
+    }
+}
+
+/// What an action changed in its document, gathered once the page settled
+/// (no mutations for a quiet window, or the cap). Elements carry fresh IDs in
+/// the same document, so they can be acted on without another read.
+public struct BridgePageChanges: Sendable, Codable, Equatable {
+    public let title: String
+    public let added: [ObservedDOMElement]
+    public let modified: [ObservedDOMElement]
+    /// IDs of observed elements that are gone or no longer rendered.
+    public let removed: [String]
+    /// Elements that appeared and disappeared while the page settled (spinners).
+    public let transient: Int
+    /// Readable text lines that are new since the action.
+    public let textAdded: [String]
+    public let textRemoved: Int
+    public let truncated: Bool
+    /// False when the page was still changing at the cap.
+    public let settled: Bool
+    public let settleMs: Int
+    /// Whether the DOM mutated at all; false for canvas-only effects or no effect.
+    public let domChanged: Bool
+
+    public init(title: String, added: [ObservedDOMElement] = [], modified: [ObservedDOMElement] = [], removed: [String] = [],
+                transient: Int = 0, textAdded: [String] = [], textRemoved: Int = 0, truncated: Bool = false,
+                settled: Bool = true, settleMs: Int = 0, domChanged: Bool = false) {
+        self.title = title
+        self.added = added
+        self.modified = modified
+        self.removed = removed
+        self.transient = transient
+        self.textAdded = textAdded
+        self.textRemoved = textRemoved
+        self.truncated = truncated
+        self.settled = settled
+        self.settleMs = settleMs
+        self.domChanged = domChanged
+    }
 }
 
 public enum BridgeMediaCommand: String, Sendable, Codable, Equatable, CaseIterable {
@@ -442,12 +517,17 @@ public struct BridgeActionResult: Sendable, Codable, Equatable {
     public let performed: Bool
     /// `mediaControl` only: the media element afterwards.
     public let media: BridgeMediaState?
+    /// What changed in the same document once it settled; absent when the
+    /// action replaced the document (links, submissions) or none was gathered.
+    public let changes: BridgePageChanges?
 
-    public init(tab: TabGenerationIdentity, elementID: String, performed: Bool, media: BridgeMediaState? = nil) {
+    public init(tab: TabGenerationIdentity, elementID: String, performed: Bool, media: BridgeMediaState? = nil,
+                changes: BridgePageChanges? = nil) {
         self.tab = tab
         self.elementID = elementID
         self.performed = performed
         self.media = media
+        self.changes = changes
     }
 }
 
@@ -470,11 +550,14 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
     public let url: String?
     /// Approved media command for `mediaControl` only.
     public let media: BridgeMedia?
+    /// Query for `findElements` only.
+    public let query: BridgeElementQuery?
 
     public init(requestID: String, protocolVersion: UInt32 = BrowserBridgeLimits.currentProtocolVersion, sessionNonce: String,
                 type: BridgeRequestType, targetTab: TabGenerationIdentity? = nil,
                 elementID: String? = nil, expectedElement: BridgeElementFingerprint? = nil, text: String? = nil,
-                option: String? = nil, scroll: BridgeScroll? = nil, url: String? = nil, media: BridgeMedia? = nil) {
+                option: String? = nil, scroll: BridgeScroll? = nil, url: String? = nil, media: BridgeMedia? = nil,
+                query: BridgeElementQuery? = nil) {
         self.requestID = requestID
         self.protocolVersion = protocolVersion
         self.sessionNonce = sessionNonce
@@ -487,6 +570,7 @@ public struct BridgeRequest: Sendable, Codable, Equatable {
         self.scroll = scroll
         self.url = url
         self.media = media
+        self.query = query
     }
 }
 
@@ -573,9 +657,11 @@ private enum BridgeModelValidation {
         try nonce(value.sessionNonce, field: "sessionNonce")
         // Each action carries exactly its own payload fields and nothing else.
         let hasElement = value.elementID != nil || value.expectedElement != nil
-        let payloads = (text: value.text != nil, option: value.option != nil, scroll: value.scroll != nil, url: value.url != nil, media: value.media != nil)
+        let payloads = (text: value.text != nil, option: value.option != nil, scroll: value.scroll != nil, url: value.url != nil,
+                        media: value.media != nil, query: value.query != nil)
         func forbidPayloads(except allowed: String? = nil) throws {
-            let present = [("text", payloads.text), ("option", payloads.option), ("scroll", payloads.scroll), ("url", payloads.url), ("media", payloads.media)]
+            let present = [("text", payloads.text), ("option", payloads.option), ("scroll", payloads.scroll), ("url", payloads.url),
+                           ("media", payloads.media), ("query", payloads.query)]
                 .filter { $0.1 && $0.0 != allowed }
             guard present.isEmpty else {
                 throw BridgeErrorDetails(code: .payloadMalformed, message: "Request type forbids \(present.map(\.0).joined(separator: ", ")).")
@@ -648,6 +734,32 @@ private enum BridgeModelValidation {
             default:
                 guard media.value == nil else { throw BridgeErrorDetails(code: .payloadMalformed, message: "This media command takes no value.") }
             }
+        case .findElements:
+            guard !hasElement else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Find forbids element fields.") }
+            try forbidPayloads(except: "query")
+            guard let query = value.query else { throw BridgeErrorDetails(code: .payloadMalformed, message: "Find requires a query.") }
+            try boundedUTF8(query.text, max: 200, field: "query.text")
+            guard !query.text.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else {
+                throw BridgeErrorDetails(code: .payloadMalformed, message: "Find text must not contain control characters.")
+            }
+        }
+    }
+
+    /// An action's change report: bounded counts, valid elements and IDs.
+    static func changes(_ value: BridgePageChanges) throws {
+        try boundedUTF8(value.title, max: BrowserBridgeLimits.maxStringLength, field: "changes.title", allowEmpty: true)
+        guard value.added.count + value.modified.count <= BrowserBridgeLimits.maxElementsPerObservation,
+              value.removed.count <= BrowserBridgeLimits.maxElementsPerObservation,
+              value.textAdded.count <= BrowserBridgeLimits.maxChangedTextLines else {
+            throw BridgeErrorDetails(code: .oversizedPayload, message: "Change report exceeds its bounds.")
+        }
+        try value.added.forEach(element)
+        try value.modified.forEach(element)
+        try value.removed.forEach(elementReference)
+        try value.textAdded.forEach { try boundedUTF8($0, max: 1_000, field: "changes.textAdded", allowEmpty: true) }
+        guard value.transient >= 0, value.textRemoved >= 0,
+              (0...BrowserBridgeLimits.maxSettleMilliseconds).contains(value.settleMs) else {
+            throw BridgeErrorDetails(code: .payloadMalformed, message: "Change report counts are invalid.")
         }
     }
 
@@ -767,6 +879,7 @@ private enum BridgeModelValidation {
         if let action = value.actionResult {
             try tab(action.tab)
             try elementReference(action.elementID)
+            if let changes = action.changes { try self.changes(changes) }
             if let media = action.media {
                 let numbers = [media.volume, media.currentTime] + (media.duration.map { [$0] } ?? [])
                 guard ["video", "audio"].contains(media.kind), numbers.allSatisfy({ $0.isFinite && $0 >= 0 }), media.volume <= 1 else {
@@ -814,7 +927,7 @@ public enum BridgeMessageFraming {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope must be a JSON object.")
                 }
                 let allowed: Set<String> = type == BridgeRequest.self
-                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement", "text", "option", "scroll", "url", "media"]
+                    ? ["requestID", "protocolVersion", "sessionNonce", "type", "targetTab", "elementID", "expectedElement", "text", "option", "scroll", "url", "media", "query"]
                     : ["requestID", "protocolVersion", "sessionNonce", "success", "error", "handshake", "observation", "navigation", "tabClosed", "tabAnnouncement", "actionResult"]
                 guard Set(object.keys).isSubset(of: allowed) else {
                     throw BridgeErrorDetails(code: .payloadMalformed, message: "Bridge envelope contains unknown fields.")
