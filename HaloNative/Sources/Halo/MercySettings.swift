@@ -130,7 +130,9 @@ struct MercySettings: View {
         .sheet(item: $popup) { popupContent($0).environment(\.colorScheme, .light) }
         // A light design: system controls must not draw in dark mode on light cards.
         .environment(\.colorScheme, .light)
-        .onAppear { hasKey = deepSeekKey.isSet; traceCount = TraceRecorder.shared.count() }
+        .onAppear { hasKey = deepSeekKey.isSet; traceCount = TraceRecorder.shared.count(); refreshAccess() }
+        // macOS doesn't announce new grants; check whenever the window comes back.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in refreshAccess() }
     }
 
     private var badge: String? {
@@ -281,7 +283,12 @@ struct MercySettings: View {
                 }
                 MercyRow(icon: "rectangle.dashed.badge.record", title: "See the screen", detail: "Screen Recording: screenshots you approve.") {
                     MercyStatus(done: macTools.screen.allowed, doneText: "Allowed")
-                    if !macTools.screen.allowed { Button("Allow…") { openPrivacy("Privacy_ScreenCapture") }.buttonStyle(MercyButtonStyle(kind: .secondary)) }
+                    if !macTools.screen.allowed {
+                        // Asking adds this exact build to the list; opening the pane alone can
+                        // show an older copy with the same bundle ID.
+                        Button("Allow…") { CGRequestScreenCaptureAccess(); openPrivacy("Privacy_ScreenCapture") }
+                            .buttonStyle(MercyButtonStyle(kind: .secondary))
+                    }
                 }
                 MercyRow(icon: "externaldrive", title: "Protected folders", detail: "Full Disk Access, only if you want \(Mercy.name) in Mail, Messages, and similar folders.") {
                     Button("Open…") { openPrivacy("Privacy_AllFiles") }.buttonStyle(MercyButtonStyle(kind: .secondary))
@@ -401,6 +408,8 @@ struct MercySettings: View {
             popup = nil
         } catch { keyError = error.localizedDescription }
     }
+
+    private func refreshAccess() { macTools.ui.refreshAccess(); macTools.screen.refreshAccess() }
 
     private func openPrivacy(_ pane: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
