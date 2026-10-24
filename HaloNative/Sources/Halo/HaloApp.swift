@@ -526,7 +526,9 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
                 TimingLog.shared.mark(self.panel.occlusionState.contains(.visible) ? "panel: visible" : "panel: occluded")
             }
         }
-        panel.hasShadow = false
+        // The window server's shadow follows the drawn rounded shape. A SwiftUI
+        // shadow reached past the window's 8 pt margin and was cut off in a box.
+        panel.hasShadow = PanelExperiment.on("shadow")
         panel.isMovable = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
@@ -624,10 +626,14 @@ final class HaloDelegate: NSObject, NSApplicationDelegate {
         TimingLog.shared.mark("panel: resizing")
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !PanelExperiment.on("resize") {
             panel.setFrame(frame, display: true)
+            panel.invalidateShadow()
         } else {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.28
                 panel.animator().setFrame(frame, display: true)
+            } completionHandler: { [weak self] in
+                // The shadow is traced from the content once; retrace it at the new size.
+                MainActor.assumeIsolated { self?.panel.invalidateShadow() }
             }
         }
     }

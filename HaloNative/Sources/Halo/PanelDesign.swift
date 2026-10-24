@@ -102,7 +102,10 @@ struct ConversationView: View {
 
     private var capsule: some View {
         ZStack {
-            if PanelExperiment.on("gradient") { FluidGradient(configuration: .bar) } else { Color(red: 0.42, green: 0.45, blue: 0.75) }
+            // Solid base: the gradient is partly transparent, and SwiftUI's material
+            // cannot blur other windows, so they showed through sharply.
+            Color(red: 0.42, green: 0.45, blue: 0.75)
+            if PanelExperiment.on("gradient") { FluidGradient(configuration: .bar) }
             if PanelExperiment.on("material") { Capsule().fill(.ultraThinMaterial.opacity(0.62)) } else { Capsule().fill(Color.black.opacity(0.3)) }
             Button(action: expand) {
                 HStack(spacing: 10) {
@@ -119,14 +122,14 @@ struct ConversationView: View {
         }
         .clipShape(Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.18), radius: PanelExperiment.on("shadow") ? 12 : 0, y: 4)
         .accessibilityLabel("Open Halo")
         .help("Open Mercy")
     }
 
     private var expanded: some View {
         ZStack {
-            if PanelExperiment.on("gradient") { FluidGradient(configuration: .halo) } else { Color(red: 0.42, green: 0.45, blue: 0.75) }
+            Color(red: 0.42, green: 0.45, blue: 0.75)
+            if PanelExperiment.on("gradient") { FluidGradient(configuration: .halo) }
             if PanelExperiment.on("material") { Rectangle().fill(.ultraThinMaterial.opacity(0.70)) } else { Rectangle().fill(Color.black.opacity(0.3)) }
             VStack(spacing: 0) {
                 header
@@ -143,7 +146,6 @@ struct ConversationView: View {
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(
             LinearGradient(colors: [.white.opacity(0.32), .white.opacity(0.06), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.7))
-        .shadow(color: .black.opacity(0.2), radius: PanelExperiment.on("shadow") ? 20 : 0, y: 8)
         .transition(.opacity)
     }
 
